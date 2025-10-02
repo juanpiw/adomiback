@@ -10,6 +10,20 @@ console.log('📦 Express imported successfully');
 import https from 'https';
 import http from 'http';
 import fs from 'fs';
+
+// Memory monitoring
+function logMemoryUsage() {
+  const used = process.memoryUsage();
+  const formatBytes = (bytes: number) => (bytes / 1024 / 1024).toFixed(2);
+  
+  console.log('🧠 Memory Usage:', {
+    rss: `${formatBytes(used.rss)} MB`,
+    heapTotal: `${formatBytes(used.heapTotal)} MB`,
+    heapUsed: `${formatBytes(used.heapUsed)} MB`,
+    external: `${formatBytes(used.external)} MB`,
+    arrayBuffers: `${formatBytes(used.arrayBuffers)} MB`
+  });
+}
 import cors from 'cors';
 import morgan from 'morgan';
 import { createRouter } from './lib/router';
@@ -77,6 +91,10 @@ async function startServer() {
       SKIP_DB_CHECK: process.env.SKIP_DB_CHECK
     });
     
+    // Log initial memory usage
+    console.log('🧠 Initial Memory Usage:');
+    logMemoryUsage();
+    
     // Temporal: Permitir inicio sin base de datos para probar HTTPS
     const SKIP_DB_CHECK = process.env.SKIP_DB_CHECK === 'true';
     
@@ -138,6 +156,8 @@ async function startServer() {
         serverHttps.listen(HTTPS_PORT, BIND_IP, () => {
           logEndpoints('https', HTTPS_PORT);
           console.log('✅ HTTPS Server started successfully');
+          console.log('🧠 Memory after HTTPS server start:');
+          logMemoryUsage();
         });
         
         // SERVIDOR HTTP OPCIONAL (para redirección)
@@ -171,6 +191,8 @@ async function startServer() {
           console.log(`[API] Development server listening on http://localhost:${PORT}`);
           console.log(`📊 Health check: http://localhost:${PORT}/health`);
           console.log(`📚 API Docs: http://localhost:${PORT}/docs`);
+          console.log('🧠 Memory after HTTP server start:');
+          logMemoryUsage();
         });
       }
       

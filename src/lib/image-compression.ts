@@ -39,6 +39,9 @@ export async function compressImage(
   } = options;
 
   try {
+    // Log memory before compression
+    const memoryBefore = process.memoryUsage();
+    console.log(`[IMAGE_COMPRESSION] Memory before compression: ${(memoryBefore.heapUsed / 1024 / 1024).toFixed(2)} MB`);
     // Obtener información de la imagen original
     const originalStats = fs.statSync(inputPath);
     const originalSize = originalStats.size;
@@ -111,6 +114,17 @@ export async function compressImage(
     const compressedStats = fs.statSync(outputPath);
     const compressedSize = compressedStats.size;
     const compressionRatio = ((originalSize - compressedSize) / originalSize) * 100;
+
+    // Log memory after compression
+    const memoryAfter = process.memoryUsage();
+    console.log(`[IMAGE_COMPRESSION] Memory after compression: ${(memoryAfter.heapUsed / 1024 / 1024).toFixed(2)} MB`);
+    console.log(`[IMAGE_COMPRESSION] Memory difference: ${((memoryAfter.heapUsed - memoryBefore.heapUsed) / 1024 / 1024).toFixed(2)} MB`);
+
+    // Force garbage collection if available
+    if (global.gc) {
+      global.gc();
+      console.log(`[IMAGE_COMPRESSION] Garbage collection forced`);
+    }
 
     return {
       originalSize,
