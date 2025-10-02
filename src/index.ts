@@ -24,6 +24,18 @@ function logMemoryUsage() {
     arrayBuffers: `${formatBytes(used.arrayBuffers)} MB`
   });
 }
+
+// Aggressive memory cleanup
+function forceMemoryCleanup() {
+  if (global.gc) {
+    console.log('🗑️ Forcing aggressive garbage collection...');
+    global.gc();
+    console.log('✅ Garbage collection completed');
+    logMemoryUsage();
+  } else {
+    console.log('⚠️ Garbage collection not available');
+  }
+}
 import cors from 'cors';
 import morgan from 'morgan';
 import { createRouter } from './lib/router';
@@ -95,8 +107,17 @@ async function startServer() {
     console.log('🧠 Initial Memory Usage:');
     logMemoryUsage();
     
+    // Force initial cleanup
+    forceMemoryCleanup();
+    
     // Temporal: Permitir inicio sin base de datos para probar HTTPS
     const SKIP_DB_CHECK = process.env.SKIP_DB_CHECK === 'true';
+    const SKIP_EMAIL_CHECK = process.env.SKIP_EMAIL_CHECK === 'true';
+    
+    console.log('🔧 Skip flags:', {
+      SKIP_DB_CHECK,
+      SKIP_EMAIL_CHECK
+    });
     
     if (!SKIP_DB_CHECK) {
       console.log('🔍 Testing database connection...');
@@ -109,6 +130,8 @@ async function startServer() {
       } else {
         console.log('✅ Database connection successful');
       }
+      // Force cleanup after DB operations
+      forceMemoryCleanup();
     } else {
       console.log('⚠️ Skipping database connection check (SKIP_DB_CHECK=true)');
     }
