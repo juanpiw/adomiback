@@ -13,6 +13,7 @@ const spec = {
     { url: 'https://adomiapp.cl', description: 'Servidor de producción' }
   ],
   paths: {
+    // ===== AUTENTICACIÓN =====
     '/auth/register': {
       post: {
         summary: 'Registrar nuevo usuario',
@@ -278,8 +279,376 @@ const spec = {
             }
           },
           '500': { description: 'Error de conexión a la base de datos' }
-        } 
-      } 
+        }
+      }
+    },
+    // ===== VERIFICACIONES =====
+    '/verifications/upload-documents': {
+      post: {
+        tags: ['Verificaciones'],
+        summary: 'Subir documentos de verificación',
+        description: 'Sube documentos de identidad y antecedentes penales para verificación',
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                required: ['document_type', 'front_document', 'back_document'],
+                properties: {
+                  document_type: { 
+                    type: 'string', 
+                    enum: ['id_card', 'background_check'],
+                    example: 'id_card',
+                    description: 'Tipo de documento a verificar'
+                  },
+                  front_document: {
+                    type: 'string',
+                    format: 'binary',
+                    description: 'Imagen frontal del documento'
+                  },
+                  back_document: {
+                    type: 'string',
+                    format: 'binary',
+                    description: 'Imagen trasera del documento'
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          200: {
+            description: 'Documentos subidos exitosamente',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    ok: { type: 'boolean', example: true },
+                    message: { type: 'string', example: 'Documentos subidos exitosamente' },
+                    verification: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'integer', example: 1 },
+                        document_type: { type: 'string', example: 'id_card' },
+                        status: { type: 'string', example: 'pending' },
+                        file_url: { type: 'string', example: '/uploads/verifications/doc_123.jpg' }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          400: { description: 'Datos inválidos o archivos faltantes' },
+          401: { description: 'No autorizado' },
+          500: { description: 'Error del servidor' }
+        }
+      }
+    },
+    '/verifications/status': {
+      get: {
+        tags: ['Verificaciones'],
+        summary: 'Obtener estado de verificaciones',
+        description: 'Obtiene el estado de todas las verificaciones del usuario',
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: 'Estado de verificaciones obtenido exitosamente',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    ok: { type: 'boolean', example: true },
+                    verifications: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          id: { type: 'integer', example: 1 },
+                          document_type: { type: 'string', example: 'id_card' },
+                          status: { type: 'string', enum: ['pending', 'approved', 'rejected'], example: 'pending' },
+                          file_url: { type: 'string', example: '/uploads/verifications/doc_123.jpg' },
+                          created_at: { type: 'string', format: 'date-time' }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          401: { description: 'No autorizado' }
+        }
+      }
+    },
+    // ===== CONTABILIDAD =====
+    '/accounting/revenue': {
+      get: {
+        tags: ['Contabilidad'],
+        summary: 'Obtener reportes de ingresos',
+        description: 'Obtiene reportes detallados de ingresos de la plataforma',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'start_date',
+            in: 'query',
+            schema: { type: 'string', format: 'date' },
+            description: 'Fecha de inicio (YYYY-MM-DD)'
+          },
+          {
+            name: 'end_date',
+            in: 'query',
+            schema: { type: 'string', format: 'date' },
+            description: 'Fecha de fin (YYYY-MM-DD)'
+          }
+        ],
+        responses: {
+          200: {
+            description: 'Reportes de ingresos obtenidos exitosamente',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    ok: { type: 'boolean', example: true },
+                    revenue: {
+                      type: 'object',
+                      properties: {
+                        total_revenue: { type: 'number', example: 1500000 },
+                        platform_fees: { type: 'number', example: 150000 },
+                        net_revenue: { type: 'number', example: 1350000 },
+                        currency: { type: 'string', example: 'CLP' },
+                        period: { type: 'string', example: '2024-01-01 to 2024-01-31' }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          401: { description: 'No autorizado' },
+          403: { description: 'Acceso denegado - Solo administradores' }
+        }
+      }
+    },
+    '/accounting/settings': {
+      get: {
+        tags: ['Contabilidad'],
+        summary: 'Obtener configuración de la plataforma',
+        description: 'Obtiene la configuración actual de la plataforma',
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: 'Configuración obtenida exitosamente',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    ok: { type: 'boolean', example: true },
+                    settings: {
+                      type: 'object',
+                      properties: {
+                        platform_fee_percentage: { type: 'number', example: 10 },
+                        minimum_withdrawal: { type: 'number', example: 10000 },
+                        currency: { type: 'string', example: 'CLP' },
+                        tax_rate: { type: 'number', example: 19 }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          401: { description: 'No autorizado' }
+        }
+      },
+      put: {
+        tags: ['Contabilidad'],
+        summary: 'Actualizar configuración de la plataforma',
+        description: 'Actualiza la configuración de la plataforma',
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  platform_fee_percentage: { type: 'number', example: 10 },
+                  minimum_withdrawal: { type: 'number', example: 10000 },
+                  currency: { type: 'string', example: 'CLP' },
+                  tax_rate: { type: 'number', example: 19 }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          200: {
+            description: 'Configuración actualizada exitosamente',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    ok: { type: 'boolean', example: true },
+                    message: { type: 'string', example: 'Configuración actualizada exitosamente' },
+                    settings: {
+                      type: 'object',
+                      properties: {
+                        platform_fee_percentage: { type: 'number', example: 10 },
+                        minimum_withdrawal: { type: 'number', example: 10000 },
+                        currency: { type: 'string', example: 'CLP' },
+                        tax_rate: { type: 'number', example: 19 }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          401: { description: 'No autorizado' },
+          403: { description: 'Acceso denegado - Solo administradores' }
+        }
+      }
+    },
+    // ===== WEBHOOKS =====
+    '/webhooks/stripe': {
+      post: {
+        tags: ['Webhooks'],
+        summary: 'Webhook de Stripe',
+        description: 'Endpoint para recibir eventos de Stripe (pagos, suscripciones, etc.)',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                description: 'Evento de Stripe'
+              }
+            }
+          }
+        },
+        responses: {
+          200: {
+            description: 'Webhook procesado exitosamente',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    ok: { type: 'boolean', example: true },
+                    message: { type: 'string', example: 'Webhook processed successfully' }
+                  }
+                }
+              }
+            }
+          },
+          400: { description: 'Evento inválido' },
+          500: { description: 'Error procesando webhook' }
+        }
+      }
+    },
+    // ===== FUNDADORES =====
+    '/founders/benefits': {
+      get: {
+        tags: ['Fundadores'],
+        summary: 'Obtener beneficios de fundador',
+        description: 'Obtiene los beneficios especiales de fundador del usuario',
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: 'Beneficios obtenidos exitosamente',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    ok: { type: 'boolean', example: true },
+                    benefits: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'integer', example: 1 },
+                        benefits: { type: 'array', items: { type: 'string' }, example: ['50% discount', 'Priority support'] },
+                        discount_percentage: { type: 'number', example: 50 },
+                        is_active: { type: 'boolean', example: true },
+                        expires_at: { type: 'string', format: 'date-time', example: '2024-12-31T23:59:59Z' }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          401: { description: 'No autorizado' },
+          404: { description: 'Usuario no es fundador' }
+        }
+      }
+    },
+    '/founders/assign': {
+      post: {
+        tags: ['Fundadores'],
+        summary: 'Asignar beneficios de fundador',
+        description: 'Asigna beneficios especiales de fundador a un usuario',
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['user_id', 'benefits', 'discount_percentage'],
+                properties: {
+                  user_id: { type: 'integer', example: 123, description: 'ID del usuario a asignar beneficios' },
+                  benefits: { 
+                    type: 'array', 
+                    items: { type: 'string' },
+                    example: ['50% discount', 'Priority support'],
+                    description: 'Lista de beneficios'
+                  },
+                  discount_percentage: { type: 'number', example: 50, description: 'Porcentaje de descuento' },
+                  notes: { type: 'string', example: 'Usuario fundador desde el inicio' },
+                  expires_at: { type: 'string', format: 'date-time', example: '2024-12-31T23:59:59Z' }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          201: {
+            description: 'Beneficios asignados exitosamente',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    ok: { type: 'boolean', example: true },
+                    message: { type: 'string', example: 'Beneficios de fundador asignados exitosamente' },
+                    founder_benefits: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'integer', example: 1 },
+                        user_id: { type: 'integer', example: 123 },
+                        benefits: { type: 'array', items: { type: 'string' } },
+                        discount_percentage: { type: 'number', example: 50 },
+                        is_active: { type: 'boolean', example: true }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          400: { description: 'Datos inválidos' },
+          401: { description: 'No autorizado' },
+          403: { description: 'Acceso denegado - Solo administradores' }
+        }
+      }
     }
   },
   components: {
@@ -518,6 +887,14 @@ const spec = {
             }
           }
         }
+      }
+    },
+    securitySchemes: {
+      bearerAuth: {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        description: 'Token JWT obtenido del endpoint de login'
       }
     }
   }
