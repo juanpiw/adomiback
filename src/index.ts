@@ -73,7 +73,7 @@ app.use('/', api);
 // Leer variables de entorno para HTTPS
 const BIND_IP = process.env.IP || '0.0.0.0';
 const HTTP_PORT = process.env.HTTP_PORT ? Number(process.env.HTTP_PORT) : null;
-const HTTPS_PORT = process.env.HTTPS_PORT ? Number(process.env.HTTPS_PORT) : null;
+let HTTPS_PORT = process.env.HTTPS_PORT ? Number(process.env.HTTPS_PORT) : null;
 const KEY_PATH = process.env.KEY_PATH;
 const CERT_PATH = process.env.CERT_PATH;
 const PORT = Number(process.env.PORT) || 3000; // Puerto por defecto para desarrollo
@@ -136,8 +136,14 @@ async function startServer() {
       console.log('⚠️ Skipping database connection check (SKIP_DB_CHECK=true)');
     }
     
-    // Si está configurado para producción con HTTPS
-    if (Number.isFinite(HTTPS_PORT) && KEY_PATH && CERT_PATH) {
+  // Si hay certificados y no se definió HTTPS_PORT, asumir 443
+  if (!Number.isFinite(HTTPS_PORT) && KEY_PATH && CERT_PATH) {
+    console.log('🔐 Certificates present but HTTPS_PORT missing. Defaulting to 443');
+    HTTPS_PORT = 443;
+  }
+
+  // Si está configurado para producción con HTTPS
+  if (Number.isFinite(HTTPS_PORT) && KEY_PATH && CERT_PATH) {
       console.log('🚀 Attempting to start HTTPS server for production...');
       console.log('🔍 HTTPS Configuration:', {
         HTTPS_PORT,
