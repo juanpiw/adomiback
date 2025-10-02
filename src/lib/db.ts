@@ -16,7 +16,11 @@ export const pool = mysql.createPool({
   database: process.env.DB_NAME,
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0
+  queueLimit: 0,
+  // SSL configuration for Azure MySQL
+  ssl: {
+    rejectUnauthorized: false
+  }
 });
 
 // Initialize database tables
