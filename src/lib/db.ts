@@ -120,17 +120,48 @@ export async function initDatabase() {
 // Test database connection
 export async function testConnection() {
   try {
+    console.log('[DB] Attempting to connect to database...');
+    console.log('[DB] Connection config:', {
+      host: process.env.DB_HOST,
+      port: process.env.DB_PORT,
+      user: process.env.DB_USER,
+      database: process.env.DB_NAME,
+      ssl: 'enabled'
+    });
+    
     const connection = await pool.getConnection();
+    console.log('[DB] Connection established, testing ping...');
+    
     await connection.ping();
+    console.log('[DB] Ping successful');
+    
     connection.release();
+    console.log('[DB] Connection released');
     
     // Initialize tables
+    console.log('[DB] Initializing database tables...');
     await initDatabase();
     
-    console.log('[DB] Connected to MySQL database successfully');
+    console.log('[DB] ✅ Connected to MySQL database successfully');
     return true;
-  } catch (error) {
-    console.error('[DB] Error connecting to database:', error);
+  } catch (error: any) {
+    console.error('[DB] ❌ Error connecting to database:');
+    console.error('[DB] Error message:', error.message);
+    console.error('[DB] Error code:', error.code);
+    console.error('[DB] Error errno:', error.errno);
+    console.error('[DB] Error sqlMessage:', error.sqlMessage);
+    console.error('[DB] Error sqlState:', error.sqlState);
+    
+    if (error.code === 'ER_ACCESS_DENIED_ERROR') {
+      console.error('[DB] 💡 Check your database credentials (username/password)');
+    } else if (error.code === 'ENOTFOUND') {
+      console.error('[DB] 💡 Check your database host and DNS resolution');
+    } else if (error.code === 'ECONNREFUSED') {
+      console.error('[DB] 💡 Check if the database server is running and accessible');
+    } else if (error.code === 'ER_BAD_DB_ERROR') {
+      console.error('[DB] 💡 Check if the database name exists');
+    }
+    
     return false;
   }
 }
