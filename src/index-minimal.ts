@@ -66,7 +66,7 @@ async function startMinimalServer() {
     forceGC();
     
     // Get port from environment
-    const PORT = process.env.PORT || 3000;
+    const PORT = Number(process.env.PORT) || 3000;
     const BIND_IP = process.env.IP || '0.0.0.0';
     
     // Start server

@@ -76,7 +76,7 @@ const HTTP_PORT = process.env.HTTP_PORT ? Number(process.env.HTTP_PORT) : null;
 const HTTPS_PORT = process.env.HTTPS_PORT ? Number(process.env.HTTPS_PORT) : null;
 const KEY_PATH = process.env.KEY_PATH;
 const CERT_PATH = process.env.CERT_PATH;
-const PORT = process.env.PORT || 3000; // Puerto por defecto para desarrollo
+const PORT = Number(process.env.PORT) || 3000; // Puerto por defecto para desarrollo
 
 // Función para mostrar endpoints disponibles
 function logEndpoints(proto: string, port: number) {
