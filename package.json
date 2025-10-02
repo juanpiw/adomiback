@@ -8,9 +8,11 @@
         "dev": "nodemon --watch src --ext ts,json --exec \"npm run dev:serve\"",
         "dev:serve": "npm run build && node --max-old-space-size=256 --expose-gc --optimize-for-size --max-semi-space-size=64 dist/index.js",
         "dev:minimal": "tsc && node --max-old-space-size=128 --expose-gc dist/index-minimal.js",
+        "dev:ultra": "tsc && node --max-old-space-size=64 --expose-gc dist/index-ultra-minimal.js",
         "build": "tsc",
         "start": "node --max-old-space-size=256 --expose-gc --optimize-for-size --max-semi-space-size=64 dist/index.js",
-        "start:minimal": "node --max-old-space-size=128 --expose-gc dist/index-minimal.js"
+        "start:minimal": "node --max-old-space-size=128 --expose-gc dist/index-minimal.js",
+        "start:ultra": "node --max-old-space-size=64 --expose-gc dist/index-ultra-minimal.js"
     },
     "keywords": [],
     "author": "",
