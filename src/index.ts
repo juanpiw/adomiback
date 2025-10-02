@@ -60,15 +60,23 @@ function logEndpoints(proto: string, port: number) {
 // Test database connection and start server
 async function startServer() {
   try {
-    const dbConnected = await testConnection();
-    if (!dbConnected) {
-      console.error('[API] Failed to connect to database. Please check your .env configuration.');
-      process.exit(1);
+    // Temporal: Permitir inicio sin base de datos para probar HTTPS
+    const SKIP_DB_CHECK = process.env.SKIP_DB_CHECK === 'true';
+    
+    if (!SKIP_DB_CHECK) {
+      const dbConnected = await testConnection();
+      if (!dbConnected) {
+        console.error('[API] Failed to connect to database. Please check your .env configuration.');
+        console.log('💡 Tip: Set SKIP_DB_CHECK=true in .env to skip database validation');
+        process.exit(1);
+      }
+    } else {
+      console.log('⚠️ Skipping database connection check (SKIP_DB_CHECK=true)');
     }
     
     // Si está configurado para producción con HTTPS
     if (Number.isFinite(HTTPS_PORT) && KEY_PATH && CERT_PATH) {
-      console.log('🚀 Starting HTTPS server for production...');
+      console.log('🚀 Attempting to start HTTPS server for production...');
       
       // VALIDACIÓN OBLIGATORIA DE HTTPS
       try {
@@ -87,23 +95,30 @@ async function startServer() {
           console.log('✅ HTTPS Server started successfully');
         });
         
+        // SERVIDOR HTTP OPCIONAL (para redirección)
+        if (Number.isFinite(HTTP_PORT)) {
+          try {
+            const serverHttp = http.createServer(app);
+            serverHttp.listen(HTTP_PORT, BIND_IP, () => {
+              logEndpoints('http', HTTP_PORT);
+              console.log('✅ HTTP Server started successfully');
+            });
+          } catch (error: any) {
+            console.warn('⚠️ Failed to start HTTP server:', error.message);
+          }
+        }
+        
       } catch (error: any) {
         console.error('❌ Failed to start HTTPS server:', error.message);
-        console.error('   Check certificate paths and permissions');
-        process.exit(1);
-      }
-      
-      // SERVIDOR HTTP OPCIONAL (para redirección)
-      if (Number.isFinite(HTTP_PORT)) {
-        try {
-          const serverHttp = http.createServer(app);
-          serverHttp.listen(HTTP_PORT, BIND_IP, () => {
-            logEndpoints('http', HTTP_PORT);
-            console.log('✅ HTTP Server started successfully');
-          });
-        } catch (error: any) {
-          console.warn('⚠️ Failed to start HTTP server:', error.message);
-        }
+        console.log('🔄 Falling back to development HTTP mode...');
+        
+        // FALLBACK: Modo desarrollo - solo HTTP
+        console.log('🔧 Starting development server...');
+        app.listen(PORT, () => {
+          console.log(`[API] Development server listening on http://localhost:${PORT}`);
+          console.log(`📊 Health check: http://localhost:${PORT}/health`);
+          console.log(`📚 API Docs: http://localhost:${PORT}/docs`);
+        });
       }
       
     } else {
