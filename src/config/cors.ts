@@ -36,7 +36,9 @@ export const productionCorsConfig = cors({
       'https://adomiapp.cl',
       'https://www.adomiapp.cl',
       'https://app.adomiapp.cl',
-      'https://admin.adomiapp.cl'
+      'https://admin.adomiapp.cl',
+      // Frontend desplegado en AWS Amplify
+      'https://main.d274x9hs73bju8.amplifyapp.com'
     ];
 
     // Permitir requests sin origin (mobile apps, Postman, etc.)

@@ -54,8 +54,9 @@ app.use(developmentSecurityConfig);
 // Rate limiting global
 app.use(generalRateLimit);
 
-// CORS
-app.use(developmentCorsConfig);
+// CORS (elige config según entorno)
+const corsMiddleware = process.env.NODE_ENV === 'production' ? require('./config/cors').productionCorsConfig : require('./config/cors').developmentCorsConfig;
+app.use(corsMiddleware);
 app.use(corsLogger);
 
 // Body parsing
