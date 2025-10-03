@@ -889,6 +889,307 @@ const spec = {
         }
       }
     },
+    // ===== PROMOCIONES =====
+    '/promo/signup': {
+      post: {
+        tags: ['Promociones'],
+        summary: 'Registrar para prueba gratis',
+        description: 'Registra un usuario para la promoción de prueba gratis de 3 meses',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['nombre', 'correo', 'profesion'],
+                properties: {
+                  nombre: { 
+                    type: 'string', 
+                    example: 'Juan Pérez',
+                    description: 'Nombre completo del usuario'
+                  },
+                  correo: { 
+                    type: 'string', 
+                    format: 'email',
+                    example: 'juan@ejemplo.com',
+                    description: 'Correo electrónico del usuario'
+                  },
+                  profesion: { 
+                    type: 'string', 
+                    enum: ['estilista', 'chef', 'masajista', 'profesor', 'tecnico', 'entrenador', 'limpieza', 'cuidado', 'otro'],
+                    example: 'estilista',
+                    description: 'Profesión o servicio que ofrece el usuario'
+                  },
+                  notas: { 
+                    type: 'string', 
+                    example: 'Tengo 5 años de experiencia en peluquería',
+                    description: 'Notas adicionales (opcional)'
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          201: {
+            description: 'Registro exitoso',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string', example: '¡Registro exitoso! Te contactaremos pronto para activar tu prueba gratis.' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'integer', example: 1 },
+                        nombre: { type: 'string', example: 'Juan Pérez' },
+                        correo: { type: 'string', example: 'juan@ejemplo.com' },
+                        profesion: { type: 'string', example: 'estilista' },
+                        status: { type: 'string', example: 'pending' },
+                        created_at: { type: 'string', format: 'date-time' }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          400: { description: 'Datos requeridos faltantes o formato inválido' },
+          409: { description: 'Este correo ya está registrado para la promoción' },
+          429: { description: 'Demasiados intentos. Intenta de nuevo en 15 minutos.' },
+          500: { description: 'Error interno del servidor' }
+        }
+      }
+    },
+    '/promo/signups': {
+      get: {
+        tags: ['Promociones'],
+        summary: 'Obtener todos los registros de promoción',
+        description: 'Obtiene todos los registros de promoción (solo administradores)',
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: 'Registros obtenidos exitosamente',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string', example: 'Registros obtenidos exitosamente' },
+                    data: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          id: { type: 'integer', example: 1 },
+                          nombre: { type: 'string', example: 'Juan Pérez' },
+                          correo: { type: 'string', example: 'juan@ejemplo.com' },
+                          profesion: { type: 'string', example: 'estilista' },
+                          notas: { type: 'string', example: 'Tengo 5 años de experiencia' },
+                          status: { type: 'string', enum: ['pending', 'contacted', 'converted', 'cancelled'], example: 'pending' },
+                          created_at: { type: 'string', format: 'date-time' },
+                          updated_at: { type: 'string', format: 'date-time' }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          401: { description: 'No autorizado' },
+          403: { description: 'No tienes permisos para acceder a esta información' }
+        }
+      }
+    },
+    '/promo/stats': {
+      get: {
+        tags: ['Promociones'],
+        summary: 'Obtener estadísticas de promociones',
+        description: 'Obtiene estadísticas detalladas de los registros de promoción (solo administradores)',
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: 'Estadísticas obtenidas exitosamente',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string', example: 'Estadísticas obtenidas exitosamente' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        total: { type: 'integer', example: 150, description: 'Total de registros' },
+                        pending: { type: 'integer', example: 45, description: 'Registros pendientes' },
+                        contacted: { type: 'integer', example: 80, description: 'Registros contactados' },
+                        converted: { type: 'integer', example: 20, description: 'Registros convertidos' },
+                        cancelled: { type: 'integer', example: 5, description: 'Registros cancelados' },
+                        by_profesion: {
+                          type: 'object',
+                          example: {
+                            'estilista': 50,
+                            'chef': 30,
+                            'masajista': 25,
+                            'profesor': 20,
+                            'otro': 25
+                          },
+                          description: 'Conteo por profesión'
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          401: { description: 'No autorizado' },
+          403: { description: 'No tienes permisos para acceder a esta información' }
+        }
+      }
+    },
+    '/promo/signups/{id}/status': {
+      patch: {
+        tags: ['Promociones'],
+        summary: 'Actualizar estado de registro',
+        description: 'Actualiza el estado de seguimiento de un registro de promoción (solo administradores)',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'integer' },
+            description: 'ID del registro de promoción'
+          }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['status'],
+                properties: {
+                  status: { 
+                    type: 'string', 
+                    enum: ['pending', 'contacted', 'converted', 'cancelled'],
+                    example: 'contacted',
+                    description: 'Nuevo estado del registro'
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          200: {
+            description: 'Estado actualizado exitosamente',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string', example: 'Estado actualizado exitosamente' }
+                  }
+                }
+              }
+            }
+          },
+          400: { description: 'Estado inválido' },
+          401: { description: 'No autorizado' },
+          403: { description: 'No tienes permisos para realizar esta acción' }
+        }
+      }
+    },
+    '/promo/signups/{id}': {
+      get: {
+        tags: ['Promociones'],
+        summary: 'Obtener registro específico',
+        description: 'Obtiene un registro específico de promoción por ID (solo administradores)',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'integer' },
+            description: 'ID del registro de promoción'
+          }
+        ],
+        responses: {
+          200: {
+            description: 'Registro obtenido exitosamente',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string', example: 'Registro obtenido exitosamente' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'integer', example: 1 },
+                        nombre: { type: 'string', example: 'Juan Pérez' },
+                        correo: { type: 'string', example: 'juan@ejemplo.com' },
+                        profesion: { type: 'string', example: 'estilista' },
+                        notas: { type: 'string', example: 'Tengo 5 años de experiencia' },
+                        status: { type: 'string', example: 'pending' },
+                        created_at: { type: 'string', format: 'date-time' },
+                        updated_at: { type: 'string', format: 'date-time' }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          401: { description: 'No autorizado' },
+          403: { description: 'No tienes permisos para acceder a esta información' },
+          404: { description: 'Registro no encontrado' }
+        }
+      },
+      delete: {
+        tags: ['Promociones'],
+        summary: 'Eliminar registro',
+        description: 'Elimina un registro de promoción (solo administradores)',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'integer' },
+            description: 'ID del registro de promoción'
+          }
+        ],
+        responses: {
+          200: {
+            description: 'Registro eliminado exitosamente',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string', example: 'Registro eliminado exitosamente' }
+                  }
+                }
+              }
+            }
+          },
+          401: { description: 'No autorizado' },
+          403: { description: 'No tienes permisos para realizar esta acción' },
+          404: { description: 'Registro no encontrado' }
+        }
+      }
+    },
     securitySchemes: {
       bearerAuth: {
         type: 'http',

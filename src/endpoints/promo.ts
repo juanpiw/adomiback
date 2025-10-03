@@ -1,30 +1,16 @@
 import { Router, Request, Response } from 'express';
 import { pool, executeQuery } from '../lib/db';
 import { validateContentType, validatePayloadSize, sanitizeInput } from '../middleware/validation';
-import { authMiddleware } from '../middleware/auth';
-import { rateLimit } from '../middleware/rate-limit';
+import { authenticateToken } from '../middleware/auth';
+import { ipRateLimit } from '../middleware/rate-limit';
 
 const router = Router();
 
 // Rate limiting para signup de promoción
-const promoSignupLimit = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 3, // máximo 3 intentos por IP cada 15 minutos
-  message: {
-    success: false,
-    error: 'Demasiados intentos. Intenta de nuevo en 15 minutos.'
-  }
-});
+const promoSignupLimit = ipRateLimit(3, 15 * 60 * 1000); // 3 intentos por IP cada 15 minutos
 
 // Rate limiting para endpoints de admin
-const adminLimit = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minuto
-  max: 60, // máximo 60 requests por minuto
-  message: {
-    success: false,
-    error: 'Demasiadas solicitudes. Intenta de nuevo más tarde.'
-  }
-});
+const adminLimit = ipRateLimit(60, 1 * 60 * 1000); // 60 requests por IP por minuto
 
 /**
  * POST /promo/signup
@@ -137,7 +123,7 @@ router.post('/signup',
  * Obtener todos los registros (solo admin)
  */
 router.get('/signups',
-  authMiddleware,
+  authenticateToken,
   adminLimit,
   async (req: Request, res: Response) => {
     try {
@@ -174,7 +160,7 @@ router.get('/signups',
  * Obtener estadísticas de promociones (solo admin)
  */
 router.get('/stats',
-  authMiddleware,
+  authenticateToken,
   adminLimit,
   async (req: Request, res: Response) => {
     try {
@@ -236,7 +222,7 @@ router.get('/stats',
  * Actualizar estado de un registro (solo admin)
  */
 router.patch('/signups/:id/status',
-  authMiddleware,
+  authenticateToken,
   adminLimit,
   async (req: Request, res: Response) => {
     try {
@@ -283,7 +269,7 @@ router.patch('/signups/:id/status',
  * Obtener registro por ID (solo admin)
  */
 router.get('/signups/:id',
-  authMiddleware,
+  authenticateToken,
   adminLimit,
   async (req: Request, res: Response) => {
     try {
@@ -331,7 +317,7 @@ router.get('/signups/:id',
  * Eliminar registro (solo admin)
  */
 router.delete('/signups/:id',
-  authMiddleware,
+  authenticateToken,
   adminLimit,
   async (req: Request, res: Response) => {
     try {
