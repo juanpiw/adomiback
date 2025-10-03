@@ -19,13 +19,11 @@ export const pool = mysql.createPool({
   queueLimit: 0,
   // Timeout configurations for Azure MySQL
   acquireTimeout: 60000, // 60 seconds to get connection
-  timeout: 60000, // 60 seconds query timeout
-  reconnect: true,
   // SSL configuration for Azure MySQL
   ssl: {
     rejectUnauthorized: false
   }
-});
+} as any);
 
 // Initialize database tables
 export async function initDatabase() {
