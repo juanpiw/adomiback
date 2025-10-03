@@ -17,6 +17,10 @@ export const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
+  // Timeout configurations for Azure MySQL
+  acquireTimeout: 60000, // 60 seconds to get connection
+  timeout: 60000, // 60 seconds query timeout
+  reconnect: true,
   // SSL configuration for Azure MySQL
   ssl: {
     rejectUnauthorized: false
@@ -117,51 +121,84 @@ export async function initDatabase() {
   }
 }
 
-// Test database connection
-export async function testConnection() {
-  try {
-    console.log('[DB] Attempting to connect to database...');
-    console.log('[DB] Connection config:', {
-      host: process.env.DB_HOST,
-      port: process.env.DB_PORT,
-      user: process.env.DB_USER,
-      database: process.env.DB_NAME,
-      ssl: 'enabled'
-    });
-    
-    const connection = await pool.getConnection();
-    console.log('[DB] Connection established, testing ping...');
-    
-    await connection.ping();
-    console.log('[DB] Ping successful');
-    
-    connection.release();
-    console.log('[DB] Connection released');
-    
-    // Initialize tables
-    console.log('[DB] Initializing database tables...');
-    await initDatabase();
-    
-    console.log('[DB] ✅ Connected to MySQL database successfully');
-    return true;
-  } catch (error: any) {
-    console.error('[DB] ❌ Error connecting to database:');
-    console.error('[DB] Error message:', error.message);
-    console.error('[DB] Error code:', error.code);
-    console.error('[DB] Error errno:', error.errno);
-    console.error('[DB] Error sqlMessage:', error.sqlMessage);
-    console.error('[DB] Error sqlState:', error.sqlState);
-    
-    if (error.code === 'ER_ACCESS_DENIED_ERROR') {
-      console.error('[DB] 💡 Check your database credentials (username/password)');
-    } else if (error.code === 'ENOTFOUND') {
-      console.error('[DB] 💡 Check your database host and DNS resolution');
-    } else if (error.code === 'ECONNREFUSED') {
-      console.error('[DB] 💡 Check if the database server is running and accessible');
-    } else if (error.code === 'ER_BAD_DB_ERROR') {
-      console.error('[DB] 💡 Check if the database name exists');
+// Test database connection with retry mechanism
+export async function testConnection(retries: number = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      console.log(`[DB] Attempting to connect to database... (attempt ${attempt}/${retries})`);
+      console.log('[DB] Connection config:', {
+        host: process.env.DB_HOST,
+        port: process.env.DB_PORT,
+        user: process.env.DB_USER,
+        database: process.env.DB_NAME,
+        ssl: 'enabled',
+        timeout: '60s'
+      });
+      
+      const connection = await pool.getConnection();
+      console.log('[DB] Connection established, testing ping...');
+      
+      await connection.ping();
+      console.log('[DB] Ping successful');
+      
+      connection.release();
+      console.log('[DB] Connection released');
+      
+      // Initialize tables
+      console.log('[DB] Initializing database tables...');
+      await initDatabase();
+      
+      console.log('[DB] ✅ Connected to MySQL database successfully');
+      return true;
+    } catch (error: any) {
+      console.error(`[DB] ❌ Error connecting to database (attempt ${attempt}/${retries}):`);
+      console.error('[DB] Error message:', error.message);
+      console.error('[DB] Error code:', error.code);
+      console.error('[DB] Error errno:', error.errno);
+      console.error('[DB] Error sqlMessage:', error.sqlMessage);
+      console.error('[DB] Error sqlState:', error.sqlState);
+      
+      if (error.code === 'ER_ACCESS_DENIED_ERROR') {
+        console.error('[DB] 💡 Check your database credentials (username/password)');
+      } else if (error.code === 'ENOTFOUND') {
+        console.error('[DB] 💡 Check your database host and DNS resolution');
+      } else if (error.code === 'ECONNREFUSED') {
+        console.error('[DB] 💡 Check if the database server is running and accessible');
+      } else if (error.code === 'ER_BAD_DB_ERROR') {
+        console.error('[DB] 💡 Check if the database name exists');
+      } else if (error.code === 'ETIMEDOUT') {
+        console.error('[DB] 💡 Connection timeout - check network connectivity to Azure MySQL');
+      }
+      
+      if (attempt < retries) {
+        console.log(`[DB] Retrying connection in 5 seconds...`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
     }
-    
-    return false;
+  }
+  
+  console.error('[DB] ❌ Failed to connect to database after all retry attempts');
+  return false;
+}
+
+// Wrapper function for database queries with timeout handling
+export async function executeQuery(query: string, params: any[] = [], retries: number = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      console.log(`[DB] Executing query (attempt ${attempt}/${retries}):`, query.substring(0, 100) + '...');
+      const result = await pool.execute(query, params);
+      console.log(`[DB] Query executed successfully`);
+      return result;
+    } catch (error: any) {
+      console.error(`[DB] Query failed (attempt ${attempt}/${retries}):`, error.message);
+      
+      if (error.code === 'ETIMEDOUT' && attempt < retries) {
+        console.log(`[DB] Retrying query in 3 seconds...`);
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        continue;
+      }
+      
+      throw error;
+    }
   }
 }

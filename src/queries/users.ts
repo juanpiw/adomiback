@@ -1,4 +1,4 @@
-﻿import { pool } from '../lib/db';
+﻿import { pool, executeQuery } from '../lib/db';
 
 export type UserRow = {
   id: number;
@@ -10,14 +10,14 @@ export type UserRow = {
 };
 
 export async function getUserByEmail(email: string): Promise<UserRow | null> {
-  const [rows] = await pool.query('SELECT id, google_id, name, email, password, role FROM users WHERE email = ? LIMIT 1', [email]);
+  const [rows] = await executeQuery('SELECT id, google_id, name, email, password, role FROM users WHERE email = ? LIMIT 1', [email]);
   const arr = rows as any[];
   return arr.length ? (arr[0] as UserRow) : null;
 }
 
 export async function createUser(email: string, passwordHash: string | null, role: 'client'|'provider' = 'client', name: string | null = null): Promise<number> {
   const safeName = (name && name.trim().length > 0) ? name : (email.split('@')[0] || 'Usuario');
-  const [result] = await pool.execute(
+  const [result] = await executeQuery(
     'INSERT INTO users (email, password, role, name) VALUES (?, ?, ?, ?)',
     [email, passwordHash, role, safeName]
   );
