@@ -83,16 +83,25 @@ export function validateHeaders(schema: Joi.ObjectSchema) {
 
 // Middleware de sanitización
 export function sanitizeInput(req: Request, res: Response, next: NextFunction) {
+  console.log('[SANITIZE] Starting sanitization...');
+  
   // Sanitizar strings en el body
   if (req.body && typeof req.body === 'object') {
+    console.log('[SANITIZE] Sanitizing body...');
     req.body = sanitizeObject(req.body);
   }
 
-  // Sanitizar strings en query
+  // Sanitizar strings en query - NO reasignar req.query directamente
   if (req.query && typeof req.query === 'object') {
-    req.query = sanitizeObject(req.query);
+    console.log('[SANITIZE] Sanitizing query params...');
+    // Crear una copia sanitizada y asignar las propiedades individualmente
+    const sanitizedQuery = sanitizeObject(req.query);
+    Object.keys(sanitizedQuery).forEach(key => {
+      (req.query as any)[key] = sanitizedQuery[key];
+    });
   }
 
+  console.log('[SANITIZE] Sanitization completed');
   next();
 }
 

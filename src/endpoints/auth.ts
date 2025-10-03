@@ -25,8 +25,12 @@ export function mountAuth(router: Router) {
     authLogger, 
     async (req, res) => {
     try {
+      console.log('[AUTH][REGISTER] Starting registration process...');
+      console.log('[AUTH][REGISTER] Request body:', req.body);
+      console.log('[AUTH][REGISTER] Request headers:', req.headers);
+      
       const { email, password, role, name }: RegisterRequest = req.body || {};
-      console.log('[AUTH][REGISTER] payload:', { email, role, name });
+      console.log('[AUTH][REGISTER] Extracted payload:', { email, role, name });
       
       if (!email || !password) {
         return res.status(400).json({ 
@@ -95,9 +99,17 @@ export function mountAuth(router: Router) {
 
       return res.status(201).json(response);
     } catch (e: any) {
+      console.error('[AUTH][REGISTER][ERROR] Full error details:');
+      console.error('[AUTH][REGISTER][ERROR] Error message:', e?.message);
+      console.error('[AUTH][REGISTER][ERROR] Error code:', e?.code);
+      console.error('[AUTH][REGISTER][ERROR] Error errno:', e?.errno);
+      console.error('[AUTH][REGISTER][ERROR] Error sqlMessage:', e?.sqlMessage);
+      console.error('[AUTH][REGISTER][ERROR] Error stack:', e?.stack);
+      console.error('[AUTH][REGISTER][ERROR] Error type:', typeof e);
+      console.error('[AUTH][REGISTER][ERROR] Error constructor:', e?.constructor?.name);
+      
       const code = e?.code || e?.errno;
       const msg = e?.sqlMessage || e?.message || 'server error';
-      console.error('[AUTH][REGISTER][ERROR]', { code, msg, stack: e?.stack });
       
       if (code === 'ER_DUP_ENTRY') {
         return res.status(409).json({ 
@@ -108,7 +120,8 @@ export function mountAuth(router: Router) {
       
       return res.status(500).json({ 
         success: false, 
-        error: 'Error interno del servidor' 
+        error: 'Error interno del servidor',
+        details: process.env.NODE_ENV === 'development' ? msg : undefined
       });
     }
   });
