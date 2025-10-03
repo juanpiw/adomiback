@@ -28,19 +28,39 @@ export const pool = mysql.createPool({
 // Initialize database tables
 export async function initDatabase() {
   try {
-    // Create users table
-    await pool.execute(`
-      CREATE TABLE IF NOT EXISTS users (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        google_id VARCHAR(255) NULL,
-        name VARCHAR(255) NULL,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        password VARCHAR(255) NULL,
-        role ENUM('client', 'provider') NOT NULL DEFAULT 'client',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-      )
-    `);
+        // Create users table
+        await pool.execute(`
+          CREATE TABLE IF NOT EXISTS users (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            google_id VARCHAR(255) NULL,
+            name VARCHAR(255) NULL,
+            email VARCHAR(255) UNIQUE NOT NULL,
+            password VARCHAR(255) NULL,
+            role ENUM('client', 'provider') NOT NULL DEFAULT 'client',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+          )
+        `);
+
+        // Create promo_signups table
+        await pool.execute(`
+          CREATE TABLE IF NOT EXISTS promo_signups (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nombre VARCHAR(255) NOT NULL,
+            correo VARCHAR(255) NOT NULL,
+            profesion VARCHAR(100) NOT NULL,
+            notas TEXT,
+            status ENUM('pending', 'contacted', 'converted', 'cancelled') DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            
+            INDEX idx_email (correo),
+            INDEX idx_status (status),
+            INDEX idx_profesion (profesion),
+            INDEX idx_created_at (created_at),
+            UNIQUE KEY unique_email (correo)
+          )
+        `);
 
     // Create service_categories table
     await pool.execute(`
