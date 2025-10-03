@@ -7,10 +7,11 @@ export type UserRow = {
   email: string;
   password: string | null;
   role: 'client' | 'provider';
+  stripe_customer_id?: string | null;
 };
 
 export async function getUserByEmail(email: string): Promise<UserRow | null> {
-  const [rows] = await executeQuery('SELECT id, google_id, name, email, password, role FROM users WHERE email = ? LIMIT 1', [email]);
+  const [rows] = await executeQuery('SELECT id, google_id, name, email, password, role, stripe_customer_id FROM users WHERE email = ? LIMIT 1', [email]);
   const arr = rows as any[];
   return arr.length ? (arr[0] as UserRow) : null;
 }
@@ -121,6 +122,20 @@ export async function updateUser(userId: number, updates: {
     return { success: true };
   } catch (error: any) {
     console.error('[USERS][UPDATE][ERROR]', error);
+    return { success: false, error: error.message };
+  }
+}
+
+export async function updateUserStripeCustomerId(userId: number, stripeCustomerId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    await executeQuery(
+      'UPDATE users SET stripe_customer_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [stripeCustomerId, userId]
+    );
+    console.log('[USERS][STRIPE_CUSTOMER] Updated stripe_customer_id for user:', userId);
+    return { success: true };
+  } catch (error: any) {
+    console.error('[USERS][STRIPE_CUSTOMER][ERROR]', error);
     return { success: false, error: error.message };
   }
 }

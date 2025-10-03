@@ -15,6 +15,13 @@ import { ipRateLimit } from '../middleware/rate-limit';
 
 const router = Router();
 
+console.log('[GOOGLE_AUTH] Inicializando rutas de Google OAuth...');
+console.log('[GOOGLE_AUTH] Variables de entorno:', {
+  GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ? 'Set' : 'Not set',
+  GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET ? 'Set' : 'Not set',
+  GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI || 'Not set'
+});
+
 // Configuración de Google OAuth
 const googleClient = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID || 'tu-google-client-id.apps.googleusercontent.com',
@@ -22,8 +29,11 @@ const googleClient = new OAuth2Client(
   process.env.GOOGLE_REDIRECT_URI || 'https://tu-dominio.com/auth/google/callback'
 );
 
-// Rate limiting para Google OAuth
-const googleAuthLimit = ipRateLimit(5, 15 * 60 * 1000); // 5 intentos por IP cada 15 minutos
+console.log('[GOOGLE_AUTH] Cliente de Google OAuth inicializado');
+
+// Rate limiting para Google OAuth - más permisivo para pruebas
+const googleAuthLimit = ipRateLimit(20, 15 * 60 * 1000); // 20 intentos por IP cada 15 minutos
+const googleCallbackLimit = ipRateLimit(50, 15 * 60 * 1000); // 50 intentos por IP cada 15 minutos para callback
 
 /**
  * POST /auth/google
@@ -72,7 +82,7 @@ router.post('/auth/google',
  * Callback de Google OAuth - procesa el código de autorización
  */
 router.get('/auth/google/callback',
-  googleAuthLimit,
+  googleCallbackLimit,
   async (req: Request, res: Response) => {
     try {
       console.log('[GOOGLE_AUTH][CALLBACK] Procesando callback de Google');
@@ -325,5 +335,13 @@ router.post('/auth/google/unlink',
       });
     }
   });
+
+console.log('[GOOGLE_AUTH] Rutas de Google OAuth configuradas exitosamente');
+console.log('[GOOGLE_AUTH] Endpoints disponibles:', [
+  'POST /auth/google',
+  'GET /auth/google/callback', 
+  'POST /auth/google/verify',
+  'POST /auth/google/unlink'
+]);
 
 export default router;

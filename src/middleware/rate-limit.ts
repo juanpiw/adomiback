@@ -27,7 +27,10 @@ export function createRateLimit(config: RateLimitConfig) {
     legacyHeaders: false,
     skipSuccessfulRequests: config.skipSuccessfulRequests || false,
     skipFailedRequests: config.skipFailedRequests || false,
-    keyGenerator: config.keyGenerator || ((req: Request) => req.ip || 'anonymous')
+    keyGenerator: config.keyGenerator || ((req: Request) => {
+      const ip = req.ip || req.connection.remoteAddress || req.socket.remoteAddress || 'anonymous';
+      return ip;
+    })
   });
 }
 
@@ -40,7 +43,11 @@ export function userRateLimit(maxRequests: number, windowMs: number = 15 * 60 * 
     max: maxRequests,
     keyGenerator: (req: Request) => {
       // Usar user ID si está autenticado, sino usar IP
-      return req.user?.id?.toString() || req.ip || 'anonymous';
+      if (req.user?.id) {
+        return req.user.id.toString();
+      }
+      const ip = req.ip || req.connection.remoteAddress || req.socket.remoteAddress || 'anonymous';
+      return ip;
     },
     message: 'Demasiadas solicitudes para tu cuenta, intenta de nuevo más tarde'
   });
@@ -53,7 +60,11 @@ export function ipRateLimit(maxRequests: number, windowMs: number = 15 * 60 * 10
   return createRateLimit({
     windowMs,
     max: maxRequests,
-    keyGenerator: (req: Request) => req.ip || 'anonymous',
+    keyGenerator: (req: Request) => {
+      // Usar el helper correcto para IPv6
+      const ip = req.ip || req.connection.remoteAddress || req.socket.remoteAddress || 'anonymous';
+      return ip;
+    },
     message: 'Demasiadas solicitudes desde esta IP, intenta de nuevo más tarde'
   });
 }

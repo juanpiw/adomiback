@@ -11,11 +11,15 @@ import { mountPlanExpirations } from '../endpoints/plan-expirations';
 import { mountVerifications } from '../endpoints/verifications';
 import promoRoutes from '../endpoints/promo';
 import googleAuthRoutes from '../endpoints/google-auth';
+import stripeCheckoutRoutes from '../endpoints/stripe-checkout';
 
 export const createRouter = () => {
   const router = Router();
 
+  console.log('[ROUTER] Inicializando router...');
+
   // Montar todos los endpoints
+  console.log('[ROUTER] Montando endpoints básicos...');
   mountAuth(router);
   mountHealth(router);
   mountDb(router);
@@ -28,10 +32,17 @@ export const createRouter = () => {
   mountVerifications(router);
   
   // Montar rutas de promoción
+  console.log('[ROUTER] Montando rutas de promoción...');
   router.use('/promo', promoRoutes);
   
   // Montar rutas de Google OAuth
+  console.log('[ROUTER] Montando rutas de Google OAuth...');
   router.use('/', googleAuthRoutes);
+  
+  // Montar rutas de Stripe Checkout
+  console.log('[ROUTER] Montando rutas de Stripe Checkout...');
+  router.use('/stripe', stripeCheckoutRoutes);
 
+  console.log('[ROUTER] Router inicializado exitosamente');
   return router;
 };

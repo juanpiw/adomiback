@@ -27,6 +27,9 @@ export function mountWebhooks(router: Router) {
 
       // Procesar el evento según su tipo
       switch (event.type) {
+        case 'checkout.session.completed':
+          await handleCheckoutSessionCompleted(event.data.object);
+          break;
         case 'customer.subscription.created':
           await handleSubscriptionCreated(event.data.object);
           break;
@@ -70,6 +73,62 @@ export function mountWebhooks(router: Router) {
 }
 
 // Funciones auxiliares para manejar eventos de webhook
+
+async function handleCheckoutSessionCompleted(session: any) {
+  try {
+    console.log('[WEBHOOK] Checkout session completed:', session.id);
+    
+    // Obtener información del customer y subscription
+    const customerId = session.customer;
+    const subscriptionId = session.subscription;
+    
+    if (subscriptionId) {
+      // Es una suscripción - obtener los detalles
+      const stripe = require('../lib/stripe').default;
+      const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+      
+      // Obtener el plan por el price_id
+      const priceId = subscription.items.data[0].price.id;
+      const plan = await getPlanByStripePriceId(priceId);
+      
+      if (plan && session.metadata.userId) {
+        // Crear suscripción en la base de datos
+        await createSubscription({
+          user_id: parseInt(session.metadata.userId),
+          plan_id: plan.id,
+          stripe_subscription_id: subscriptionId,
+          status: subscription.status,
+          current_period_start: new Date(subscription.current_period_start * 1000),
+          current_period_end: new Date(subscription.current_period_end * 1000),
+          cancel_at_period_end: subscription.cancel_at_period_end,
+          trial_start: subscription.trial_start ? new Date(subscription.trial_start * 1000) : undefined,
+          trial_end: subscription.trial_end ? new Date(subscription.trial_end * 1000) : undefined
+        });
+
+        console.log('[WEBHOOK] Subscription created from checkout session');
+        
+        // Crear registro de revenue
+        await createRevenueRecord(
+          parseInt(session.metadata.userId),
+          'subscription',
+          session.amount_total / 100, // Stripe usa centavos
+          session.payment_intent,
+          subscriptionId
+        );
+        
+        console.log('[WEBHOOK] Revenue record created from checkout session');
+      }
+    }
+    
+    // Aquí podrías implementar lógica adicional como:
+    // - Enviar email de confirmación
+    // - Activar funcionalidades premium
+    // - Notificar al usuario del éxito
+    
+  } catch (error) {
+    console.error('[WEBHOOK] Error handling checkout session completed:', error);
+  }
+}
 
 async function handleSubscriptionCreated(subscription: any) {
   try {
