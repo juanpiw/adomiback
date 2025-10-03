@@ -1107,6 +1107,180 @@ const spec = {
         }
       }
     },
+    '/auth/google': {
+      post: {
+        tags: ['Google OAuth'],
+        summary: 'Iniciar autenticación con Google',
+        description: 'Genera URL de autorización de Google para iniciar el proceso de OAuth',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  role: {
+                    type: 'string',
+                    enum: ['client', 'provider'],
+                    default: 'client',
+                    description: 'Rol del usuario (cliente o proveedor)'
+                  }
+                }
+              },
+              example: {
+                role: 'client'
+              }
+            }
+          }
+        },
+        responses: {
+          200: {
+            description: 'URL de autorización generada exitosamente',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    authUrl: { type: 'string', example: 'https://accounts.google.com/oauth/authorize?...' },
+                    message: { type: 'string', example: 'URL de autorización generada exitosamente' }
+                  }
+                }
+              }
+            }
+          },
+          400: { $ref: '#/components/responses/BadRequest' },
+          429: { $ref: '#/components/responses/TooManyRequests' },
+          500: { $ref: '#/components/responses/InternalServerError' }
+        }
+      }
+    },
+    '/auth/google/callback': {
+      get: {
+        tags: ['Google OAuth'],
+        summary: 'Callback de Google OAuth',
+        description: 'Procesa el código de autorización de Google y completa el login',
+        parameters: [
+          {
+            name: 'code',
+            in: 'query',
+            required: true,
+            description: 'Código de autorización de Google',
+            schema: { type: 'string' }
+          },
+          {
+            name: 'state',
+            in: 'query',
+            description: 'Estado que contiene información del usuario',
+            schema: { type: 'string' }
+          }
+        ],
+        responses: {
+          302: {
+            description: 'Redirección al frontend con tokens de autenticación',
+            headers: {
+              Location: {
+                description: 'URL de redirección con tokens',
+                schema: { type: 'string' }
+              }
+            }
+          },
+          400: { $ref: '#/components/responses/BadRequest' },
+          500: { $ref: '#/components/responses/InternalServerError' }
+        }
+      }
+    },
+    '/auth/google/verify': {
+      post: {
+        tags: ['Google OAuth'],
+        summary: 'Verificar token de Google',
+        description: 'Verifica un token de ID de Google y autentica al usuario',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['idToken'],
+                properties: {
+                  idToken: {
+                    type: 'string',
+                    description: 'Token de ID de Google'
+                  },
+                  role: {
+                    type: 'string',
+                    enum: ['client', 'provider'],
+                    default: 'client',
+                    description: 'Rol del usuario'
+                  }
+                }
+              },
+              example: {
+                idToken: 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...',
+                role: 'client'
+              }
+            }
+          }
+        },
+        responses: {
+          200: {
+            description: 'Autenticación exitosa',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    user: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'integer', example: 123 },
+                        email: { type: 'string', example: 'user@gmail.com' },
+                        name: { type: 'string', example: 'Usuario' },
+                        role: { type: 'string', example: 'client' }
+                      }
+                    },
+                    accessToken: { type: 'string', example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...' },
+                    refreshToken: { type: 'string', example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...' },
+                    message: { type: 'string', example: 'Autenticación con Google exitosa' }
+                  }
+                }
+              }
+            }
+          },
+          400: { $ref: '#/components/responses/BadRequest' },
+          429: { $ref: '#/components/responses/TooManyRequests' },
+          500: { $ref: '#/components/responses/InternalServerError' }
+        }
+      }
+    },
+    '/auth/google/unlink': {
+      post: {
+        tags: ['Google OAuth'],
+        summary: 'Desvincular cuenta de Google',
+        description: 'Desvincula la cuenta de Google del usuario autenticado',
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: 'Cuenta desvinculada exitosamente',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string', example: 'Cuenta de Google desvinculada exitosamente' }
+                  }
+                }
+              }
+            }
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          429: { $ref: '#/components/responses/TooManyRequests' },
+          500: { $ref: '#/components/responses/InternalServerError' }
+        }
+      }
+    },
     '/promo/signups/{id}': {
       get: {
         tags: ['Promociones'],

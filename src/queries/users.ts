@@ -25,6 +25,47 @@ export async function createUser(email: string, passwordHash: string | null, rol
   return result.insertId as number;
 }
 
+export async function createGoogleUser(googleId: string, email: string, name: string, role: 'client'|'provider' = 'client'): Promise<number> {
+  const [result] = await executeQuery(
+    'INSERT INTO users (google_id, email, name, role, password) VALUES (?, ?, ?, ?, NULL)',
+    [googleId, email, name, role]
+  );
+  // @ts-ignore
+  return result.insertId as number;
+}
+
+export async function getUserByGoogleId(googleId: string): Promise<UserRow | null> {
+  const [rows] = await executeQuery('SELECT id, google_id, name, email, password, role FROM users WHERE google_id = ? LIMIT 1', [googleId]);
+  const arr = rows as any[];
+  return arr.length ? (arr[0] as UserRow) : null;
+}
+
+export async function linkGoogleAccount(userId: number, googleId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    await executeQuery(
+      'UPDATE users SET google_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [googleId, userId]
+    );
+    return { success: true };
+  } catch (error: any) {
+    console.error('[USERS][LINK_GOOGLE][ERROR]', error);
+    return { success: false, error: error.message };
+  }
+}
+
+export async function unlinkGoogleAccount(userId: number): Promise<{ success: boolean; error?: string }> {
+  try {
+    await executeQuery(
+      'UPDATE users SET google_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [userId]
+    );
+    return { success: true };
+  } catch (error: any) {
+    console.error('[USERS][UNLINK_GOOGLE][ERROR]', error);
+    return { success: false, error: error.message };
+  }
+}
+
 export async function getUserById(id: number): Promise<UserRow | null> {
   const [rows] = await pool.query('SELECT id, google_id, name, email, password, role FROM users WHERE id = ? LIMIT 1', [id]);
   const arr = rows as any[];

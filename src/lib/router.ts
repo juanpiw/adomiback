@@ -10,6 +10,7 @@ import { mountWebhooks } from '../endpoints/webhooks';
 import { mountPlanExpirations } from '../endpoints/plan-expirations';
 import { mountVerifications } from '../endpoints/verifications';
 import promoRoutes from '../endpoints/promo';
+import googleAuthRoutes from '../endpoints/google-auth';
 
 export const createRouter = () => {
   const router = Router();
@@ -28,6 +29,9 @@ export const createRouter = () => {
   
   // Montar rutas de promoción
   router.use('/promo', promoRoutes);
+  
+  // Montar rutas de Google OAuth
+  router.use('/', googleAuthRoutes);
 
   return router;
 };
