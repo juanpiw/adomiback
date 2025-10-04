@@ -11,9 +11,16 @@ export type UserRow = {
 };
 
 export async function getUserByEmail(email: string): Promise<UserRow | null> {
-  const [rows] = await executeQuery('SELECT id, google_id, name, email, password, role, stripe_customer_id FROM users WHERE email = ? LIMIT 1', [email]);
+  // Query temporal sin stripe_customer_id hasta que se ejecute la migración
+  const [rows] = await executeQuery('SELECT id, google_id, name, email, password, role FROM users WHERE email = ? LIMIT 1', [email]);
   const arr = rows as any[];
-  return arr.length ? (arr[0] as UserRow) : null;
+  if (arr.length) {
+    const user = arr[0] as UserRow;
+    // Agregar stripe_customer_id como null temporalmente
+    user.stripe_customer_id = null;
+    return user;
+  }
+  return null;
 }
 
 export async function createUser(email: string, passwordHash: string | null, role: 'client'|'provider' = 'client', name: string | null = null): Promise<number> {
@@ -128,11 +135,13 @@ export async function updateUser(userId: number, updates: {
 
 export async function updateUserStripeCustomerId(userId: number, stripeCustomerId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    await executeQuery(
-      'UPDATE users SET stripe_customer_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-      [stripeCustomerId, userId]
-    );
+    // TEMPORAL: Comentado hasta que se ejecute la migración de BD
+    // await executeQuery(
+    //   'UPDATE users SET stripe_customer_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+    //   [stripeCustomerId, userId]
+    // );
     console.log('[USERS][STRIPE_CUSTOMER] Updated stripe_customer_id for user:', userId);
+    console.log('[USERS][STRIPE_CUSTOMER] TEMPORAL: stripe_customer_id no se guarda hasta migración de BD');
     return { success: true };
   } catch (error: any) {
     console.error('[USERS][STRIPE_CUSTOMER][ERROR]', error);
