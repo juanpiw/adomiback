@@ -1397,8 +1397,62 @@ const bookingPaths = {
                 type: 'object',
                 properties: {
                   success: { type: 'boolean', example: true },
-                  bookings: { type: 'array', items: { type: 'object' } },
+                  bookings: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'integer', example: 1 },
+                        client_id: { type: 'integer', example: 123 },
+                        provider_id: { type: 'integer', example: 456 },
+                        provider_service_id: { type: 'integer', example: 789 },
+                        booking_time: { type: 'string', format: 'date-time', example: '2024-01-15T10:00:00Z' },
+                        status: { 
+                          type: 'string', 
+                          enum: ['pending', 'confirmed', 'completed', 'cancelled_by_client', 'cancelled_by_provider', 'no_show'],
+                          example: 'confirmed'
+                        },
+                        final_price: { type: 'number', example: 25000 },
+                        notes_from_client: { type: 'string', example: 'Corte de cabello corto' },
+                        notes_from_provider: { type: 'string', example: 'Cliente puntual' },
+                        client_name: { type: 'string', example: 'Juan Pérez' },
+                        provider_name: { type: 'string', example: 'María Estilista' },
+                        service_name: { type: 'string', example: 'Corte de Cabello' },
+                        service_description: { type: 'string', example: 'Corte profesional para caballeros' },
+                        created_at: { type: 'string', format: 'date-time' },
+                        updated_at: { type: 'string', format: 'date-time' }
+                      }
+                    }
+                  },
                   count: { type: 'integer', example: 5 }
+                }
+              }
+            }
+          }
+        },
+        401: {
+          description: 'No autorizado',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: false },
+                  error: { type: 'string', example: 'Token JWT inválido' }
+                }
+              }
+            }
+          }
+        },
+        500: {
+          description: 'Error interno del servidor',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: false },
+                  error: { type: 'string', example: 'Error interno del servidor' }
                 }
               }
             }
@@ -1430,8 +1484,92 @@ const bookingPaths = {
         }
       },
       responses: {
-        201: { description: 'Reserva creada exitosamente' },
-        409: { description: 'Horario no disponible' }
+        201: {
+          description: 'Reserva creada exitosamente',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  message: { type: 'string', example: 'Reserva creada exitosamente.' },
+                  booking: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'integer', example: 1 },
+                      client_id: { type: 'integer', example: 123 },
+                      provider_id: { type: 'integer', example: 456 },
+                      provider_service_id: { type: 'integer', example: 789 },
+                      booking_time: { type: 'string', format: 'date-time', example: '2024-01-15T10:00:00Z' },
+                      status: { type: 'string', example: 'pending' },
+                      final_price: { type: 'number', example: 25000 },
+                      notes_from_client: { type: 'string', example: 'Corte de cabello corto' },
+                      client_name: { type: 'string', example: 'Juan Pérez' },
+                      provider_name: { type: 'string', example: 'María Estilista' },
+                      service_name: { type: 'string', example: 'Corte de Cabello' }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        400: {
+          description: 'Datos de entrada inválidos',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: false },
+                  error: { type: 'string', example: 'Faltan datos requeridos: provider_id, provider_service_id, booking_time, final_price' }
+                }
+              }
+            }
+          }
+        },
+        403: {
+          description: 'Solo clientes pueden crear reservas',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: false },
+                  error: { type: 'string', example: 'Solo los clientes pueden crear reservas.' }
+                }
+              }
+            }
+          }
+        },
+        409: {
+          description: 'Horario no disponible',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: false },
+                  error: { type: 'string', example: 'El horario seleccionado no está disponible.' }
+                }
+              }
+            }
+          }
+        },
+        500: {
+          description: 'Error interno del servidor',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: false },
+                  error: { type: 'string', example: 'Error interno del servidor.' }
+                }
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -1443,7 +1581,76 @@ const bookingPaths = {
       parameters: [
         { name: 'id', in: 'path', required: true, schema: { type: 'integer' } }
       ],
-      responses: { 200: { description: 'Reserva encontrada' } }
+      responses: {
+        200: {
+          description: 'Reserva encontrada',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  booking: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'integer', example: 1 },
+                      client_id: { type: 'integer', example: 123 },
+                      provider_id: { type: 'integer', example: 456 },
+                      provider_service_id: { type: 'integer', example: 789 },
+                      booking_time: { type: 'string', format: 'date-time', example: '2024-01-15T10:00:00Z' },
+                      status: { 
+                        type: 'string', 
+                        enum: ['pending', 'confirmed', 'completed', 'cancelled_by_client', 'cancelled_by_provider', 'no_show'],
+                        example: 'confirmed'
+                      },
+                      final_price: { type: 'number', example: 25000 },
+                      notes_from_client: { type: 'string', example: 'Corte de cabello corto' },
+                      notes_from_provider: { type: 'string', example: 'Cliente puntual' },
+                      client_name: { type: 'string', example: 'Juan Pérez' },
+                      client_email: { type: 'string', example: 'juan@email.com' },
+                      provider_name: { type: 'string', example: 'María Estilista' },
+                      provider_email: { type: 'string', example: 'maria@salon.com' },
+                      service_name: { type: 'string', example: 'Corte de Cabello' },
+                      service_description: { type: 'string', example: 'Corte profesional para caballeros' },
+                      service_price: { type: 'number', example: 25000 },
+                      created_at: { type: 'string', format: 'date-time' },
+                      updated_at: { type: 'string', format: 'date-time' }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        404: {
+          description: 'Reserva no encontrada',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: false },
+                  error: { type: 'string', example: 'Reserva no encontrada.' }
+                }
+              }
+            }
+          }
+        },
+        403: {
+          description: 'Sin acceso a esta reserva',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: false },
+                  error: { type: 'string', example: 'No tienes acceso a esta reserva.' }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   '/bookings/{id}/status': {
@@ -1469,7 +1676,73 @@ const bookingPaths = {
           }
         }
       },
-      responses: { 200: { description: 'Estado actualizado exitosamente' } }
+      responses: {
+        200: {
+          description: 'Estado actualizado exitosamente',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  message: { type: 'string', example: 'Estado de reserva actualizado exitosamente.' },
+                  booking: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'integer', example: 1 },
+                      status: { type: 'string', example: 'confirmed' },
+                      notes_from_provider: { type: 'string', example: 'Cliente confirmado' },
+                      updated_at: { type: 'string', format: 'date-time' }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        400: {
+          description: 'Estado inválido',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: false },
+                  error: { type: 'string', example: 'Estado inválido. Estados válidos: pending, confirmed, completed, cancelled_by_client, cancelled_by_provider, no_show' }
+                }
+              }
+            }
+          }
+        },
+        403: {
+          description: 'Sin permisos para actualizar',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: false },
+                  error: { type: 'string', example: 'No tienes permisos para actualizar esta reserva con el estado especificado.' }
+                }
+              }
+            }
+          }
+        },
+        404: {
+          description: 'Reserva no encontrada',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: false },
+                  error: { type: 'string', example: 'Reserva no encontrada.' }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   '/bookings/availability/{provider_id}': {
@@ -1482,7 +1755,38 @@ const bookingPaths = {
         { name: 'date', in: 'query', required: true, schema: { type: 'string', format: 'date' } },
         { name: 'time', in: 'query', required: true, schema: { type: 'string' } }
       ],
-      responses: { 200: { description: 'Disponibilidad verificada' } }
+      responses: {
+        200: {
+          description: 'Disponibilidad verificada',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  available: { type: 'boolean', example: true },
+                  provider_id: { type: 'integer', example: 456 },
+                  booking_time: { type: 'string', format: 'date-time', example: '2024-01-15T10:00:00Z' }
+                }
+              }
+            }
+          }
+        },
+        400: {
+          description: 'Parámetros inválidos',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: false },
+                  error: { type: 'string', example: 'Faltan parámetros: date y time son requeridos.' }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   '/bookings/stats': {
@@ -1493,7 +1797,47 @@ const bookingPaths = {
       parameters: [
         { name: 'provider_id', in: 'query', schema: { type: 'integer' } }
       ],
-      responses: { 200: { description: 'Estadísticas obtenidas exitosamente' } }
+      responses: {
+        200: {
+          description: 'Estadísticas obtenidas exitosamente',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  stats: {
+                    type: 'object',
+                    properties: {
+                      total: { type: 'integer', example: 50, description: 'Total de reservas' },
+                      pending: { type: 'integer', example: 5, description: 'Reservas pendientes' },
+                      confirmed: { type: 'integer', example: 20, description: 'Reservas confirmadas' },
+                      completed: { type: 'integer', example: 20, description: 'Servicios completados' },
+                      cancelled: { type: 'integer', example: 5, description: 'Reservas canceladas' },
+                      revenue: { type: 'number', example: 1250000, description: 'Ingresos totales (CLP)' }
+                    }
+                  },
+                  period: { type: 'string', example: 'provider', description: 'Período de las estadísticas' }
+                }
+              }
+            }
+          }
+        },
+        403: {
+          description: 'Sin permisos para ver estadísticas',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: false },
+                  error: { type: 'string', example: 'No puedes ver estadísticas de otros proveedores.' }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 };
