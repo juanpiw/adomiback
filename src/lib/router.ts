@@ -12,6 +12,7 @@ import { mountVerifications } from '../endpoints/verifications';
 import promoRoutes from '../endpoints/promo';
 import googleAuthRoutes from '../endpoints/google-auth';
 import stripeCheckoutRoutes from '../endpoints/stripe-checkout';
+import bookingsRoutes from '../endpoints/bookings';
 
 export const createRouter = () => {
   const router = Router();
@@ -42,6 +43,9 @@ export const createRouter = () => {
   // Montar rutas de Stripe Checkout
   console.log('[ROUTER] Montando rutas de Stripe Checkout...');
   router.use('/stripe', stripeCheckoutRoutes);
+
+  // Bookings (Sistema de Reservas)
+  router.use('/bookings', bookingsRoutes);
 
   console.log('[ROUTER] Router inicializado exitosamente');
   return router;

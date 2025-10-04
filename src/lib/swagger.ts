@@ -1375,6 +1375,132 @@ const spec = {
   }
 };
 
+// Agregar rutas de Bookings al spec
+const bookingPaths = {
+  '/bookings': {
+    get: {
+      tags: ['Bookings'],
+      summary: 'Obtener reservas del usuario',
+      description: 'Obtiene todas las reservas del usuario autenticado (cliente o proveedor)',
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'status', in: 'query', schema: { type: 'string' }, description: 'Filtrar por estado' },
+        { name: 'start_date', in: 'query', schema: { type: 'string', format: 'date' }, description: 'Fecha de inicio' },
+        { name: 'end_date', in: 'query', schema: { type: 'string', format: 'date' }, description: 'Fecha de fin' }
+      ],
+      responses: {
+        200: {
+          description: 'Lista de reservas obtenida exitosamente',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  bookings: { type: 'array', items: { type: 'object' } },
+                  count: { type: 'integer', example: 5 }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    post: {
+      tags: ['Bookings'],
+      summary: 'Crear nueva reserva',
+      description: 'Crea una nueva reserva (solo clientes)',
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['provider_id', 'provider_service_id', 'booking_time', 'final_price'],
+              properties: {
+                provider_id: { type: 'integer', example: 456 },
+                provider_service_id: { type: 'integer', example: 789 },
+                booking_time: { type: 'string', format: 'date-time' },
+                final_price: { type: 'number', example: 25000 },
+                notes_from_client: { type: 'string', example: 'Corte de cabello corto' }
+              }
+            }
+          }
+        }
+      },
+      responses: {
+        201: { description: 'Reserva creada exitosamente' },
+        409: { description: 'Horario no disponible' }
+      }
+    }
+  },
+  '/bookings/{id}': {
+    get: {
+      tags: ['Bookings'],
+      summary: 'Obtener reserva específica',
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'id', in: 'path', required: true, schema: { type: 'integer' } }
+      ],
+      responses: { 200: { description: 'Reserva encontrada' } }
+    }
+  },
+  '/bookings/{id}/status': {
+    put: {
+      tags: ['Bookings'],
+      summary: 'Actualizar estado de reserva',
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'id', in: 'path', required: true, schema: { type: 'integer' } }
+      ],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['status'],
+              properties: {
+                status: { type: 'string', enum: ['pending', 'confirmed', 'completed', 'cancelled_by_client', 'cancelled_by_provider', 'no_show'] },
+                notes_from_provider: { type: 'string' }
+              }
+            }
+          }
+        }
+      },
+      responses: { 200: { description: 'Estado actualizado exitosamente' } }
+    }
+  },
+  '/bookings/availability/{provider_id}': {
+    get: {
+      tags: ['Bookings'],
+      summary: 'Verificar disponibilidad del proveedor',
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'provider_id', in: 'path', required: true, schema: { type: 'integer' } },
+        { name: 'date', in: 'query', required: true, schema: { type: 'string', format: 'date' } },
+        { name: 'time', in: 'query', required: true, schema: { type: 'string' } }
+      ],
+      responses: { 200: { description: 'Disponibilidad verificada' } }
+    }
+  },
+  '/bookings/stats': {
+    get: {
+      tags: ['Bookings'],
+      summary: 'Obtener estadísticas de reservas',
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'provider_id', in: 'query', schema: { type: 'integer' } }
+      ],
+      responses: { 200: { description: 'Estadísticas obtenidas exitosamente' } }
+    }
+  }
+};
+
+// Agregar las rutas de bookings al spec
+Object.assign(spec.paths, bookingPaths);
+
 export function mountSwagger(app: Express) {
   app.use('/docs', swaggerUi.serve, swaggerUi.setup(spec));
 }
