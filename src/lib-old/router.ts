@@ -9,13 +9,13 @@ import { mountFounders } from '../endpoints/founders';
 import { mountWebhooks } from '../endpoints/webhooks';
 import { mountPlanExpirations } from '../endpoints/plan-expirations';
 import { mountVerifications } from '../endpoints/verifications';
-import promoRoutes from '../endpoints/promo';
-import googleAuthRoutes from '../endpoints/google-auth';
-import stripeCheckoutRoutes from '../endpoints/stripe-checkout';
-import bookingsRoutes from '../endpoints/bookings';
-import profileValidationRoutes from '../endpoints/profile-validation';
-import clientProfileRoutes from '../endpoints/client-profile';
-import clientProfilePhotoRoutes from '../endpoints/client-profile-photo';
+import promoRoutes from '../endpoints-old/promo';
+import googleAuthRoutes from '../endpoints-old/google-auth';
+import stripeCheckoutRoutes from '../endpoints-old/stripe-checkout';
+import bookingsRoutes from '../endpoints-old/bookings';
+import profileValidationRoutes from '../endpoints-old/profile-validation';
+import clientProfileRoutes from '../endpoints-old/client-profile';
+import clientProfilePhotoRoutes from '../endpoints-old/client-profile-photo';
 
 export const createRouter = () => {
   const router = Router();

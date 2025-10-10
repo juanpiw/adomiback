@@ -8,6 +8,7 @@ import cors from 'cors';
 import morgan from 'morgan';
 import { setupAuthModule } from './modules/auth';
 import { Logger } from './shared/utils/logger.util';
+import { createRouter } from './lib-old/router';
 
 export function createApp(): Express {
   const app = express();
@@ -35,6 +36,9 @@ export function createApp(): Express {
   // Setup modules
   Logger.info('APP', 'Setting up modules...');
   setupAuthModule(app);
+  // Mount legacy router to expose existing endpoints until new modules are ready
+  Logger.info('APP', 'Mounting legacy endpoints router...');
+  app.use('/', createRouter());
   
   Logger.info('APP', 'All modules loaded successfully');
 
