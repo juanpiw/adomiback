@@ -3,14 +3,16 @@
  * Handles all client-related functionality
  */
 
-// TODO: Import and export routes when implemented
+import { Express } from 'express';
+import { ClientRoutes } from './routes/client.routes';
 
 /**
  * Setup function to mount client routes
  * @param app Express application
  */
-export function setupClientModule(app: any) {
-  // TODO: Implement when routes are ready
-  console.log('[CLIENT MODULE] Module structure ready - awaiting implementation');
+export function setupClientModule(app: Express) {
+  const routes = new ClientRoutes();
+  app.use('/', routes.getRouter());
+  console.log('[CLIENT MODULE] Client routes mounted');
 }
 

@@ -23,6 +23,8 @@
   },
   "include": ["src/**/*.ts"],
   "exclude": [
+    "src/endpoints-old/**/*",
+    
     "src/lib-old/**/*",
     "src/queries-old/**/*",
     "src/middleware-old/**/*",
