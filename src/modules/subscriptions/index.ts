@@ -24,7 +24,7 @@ export function setupSubscriptionsModule(app: any) {
           stripe_price_id,
           price,
           currency,
-          COALESCE(\`interval\`, billing_period) AS \`interval\`,
+          billing_period AS \`interval\`,
           COALESCE(description, '') AS description,
           COALESCE(features, '[]') AS features,
           COALESCE(max_services, 0) AS max_services,
