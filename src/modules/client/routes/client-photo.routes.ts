@@ -79,23 +79,41 @@ export class ClientPhotoRoutes {
 
         const pool = DatabaseConnection.getPool();
         // Obtener nombre seguro para cumplir NOT NULL en full_name
+        console.log('[CLIENT_PHOTO][UPLOAD] fetching base user for full_name...');
         const [userRows] = await pool.query('SELECT name, email FROM users WHERE id = ? LIMIT 1', [user.id]);
         const urow = (userRows as any[])[0] || {};
         const nameFromDb = typeof urow.name === 'string' ? String(urow.name).trim() : '';
         const emailFromDb = typeof urow.email === 'string' ? String(urow.email) : '';
         const safeFullName = nameFromDb || (emailFromDb ? emailFromDb.split('@')[0] : '') || 'Usuario';
+        console.log('[CLIENT_PHOTO][UPLOAD] computed full_name:', {
+          nameFromDb,
+          emailFromDb,
+          safeFullName,
+          length: safeFullName.length
+        });
 
         // UPSERT: inserta si no existe, actualiza solo la foto si existe
-        await pool.query(
-          `INSERT INTO client_profiles (
+        const sql = `INSERT INTO client_profiles (
              client_id, full_name, phone, profile_photo_url, address, commune, region, preferred_language
            ) VALUES (?, ?, '', ?, '', '', '', 'es')
            ON DUPLICATE KEY UPDATE
              profile_photo_url = VALUES(profile_photo_url),
-             updated_at = CURRENT_TIMESTAMP`,
-          [user.id, safeFullName, relPhoto]
-        );
-        console.log('[CLIENT_PHOTO][UPLOAD] DB upserted for user', user.id);
+             updated_at = CURRENT_TIMESTAMP`;
+        const params = [user.id, safeFullName, relPhoto];
+        console.log('[CLIENT_PHOTO][UPLOAD] about to execute UPSERT', { sql, params });
+        try {
+          await pool.query(sql, params);
+          console.log('[CLIENT_PHOTO][UPLOAD] DB upserted for user', user.id);
+        } catch (dbErr: any) {
+          console.error('[CLIENT_PHOTO][UPLOAD][DB_ERROR]', {
+            code: dbErr?.code,
+            errno: dbErr?.errno,
+            sqlState: dbErr?.sqlState,
+            sqlMessage: dbErr?.sqlMessage,
+            sql: dbErr?.sql
+          });
+          throw dbErr;
+        }
 
         return res.status(200).json({ success: true, photoUrl: relPhoto, thumbnailUrl: relThumb });
       } catch (error: any) {
