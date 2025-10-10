@@ -63,6 +63,10 @@ app.use(corsLogger);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Servir archivos estáticos (uploads de imágenes)
+app.use('/uploads', express.static('uploads'));
+console.log('📁 Serving static files from /uploads');
+
 // Logging
 app.use(morgan('dev'));
 

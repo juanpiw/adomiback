@@ -14,6 +14,8 @@ import googleAuthRoutes from '../endpoints/google-auth';
 import stripeCheckoutRoutes from '../endpoints/stripe-checkout';
 import bookingsRoutes from '../endpoints/bookings';
 import profileValidationRoutes from '../endpoints/profile-validation';
+import clientProfileRoutes from '../endpoints/client-profile';
+import clientProfilePhotoRoutes from '../endpoints/client-profile-photo';
 
 export const createRouter = () => {
   const router = Router();
@@ -50,6 +52,12 @@ export const createRouter = () => {
 
   // Profile Validation
   router.use('/', profileValidationRoutes);
+
+  // Client Profile
+  router.use('/', clientProfileRoutes);
+
+  // Client Profile Photo
+  router.use('/', clientProfilePhotoRoutes);
 
   console.log('[ROUTER] Router inicializado exitosamente');
   return router;

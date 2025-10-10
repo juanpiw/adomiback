@@ -16,6 +16,11 @@ export function createApp(): Express {
   app.use(cors());
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+  
+  // Servir archivos estáticos (uploads de imágenes)
+  app.use('/uploads', express.static('uploads'));
+  Logger.info('APP', 'Serving static files from /uploads');
+  
   app.use(morgan('dev'));
 
   // Health check
