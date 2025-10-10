@@ -5,6 +5,7 @@
 
 import { Express } from 'express';
 import { AuthRoutes } from './routes/auth.routes';
+import { GoogleAuthRoutes } from './routes/google.routes';
 import { Logger } from '../../shared/utils/logger.util';
 
 // Export services
@@ -22,6 +23,8 @@ export * from './repositories/password-reset.repository';
 export function setupAuthModule(app: Express) {
   const authRoutes = new AuthRoutes();
   app.use('/auth', authRoutes.getRouter());
+  const googleRoutes = new GoogleAuthRoutes();
+  app.use('/auth', googleRoutes.getRouter());
   
   Logger.info('AUTH_MODULE', 'Auth module loaded and routes mounted on /auth');
 }
