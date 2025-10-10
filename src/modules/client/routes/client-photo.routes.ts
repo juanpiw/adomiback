@@ -78,30 +78,24 @@ export class ClientPhotoRoutes {
         console.log('[CLIENT_PHOTO][UPLOAD] urls:', { relPhoto, relThumb });
 
         const pool = DatabaseConnection.getPool();
-        // Comprobar existencia de perfil para respetar restricciones NOT NULL
-        const [existsRows] = await pool.query('SELECT client_id FROM client_profiles WHERE client_id = ?', [user.id]);
-        const exists = (existsRows as any[]).length > 0;
+        // Obtener nombre seguro para cumplir NOT NULL en full_name
+        const [userRows] = await pool.query('SELECT name, email FROM users WHERE id = ? LIMIT 1', [user.id]);
+        const urow = (userRows as any[])[0] || {};
+        const nameFromDb = typeof urow.name === 'string' ? String(urow.name).trim() : '';
+        const emailFromDb = typeof urow.email === 'string' ? String(urow.email) : '';
+        const safeFullName = nameFromDb || (emailFromDb ? emailFromDb.split('@')[0] : '') || 'Usuario';
 
-        if (exists) {
-          await pool.query(
-            `UPDATE client_profiles 
-             SET profile_photo_url = ?, updated_at = CURRENT_TIMESTAMP 
-             WHERE client_id = ?`,
-            [relPhoto, user.id]
-          );
-          console.log('[CLIENT_PHOTO][UPLOAD] DB updated (update) for user', user.id);
-        } else {
-          // Obtener nombre base desde users para cumplir NOT NULL en full_name
-          const [userRows] = await pool.query('SELECT name, email FROM users WHERE id = ? LIMIT 1', [user.id]);
-          const baseName = (userRows as any[])[0]?.name || (userRows as any[])[0]?.email?.split('@')[0] || 'Usuario';
-          await pool.query(
-            `INSERT INTO client_profiles (
-               client_id, full_name, phone, profile_photo_url, address, commune, region, preferred_language
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [user.id, baseName, '', relPhoto, '', '', '', 'es']
-          );
-          console.log('[CLIENT_PHOTO][UPLOAD] DB updated (insert) for user', user.id);
-        }
+        // UPSERT: inserta si no existe, actualiza solo la foto si existe
+        await pool.query(
+          `INSERT INTO client_profiles (
+             client_id, full_name, phone, profile_photo_url, address, commune, region, preferred_language
+           ) VALUES (?, ?, '', ?, '', '', '', 'es')
+           ON DUPLICATE KEY UPDATE
+             profile_photo_url = VALUES(profile_photo_url),
+             updated_at = CURRENT_TIMESTAMP`,
+          [user.id, safeFullName, relPhoto]
+        );
+        console.log('[CLIENT_PHOTO][UPLOAD] DB upserted for user', user.id);
 
         return res.status(200).json({ success: true, photoUrl: relPhoto, thumbnailUrl: relThumb });
       } catch (error: any) {
