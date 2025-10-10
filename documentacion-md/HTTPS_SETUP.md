@@ -293,3 +293,5 @@ backend/
 ---
 
 **¡Adomi Backend HTTPS - Configuración completa! 🚀**
+
+

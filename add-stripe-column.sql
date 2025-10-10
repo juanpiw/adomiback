@@ -8,3 +8,7 @@ CREATE INDEX idx_stripe_customer_id ON users(stripe_customer_id);
 
 -- Verificar que se agregó correctamente
 DESCRIBE users;
+
+
+
+

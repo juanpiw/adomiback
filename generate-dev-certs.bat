@@ -31,3 +31,7 @@ echo ⚠️  Nota: Los navegadores mostrarán advertencia de certificado no conf
 echo    Para desarrollo local, acepta la excepción de seguridad
 
 pause
+
+
+
+

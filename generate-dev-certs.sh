@@ -31,3 +31,7 @@ echo "   3. Accede a: https://localhost:3443"
 echo ""
 echo "⚠️  Nota: Los navegadores mostrarán advertencia de certificado no confiable"
 echo "    Para desarrollo local, acepta la excepción de seguridad"
+
+
+
+

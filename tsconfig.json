@@ -8,8 +8,29 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "sourceMap": true,
-    "strict": false
+    "strict": false,
+    "baseUrl": "./src",
+    "paths": {
+      "@modules/*": ["modules/*"],
+      "@shared/*": ["shared/*"],
+      "@config/*": ["shared/config/*"],
+      "@utils/*": ["shared/utils/*"],
+      "@middleware/*": ["shared/middleware/*"],
+      "@types/*": ["shared/types/*"],
+      "@constants/*": ["shared/constants/*"],
+      "@database/*": ["shared/database/*"]
+    }
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": [
+    "src/endpoints-old/**/*",
+    "src/lib-old/**/*",
+    "src/queries-old/**/*",
+    "src/middleware-old/**/*",
+    "src/*-old.ts",
+    "src/test-basic.ts",
+    "src/debug-memory.ts",
+    "node_modules"
+  ]
 }
 

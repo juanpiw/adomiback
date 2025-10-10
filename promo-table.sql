@@ -29,3 +29,7 @@ ON DUPLICATE KEY UPDATE
   profesion = VALUES(profesion),
   notas = VALUES(notas),
   updated_at = CURRENT_TIMESTAMP;
+
+
+
+
