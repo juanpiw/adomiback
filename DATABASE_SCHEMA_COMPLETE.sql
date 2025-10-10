@@ -1151,6 +1151,9 @@ CREATE TABLE promotions (
 -- PERFIL DEL CLIENTE
 -- ============================================
 
+-- MODIFICACIONES (2025-10-10):
+--  - Se agrega columna 'notes' (TEXT NULL) en 'client_profiles' para notas permanentes del cliente.
+
 -- Perfil del cliente
 CREATE TABLE client_profiles (
   id INT AUTO_INCREMENT PRIMARY KEY,
@@ -1162,6 +1165,7 @@ CREATE TABLE client_profiles (
   commune VARCHAR(100),
   region VARCHAR(100),
   preferred_language ENUM('es', 'en') DEFAULT 'es',
+  notes TEXT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   
