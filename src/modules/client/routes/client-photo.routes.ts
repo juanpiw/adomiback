@@ -47,13 +47,19 @@ export class ClientPhotoRoutes {
     this.router.post('/client/profile/photo', authenticateToken, upload.single('profile_photo'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
+        console.log('[CLIENT_PHOTO][UPLOAD] user:', user);
         if (user.role !== 'client') return res.status(403).json({ success: false, error: 'Acceso denegado' });
-        if (!req.file) return res.status(400).json({ success: false, error: 'Archivo requerido' });
+        if (!req.file) {
+          console.warn('[CLIENT_PHOTO][UPLOAD] No file received. fieldName=profile_photo');
+          return res.status(400).json({ success: false, error: 'Archivo requerido' });
+        }
+        console.log('[CLIENT_PHOTO][UPLOAD] file:', { name: (req.file as any).originalname, size: req.file.size, mimetype: req.file.mimetype });
 
         const id = uuidv4();
         const baseName = `${id}.webp`;
         const outPath = path.join(UPLOAD_DIR, `compressed-${baseName}`);
         const thumbPath = path.join(THUMB_DIR, `thumb-${baseName}`);
+        console.log('[CLIENT_PHOTO][UPLOAD] paths:', { outPath, thumbPath });
 
         // Imagen principal
         await sharp(req.file.buffer)
@@ -69,6 +75,7 @@ export class ClientPhotoRoutes {
 
         const relPhoto = `/uploads/profiles/clients/${path.basename(outPath)}`;
         const relThumb = `/uploads/profiles/clients/thumbnails/${path.basename(thumbPath)}`;
+        console.log('[CLIENT_PHOTO][UPLOAD] urls:', { relPhoto, relThumb });
 
         const pool = DatabaseConnection.getPool();
         // upsert simple
@@ -78,10 +85,12 @@ export class ClientPhotoRoutes {
            ON DUPLICATE KEY UPDATE profile_photo_url = VALUES(profile_photo_url), updated_at = CURRENT_TIMESTAMP`,
           [user.id, relPhoto]
         );
+        console.log('[CLIENT_PHOTO][UPLOAD] DB updated for user', user.id);
 
         return res.status(200).json({ success: true, photoUrl: relPhoto, thumbnailUrl: relThumb });
       } catch (error: any) {
-        return res.status(500).json({ success: false, error: 'Error al subir foto', details: error.message });
+        console.error('[CLIENT_PHOTO][UPLOAD][ERROR]', { message: error?.message, stack: error?.stack });
+        return res.status(500).json({ success: false, error: 'Error al subir foto', details: error?.message || 'unknown' });
       }
     });
 
