@@ -13,6 +13,7 @@ import promoRoutes from '../endpoints/promo';
 import googleAuthRoutes from '../endpoints/google-auth';
 import stripeCheckoutRoutes from '../endpoints/stripe-checkout';
 import bookingsRoutes from '../endpoints/bookings';
+import profileValidationRoutes from '../endpoints/profile-validation';
 
 export const createRouter = () => {
   const router = Router();
@@ -46,6 +47,9 @@ export const createRouter = () => {
 
   // Bookings (Sistema de Reservas)
   router.use('/bookings', bookingsRoutes);
+
+  // Profile Validation
+  router.use('/', profileValidationRoutes);
 
   console.log('[ROUTER] Router inicializado exitosamente');
   return router;
