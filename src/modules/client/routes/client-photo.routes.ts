@@ -78,14 +78,30 @@ export class ClientPhotoRoutes {
         console.log('[CLIENT_PHOTO][UPLOAD] urls:', { relPhoto, relThumb });
 
         const pool = DatabaseConnection.getPool();
-        // upsert simple
-        await pool.query(
-          `INSERT INTO client_profiles (client_id, profile_photo_url)
-           VALUES (?, ?)
-           ON DUPLICATE KEY UPDATE profile_photo_url = VALUES(profile_photo_url), updated_at = CURRENT_TIMESTAMP`,
-          [user.id, relPhoto]
-        );
-        console.log('[CLIENT_PHOTO][UPLOAD] DB updated for user', user.id);
+        // Comprobar existencia de perfil para respetar restricciones NOT NULL
+        const [existsRows] = await pool.query('SELECT client_id FROM client_profiles WHERE client_id = ?', [user.id]);
+        const exists = (existsRows as any[]).length > 0;
+
+        if (exists) {
+          await pool.query(
+            `UPDATE client_profiles 
+             SET profile_photo_url = ?, updated_at = CURRENT_TIMESTAMP 
+             WHERE client_id = ?`,
+            [relPhoto, user.id]
+          );
+          console.log('[CLIENT_PHOTO][UPLOAD] DB updated (update) for user', user.id);
+        } else {
+          // Obtener nombre base desde users para cumplir NOT NULL en full_name
+          const [userRows] = await pool.query('SELECT name, email FROM users WHERE id = ? LIMIT 1', [user.id]);
+          const baseName = (userRows as any[])[0]?.name || (userRows as any[])[0]?.email?.split('@')[0] || 'Usuario';
+          await pool.query(
+            `INSERT INTO client_profiles (
+               client_id, full_name, phone, profile_photo_url, address, commune, region, preferred_language
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [user.id, baseName, '', relPhoto, '', '', '', 'es']
+          );
+          console.log('[CLIENT_PHOTO][UPLOAD] DB updated (insert) for user', user.id);
+        }
 
         return res.status(200).json({ success: true, photoUrl: relPhoto, thumbnailUrl: relThumb });
       } catch (error: any) {
