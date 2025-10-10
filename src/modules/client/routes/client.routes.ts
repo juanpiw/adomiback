@@ -38,6 +38,31 @@ export class ClientRoutes {
   }
 
   private mountRoutes() {
+    // GET /profile/validate
+    this.router.get('/profile/validate', authenticateToken, async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user as AuthUser;
+        const pool = DatabaseConnection.getPool();
+        const [rows] = await pool.query(
+          `SELECT full_name, phone, address, commune, region FROM client_profiles WHERE client_id = ?`,
+          [user.id]
+        );
+        const profile = (rows as any[])[0];
+
+        const missingFields: string[] = [];
+        if (!profile || !profile.full_name || !String(profile.full_name).trim()) missingFields.push('Nombre completo');
+        if (!profile || !profile.phone || !String(profile.phone).trim()) missingFields.push('Teléfono de contacto');
+        if (!profile || !profile.address || !String(profile.address).trim()) missingFields.push('Dirección principal');
+        if (!profile || !profile.commune || !String(profile.commune).trim()) missingFields.push('Comuna');
+        if (!profile || !profile.region || !String(profile.region).trim()) missingFields.push('Región');
+
+        const isComplete = missingFields.length === 0;
+        return res.status(200).json({ success: true, isComplete, missingFields, userType: 'client', message: isComplete ? 'Perfil completo' : 'Por favor completa tu perfil para continuar' });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Error al validar perfil', details: error.message });
+      }
+    });
+
     // GET /client/profile
     this.router.get('/client/profile', authenticateToken, async (req: Request, res: Response) => {
       try {
@@ -95,26 +120,46 @@ export class ClientRoutes {
 
         const pool = DatabaseConnection.getPool();
 
+        // Detectar si existe la columna notes para compatibilidad con esquemas antiguos
+        const [notesColRows] = await pool.query(`SHOW COLUMNS FROM client_profiles LIKE 'notes'`);
+        const hasNotesColumn = (notesColRows as any[]).length > 0;
+
         // comprobar existencia
         const [existsRows] = await pool.query('SELECT client_id FROM client_profiles WHERE client_id = ?', [user.id]);
         const exists = (existsRows as any[]).length > 0;
 
         if (exists) {
-          await pool.query(
-            `UPDATE client_profiles SET full_name=?, phone=?, profile_photo_url=?, address=?, commune=?, region=?, preferred_language=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE client_id=?`,
-            [full_name, phone, profile_photo_url || null, address, commune, region, preferred_language || 'es', notes || null, user.id]
-          );
+          if (hasNotesColumn) {
+            await pool.query(
+              `UPDATE client_profiles SET full_name=?, phone=?, profile_photo_url=?, address=?, commune=?, region=?, preferred_language=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE client_id=?`,
+              [full_name, phone, profile_photo_url || null, address, commune, region, preferred_language || 'es', notes || null, user.id]
+            );
+          } else {
+            await pool.query(
+              `UPDATE client_profiles SET full_name=?, phone=?, profile_photo_url=?, address=?, commune=?, region=?, preferred_language=?, updated_at=CURRENT_TIMESTAMP WHERE client_id=?`,
+              [full_name, phone, profile_photo_url || null, address, commune, region, preferred_language || 'es', user.id]
+            );
+          }
         } else {
-          await pool.query(
-            `INSERT INTO client_profiles (client_id, full_name, phone, profile_photo_url, address, commune, region, preferred_language, notes)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [user.id, full_name, phone, profile_photo_url || null, address, commune, region, preferred_language || 'es', notes || null]
-          );
+          if (hasNotesColumn) {
+            await pool.query(
+              `INSERT INTO client_profiles (client_id, full_name, phone, profile_photo_url, address, commune, region, preferred_language, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [user.id, full_name, phone, profile_photo_url || null, address, commune, region, preferred_language || 'es', notes || null]
+            );
+          } else {
+            await pool.query(
+              `INSERT INTO client_profiles (client_id, full_name, phone, profile_photo_url, address, commune, region, preferred_language)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+              [user.id, full_name, phone, profile_photo_url || null, address, commune, region, preferred_language || 'es']
+            );
+          }
         }
 
         const [rows] = await pool.query(
-          `SELECT client_id, full_name, phone, profile_photo_url, address, commune, region, preferred_language, notes, created_at, updated_at
-           FROM client_profiles WHERE client_id = ?`,
+          hasNotesColumn
+            ? `SELECT client_id, full_name, phone, profile_photo_url, address, commune, region, preferred_language, notes, created_at, updated_at FROM client_profiles WHERE client_id = ?`
+            : `SELECT client_id, full_name, phone, profile_photo_url, address, commune, region, preferred_language, created_at, updated_at FROM client_profiles WHERE client_id = ?`,
           [user.id]
         );
 
