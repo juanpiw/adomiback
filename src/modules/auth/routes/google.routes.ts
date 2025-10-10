@@ -3,6 +3,12 @@ import { OAuth2Client } from 'google-auth-library';
 import { UsersRepository } from '../repositories/users.repository';
 import { RefreshTokensRepository } from '../repositories/refresh-tokens.repository';
 import { JWTUtil } from '../../../shared/utils/jwt.util';
+import axios from 'axios';
+import sharp from 'sharp';
+import path from 'path';
+import fs from 'fs';
+import DatabaseConnection from '../../../shared/database/connection';
+import { v4 as uuidv4 } from 'uuid';
 
 type Role = 'client' | 'provider';
 type Mode = 'login' | 'register';
@@ -102,6 +108,44 @@ export class GoogleAuthRoutes {
         refreshExpiry.setDate(refreshExpiry.getDate() + 7);
         const jti = tokens.refreshToken.split('.')[2];
         await this.refreshTokensRepo.create(user!.id, jti, refreshExpiry);
+
+        // Intentar importar avatar de Google si está habilitado y no hay foto aún
+        try {
+          if ((process.env.GOOGLE_IMPORT_AVATAR || 'false').toLowerCase() === 'true' && payload?.picture) {
+            const pictureUrl = String(payload.picture);
+            const allowed = pictureUrl.startsWith('https://') && /googleusercontent\.com|gstatic\.com/.test(pictureUrl);
+            if (allowed) {
+              const pool = DatabaseConnection.getPool();
+              if (user!.role === 'client') {
+                const [rows] = await pool.query('SELECT profile_photo_url FROM client_profiles WHERE client_id = ?', [user!.id]);
+                const existing = (rows as any[])[0]?.profile_photo_url;
+                if (!existing) {
+                  const resp = await axios.get(pictureUrl, { responseType: 'arraybuffer', timeout: 4000 });
+                  const buffer = Buffer.from(resp.data);
+                  const uploadDir = path.join(process.cwd(), 'uploads', 'profiles', 'clients');
+                  const thumbDir = path.join(uploadDir, 'thumbnails');
+                  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+                  if (!fs.existsSync(thumbDir)) fs.mkdirSync(thumbDir, { recursive: true });
+                  const id = uuidv4();
+                  const outPath = path.join(uploadDir, `compressed-${id}.webp`);
+                  const thumbPath = path.join(thumbDir, `thumb-${id}.webp`);
+                  await sharp(buffer).resize({ width: 800, height: 800, fit: 'inside' }).webp({ quality: 85 }).toFile(outPath);
+                  await sharp(buffer).resize({ width: 200, height: 200, fit: 'cover' }).webp({ quality: 80 }).toFile(thumbPath);
+                  const relPhoto = `/uploads/profiles/clients/${path.basename(outPath)}`;
+                  await pool.query(
+                    `INSERT INTO client_profiles (client_id, profile_photo_url)
+                     VALUES (?, ?)
+                     ON DUPLICATE KEY UPDATE profile_photo_url = IF(profile_photo_url IS NULL OR profile_photo_url = '', VALUES(profile_photo_url), profile_photo_url), updated_at = CURRENT_TIMESTAMP`,
+                    [user!.id, relPhoto]
+                  );
+                }
+              }
+              // Nota: para provider se puede replicar lógica en provider_profiles si se requiere
+            }
+          }
+        } catch (e) {
+          // No bloquear login si falla la importación de avatar
+        }
 
         // Redirigir a front success con tokens
         const base = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com');
