@@ -5,6 +5,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { AuthService } from '../services/auth.service';
+import DatabaseConnection from '../../../shared/database/connection';
 import { ResponseUtil } from '../../../shared/utils/response.util';
 import { Logger } from '../../../shared/utils/logger.util';
 
@@ -94,6 +95,19 @@ export class AuthController {
       if (!user) {
         return res.status(401).json(ResponseUtil.error('Autenticación requerida'));
       }
+      // Enriquecer con foto de perfil desde la tabla correspondiente
+      try {
+        const pool = DatabaseConnection.getPool();
+        if (user.role === 'client') {
+          const [rows] = await pool.query('SELECT profile_photo_url FROM client_profiles WHERE client_id = ? LIMIT 1', [user.id]);
+          const avatar = (rows as any[])[0]?.profile_photo_url || null;
+          (user as any).profile_photo_url = avatar;
+        } else if (user.role === 'provider') {
+          const [rows] = await pool.query('SELECT profile_photo_url FROM provider_profiles WHERE provider_id = ? LIMIT 1', [user.id]);
+          const avatar = (rows as any[])[0]?.profile_photo_url || null;
+          (user as any).profile_photo_url = avatar;
+        }
+      } catch {}
       res.json(ResponseUtil.success({ user }));
     } catch (error: any) {
       Logger.error(MODULE, 'Get me failed', error);
