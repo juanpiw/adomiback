@@ -27,8 +27,8 @@ export function setupSubscriptionsModule(app: any) {
           billing_period AS \`interval\`,
           COALESCE(description, '') AS description,
           COALESCE(features, '[]') AS features,
-          COALESCE(max_services, 0) AS max_services,
-          COALESCE(max_bookings, 0) AS max_bookings
+          0 AS max_services,
+          0 AS max_bookings
         FROM plans
         WHERE is_active = TRUE
         ORDER BY price ASC
