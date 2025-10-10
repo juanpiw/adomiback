@@ -47,20 +47,21 @@ router.post('/auth/google',
     try {
       console.log('[GOOGLE_AUTH][INIT] Iniciando autenticación con Google');
       
-      const { role } = req.body || {};
+      const { role, mode } = req.body || {};
       const validRole = role === 'provider' ? 'provider' : 'client';
+      const validMode = mode === 'register' ? 'register' : 'login';
       
-      // Generar URL de autorización
+      // Generar URL de autorización con el modo (login o register)
       const authUrl = googleClient.generateAuthUrl({
         access_type: 'offline',
         scope: [
           'https://www.googleapis.com/auth/userinfo.profile',
           'https://www.googleapis.com/auth/userinfo.email'
         ],
-        state: JSON.stringify({ role: validRole })
+        state: JSON.stringify({ role: validRole, mode: validMode })
       });
 
-      console.log('[GOOGLE_AUTH][INIT] URL generada para rol:', validRole);
+      console.log('[GOOGLE_AUTH][INIT] URL generada para rol:', validRole, 'modo:', validMode);
       
       res.status(200).json({
         success: true,
@@ -119,17 +120,19 @@ router.get('/auth/google/callback',
       const email = payload.email;
       const name = payload.name || email?.split('@')[0] || 'Usuario';
       
-      // Obtener rol del state
+      // Obtener rol y modo del state
       let role = 'client';
+      let mode = 'login';
       try {
         const stateData = state ? JSON.parse(state as string) : {};
         role = stateData.role || 'client';
+        mode = stateData.mode || 'login';
       } catch (e) {
-        console.warn('[GOOGLE_AUTH][CALLBACK] Error al parsear state, usando rol por defecto');
+        console.warn('[GOOGLE_AUTH][CALLBACK] Error al parsear state, usando valores por defecto');
       }
 
       console.log('[GOOGLE_AUTH][CALLBACK] ================================');
-      console.log('[GOOGLE_AUTH][CALLBACK] Usuario de Google:', { googleId, email, name, role });
+      console.log('[GOOGLE_AUTH][CALLBACK] Usuario de Google:', { googleId, email, name, role, mode });
       console.log('[GOOGLE_AUTH][CALLBACK] ================================');
 
       // Verificar si el usuario ya existe por Google ID
@@ -160,8 +163,16 @@ router.get('/auth/google/callback',
             });
           }
         } else {
+          // Si el modo es 'login', NO crear usuario
+          if (mode === 'login') {
+            console.log('[GOOGLE_AUTH][CALLBACK] ❌ MODO LOGIN: Usuario no existe, no se puede crear');
+            const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:4200';
+            return res.redirect(`${frontendUrl}/auth/login?error=no_account&message=${encodeURIComponent('No tienes cuenta. Por favor regístrate primero.')}`);
+          }
+          
+          // Solo crear usuario si el modo es 'register'
           console.log('[GOOGLE_AUTH][CALLBACK] ⚠️ Usuario NO encontrado por email');
-          console.log('[GOOGLE_AUTH][CALLBACK] 🆕 PASO 3: Creando nuevo usuario...');
+          console.log('[GOOGLE_AUTH][CALLBACK] 🆕 PASO 3: Creando nuevo usuario (modo REGISTER)...');
           console.log('[GOOGLE_AUTH][CALLBACK] 📝 Datos a insertar:', {
             googleId,
             email: email!,

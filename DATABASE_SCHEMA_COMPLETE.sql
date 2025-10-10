@@ -29,15 +29,21 @@
 --
 -- ============================================
 
-CREATE DATABASE IF NOT EXISTS adomiapp;
-USE adomiapp;
+-- ============================================
+-- IMPORTANTE: Este script eliminará y recreará toda la base de datos
+-- Asegúrate de tener un backup antes de ejecutarlo
+-- ============================================
+
+DROP DATABASE IF EXISTS adomi;
+CREATE DATABASE adomi;
+USE adomi;
 
 -- ============================================
--- TABLAS CORE (YA EXISTENTES - ACTUALIZAR)
+-- TABLAS CORE
 -- ============================================
 --
--- Estas tablas ya existen en el backend actual y solo necesitan actualizarse
--- con los nuevos campos necesarios para las funcionalidades completas.
+-- Todas las tablas se crearán desde cero para garantizar
+-- que tengan la estructura correcta con todos los campos
 --
 -- ============================================
 
@@ -65,7 +71,7 @@ USE adomiapp;
 -- │ • is_active: Permite suspender cuentas sin eliminarlas                     │
 -- │ • email_verified: Requisito para ciertas funcionalidades                   │
 -- └─────────────────────────────────────────────────────────────────────────────┘
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE users (
   id INT AUTO_INCREMENT PRIMARY KEY,
   google_id VARCHAR(255) NULL,
   name VARCHAR(255) NULL,
@@ -104,7 +110,7 @@ CREATE TABLE IF NOT EXISTS users (
 -- │ • Pro: $19,900/mes - Citas ilimitadas, destacado en búsqueda              │
 -- │ • Premium: $29,900/mes - Todo lo anterior + promociones                    │
 -- └─────────────────────────────────────────────────────────────────────────────┘
-CREATE TABLE IF NOT EXISTS plans (
+CREATE TABLE plans (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(100) NOT NULL,
   price DECIMAL(10,2) NOT NULL,
@@ -141,7 +147,7 @@ CREATE TABLE IF NOT EXISTS plans (
 -- │ • expired: Período vencido                                                  │
 -- │ • past_due: Pago atrasado                                                   │
 -- └─────────────────────────────────────────────────────────────────────────────┘
-CREATE TABLE IF NOT EXISTS subscriptions (
+CREATE TABLE subscriptions (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
   plan_id INT NOT NULL,
@@ -201,7 +207,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 -- │ USO:                                                                         │
 -- │ Seed data se inserta al final de este archivo con colores e iconos         │
 -- └─────────────────────────────────────────────────────────────────────────────┘
-CREATE TABLE IF NOT EXISTS service_categories (
+CREATE TABLE service_categories (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
   slug VARCHAR(255) NOT NULL UNIQUE,
@@ -284,7 +290,7 @@ CREATE TABLE IF NOT EXISTS service_categories (
 -- │ • Se ordena por rating_average o completed_appointments                     │
 -- │ • profile_completion > 70% para aparecer en búsqueda destacada             │
 -- └─────────────────────────────────────────────────────────────────────────────┘
-CREATE TABLE IF NOT EXISTS provider_profiles (
+CREATE TABLE provider_profiles (
   id INT AUTO_INCREMENT PRIMARY KEY,
   provider_id INT NOT NULL UNIQUE,
   full_name VARCHAR(255) NOT NULL,
@@ -359,7 +365,7 @@ CREATE TABLE IF NOT EXISTS provider_profiles (
 -- │ • Se pueden desactivar (is_active=false) sin eliminar                       │
 -- │ • El order_index permite drag-and-drop en el frontend                       │
 -- └─────────────────────────────────────────────────────────────────────────────┘
-CREATE TABLE IF NOT EXISTS provider_services (
+CREATE TABLE provider_services (
   id INT AUTO_INCREMENT PRIMARY KEY,
   provider_id INT NOT NULL,
   name VARCHAR(255) NOT NULL,
@@ -393,7 +399,7 @@ CREATE TABLE IF NOT EXISTS provider_services (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Portafolio del proveedor (galería de trabajos)
-CREATE TABLE IF NOT EXISTS provider_portfolio (
+CREATE TABLE provider_portfolio (
   id INT AUTO_INCREMENT PRIMARY KEY,
   provider_id INT NOT NULL,
   file_url VARCHAR(500) NOT NULL,
@@ -421,7 +427,7 @@ CREATE TABLE IF NOT EXISTS provider_portfolio (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Ubicaciones de cobertura del proveedor
-CREATE TABLE IF NOT EXISTS provider_locations (
+CREATE TABLE provider_locations (
   id INT AUTO_INCREMENT PRIMARY KEY,
   provider_id INT NOT NULL,
   commune VARCHAR(100) NOT NULL,
@@ -441,7 +447,7 @@ CREATE TABLE IF NOT EXISTS provider_locations (
 -- ============================================
 
 -- Verificaciones de identidad (KYC)
-CREATE TABLE IF NOT EXISTS identity_verifications (
+CREATE TABLE identity_verifications (
   id INT AUTO_INCREMENT PRIMARY KEY,
   provider_id INT NOT NULL,
   document_type ENUM('cedula', 'pasaporte', 'licencia') NOT NULL,
@@ -513,7 +519,7 @@ CREATE TABLE IF NOT EXISTS identity_verifications (
 -- │ • No puede haber bloques solapados para el mismo día                        │
 -- │ • Se puede tener múltiples bloques por día (mañana y tarde)                │
 -- └─────────────────────────────────────────────────────────────────────────────┘
-CREATE TABLE IF NOT EXISTS provider_availability (
+CREATE TABLE provider_availability (
   id INT AUTO_INCREMENT PRIMARY KEY,
   provider_id INT NOT NULL,
   day_of_week ENUM('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday') NOT NULL,
@@ -532,7 +538,7 @@ CREATE TABLE IF NOT EXISTS provider_availability (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Excepciones de disponibilidad (feriados, días bloqueados)
-CREATE TABLE IF NOT EXISTS availability_exceptions (
+CREATE TABLE availability_exceptions (
   id INT AUTO_INCREMENT PRIMARY KEY,
   provider_id INT NOT NULL,
   exception_date DATE NOT NULL,
@@ -630,7 +636,7 @@ CREATE TABLE IF NOT EXISTS availability_exceptions (
 -- │ • La fecha/hora NO debe estar en availability_exceptions                    │
 -- │ • end_time = start_time + service.duration_minutes                          │
 -- └─────────────────────────────────────────────────────────────────────────────┘
-CREATE TABLE IF NOT EXISTS appointments (
+CREATE TABLE appointments (
   id INT AUTO_INCREMENT PRIMARY KEY,
   provider_id INT NOT NULL,
   client_id INT NOT NULL,
@@ -670,7 +676,7 @@ CREATE TABLE IF NOT EXISTS appointments (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Historial de cambios de citas
-CREATE TABLE IF NOT EXISTS appointment_history (
+CREATE TABLE appointment_history (
   id INT AUTO_INCREMENT PRIMARY KEY,
   appointment_id INT NOT NULL,
   changed_by INT NOT NULL,
@@ -749,7 +755,7 @@ CREATE TABLE IF NOT EXISTS appointment_history (
 -- │ • El monto refunded se deduce del wallet del proveedor                      │
 -- │ • Se crea una transaction de tipo 'refund'                                  │
 -- └─────────────────────────────────────────────────────────────────────────────┘
-CREATE TABLE IF NOT EXISTS payments (
+CREATE TABLE payments (
   id INT AUTO_INCREMENT PRIMARY KEY,
   appointment_id INT NOT NULL,
   client_id INT NOT NULL,
@@ -782,7 +788,7 @@ CREATE TABLE IF NOT EXISTS payments (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Métodos de pago guardados (cliente)
-CREATE TABLE IF NOT EXISTS payment_methods (
+CREATE TABLE payment_methods (
   id INT AUTO_INCREMENT PRIMARY KEY,
   client_id INT NOT NULL,
   stripe_payment_method_id VARCHAR(255) NOT NULL,
@@ -802,7 +808,7 @@ CREATE TABLE IF NOT EXISTS payment_methods (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Saldo de billetera (proveedor y cliente)
-CREATE TABLE IF NOT EXISTS wallet_balance (
+CREATE TABLE wallet_balance (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL UNIQUE,
   balance DECIMAL(10,2) DEFAULT 0,
@@ -821,7 +827,7 @@ CREATE TABLE IF NOT EXISTS wallet_balance (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Transacciones de billetera
-CREATE TABLE IF NOT EXISTS transactions (
+CREATE TABLE transactions (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
   type ENUM('payment_received', 'payment_sent', 'withdrawal', 'refund', 'commission') NOT NULL,
@@ -844,7 +850,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Retiros de saldo (proveedor)
-CREATE TABLE IF NOT EXISTS withdrawals (
+CREATE TABLE withdrawals (
   id INT AUTO_INCREMENT PRIMARY KEY,
   provider_id INT NOT NULL,
   amount DECIMAL(10,2) NOT NULL,
@@ -924,7 +930,7 @@ CREATE TABLE IF NOT EXISTS withdrawals (
 -- │ • Un appointment solo puede tener UNA review (UNIQUE constraint)           │
 -- │ • rating debe estar entre 1 y 5                                            │
 -- └─────────────────────────────────────────────────────────────────────────────┘
-CREATE TABLE IF NOT EXISTS reviews (
+CREATE TABLE reviews (
   id INT AUTO_INCREMENT PRIMARY KEY,
   appointment_id INT NOT NULL UNIQUE,
   provider_id INT NOT NULL,
@@ -957,7 +963,7 @@ CREATE TABLE IF NOT EXISTS reviews (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Respuestas del proveedor a reseñas
-CREATE TABLE IF NOT EXISTS review_responses (
+CREATE TABLE review_responses (
   id INT AUTO_INCREMENT PRIMARY KEY,
   review_id INT NOT NULL UNIQUE,
   provider_id INT NOT NULL,
@@ -972,7 +978,7 @@ CREATE TABLE IF NOT EXISTS review_responses (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Favoritos del cliente
-CREATE TABLE IF NOT EXISTS favorites (
+CREATE TABLE favorites (
   id INT AUTO_INCREMENT PRIMARY KEY,
   client_id INT NOT NULL,
   provider_id INT NOT NULL,
@@ -1036,7 +1042,7 @@ CREATE TABLE IF NOT EXISTS favorites (
 -- │ • Al marcar como leído: decrementar unread_count                            │
 -- │ • UNIQUE constraint impide duplicar conversación entre mismo par           │
 -- └─────────────────────────────────────────────────────────────────────────────┘
-CREATE TABLE IF NOT EXISTS conversations (
+CREATE TABLE conversations (
   id INT AUTO_INCREMENT PRIMARY KEY,
   provider_id INT NOT NULL,
   client_id INT NOT NULL,
@@ -1057,7 +1063,7 @@ CREATE TABLE IF NOT EXISTS conversations (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Mensajes de chat
-CREATE TABLE IF NOT EXISTS messages (
+CREATE TABLE messages (
   id INT AUTO_INCREMENT PRIMARY KEY,
   conversation_id INT NOT NULL,
   sender_id INT NOT NULL,
@@ -1081,7 +1087,7 @@ CREATE TABLE IF NOT EXISTS messages (
 -- ============================================
 
 -- Notificaciones del sistema
-CREATE TABLE IF NOT EXISTS notifications (
+CREATE TABLE notifications (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
   type VARCHAR(50) NOT NULL,
@@ -1111,7 +1117,7 @@ CREATE TABLE IF NOT EXISTS notifications (
 -- ============================================
 
 -- Promociones del proveedor
-CREATE TABLE IF NOT EXISTS promotions (
+CREATE TABLE promotions (
   id INT AUTO_INCREMENT PRIMARY KEY,
   provider_id INT NOT NULL,
   service_id INT NULL,
@@ -1146,7 +1152,7 @@ CREATE TABLE IF NOT EXISTS promotions (
 -- ============================================
 
 -- Perfil del cliente
-CREATE TABLE IF NOT EXISTS client_profiles (
+CREATE TABLE client_profiles (
   id INT AUTO_INCREMENT PRIMARY KEY,
   client_id INT NOT NULL UNIQUE,
   full_name VARCHAR(255) NOT NULL,
@@ -1165,7 +1171,7 @@ CREATE TABLE IF NOT EXISTS client_profiles (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Preferencias de notificaciones
-CREATE TABLE IF NOT EXISTS notification_preferences (
+CREATE TABLE notification_preferences (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL UNIQUE,
   email_notifications BOOLEAN DEFAULT TRUE,
@@ -1188,7 +1194,7 @@ CREATE TABLE IF NOT EXISTS notification_preferences (
 -- ============================================
 
 -- Configuración global
-CREATE TABLE IF NOT EXISTS platform_settings (
+CREATE TABLE platform_settings (
   id INT AUTO_INCREMENT PRIMARY KEY,
   setting_key VARCHAR(100) NOT NULL UNIQUE,
   setting_value TEXT NOT NULL,
@@ -1200,7 +1206,7 @@ CREATE TABLE IF NOT EXISTS platform_settings (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Tasas de comisión por categoría (opcional)
-CREATE TABLE IF NOT EXISTS commission_rates (
+CREATE TABLE commission_rates (
   id INT AUTO_INCREMENT PRIMARY KEY,
   category_id INT NULL,
   rate DECIMAL(5,2) NOT NULL DEFAULT 15.00,
