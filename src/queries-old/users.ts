@@ -11,9 +11,29 @@ export type UserRow = {
 };
 
 export async function getUserByEmail(email: string): Promise<UserRow | null> {
-  const [rows] = await executeQuery('SELECT id, google_id, name, email, password, role, stripe_customer_id FROM users WHERE email = ? LIMIT 1', [email]);
-  const arr = rows as any[];
-  return arr.length ? (arr[0] as UserRow) : null;
+  console.log('[USERS][GET_BY_EMAIL] 🔍 Buscando usuario por email:', email);
+  
+  try {
+    const [rows] = await executeQuery('SELECT id, google_id, name, email, password, role, stripe_customer_id FROM users WHERE email = ? LIMIT 1', [email]);
+    const arr = rows as any[];
+    const user = arr.length ? (arr[0] as UserRow) : null;
+    
+    if (user) {
+      console.log('[USERS][GET_BY_EMAIL] ✅ Usuario encontrado:', {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        google_id: user.google_id ? 'Vinculado' : 'No vinculado'
+      });
+    } else {
+      console.log('[USERS][GET_BY_EMAIL] ⚠️ Usuario NO encontrado para email:', email);
+    }
+    
+    return user;
+  } catch (error: any) {
+    console.error('[USERS][GET_BY_EMAIL] ❌ ERROR:', error);
+    throw error;
+  }
 }
 
 export async function createUser(email: string, passwordHash: string | null, role: 'client'|'provider' = 'client', name: string | null = null): Promise<number> {
@@ -27,18 +47,60 @@ export async function createUser(email: string, passwordHash: string | null, rol
 }
 
 export async function createGoogleUser(googleId: string, email: string, name: string, role: 'client'|'provider' = 'client'): Promise<number> {
-  const [result] = await executeQuery(
-    'INSERT INTO users (google_id, email, name, role, password) VALUES (?, ?, ?, ?, NULL)',
-    [googleId, email, name, role]
-  );
-  // @ts-ignore
-  return result.insertId as number;
+  console.log('[USERS][CREATE_GOOGLE_USER] 🚀 Iniciando creación de usuario Google');
+  console.log('[USERS][CREATE_GOOGLE_USER] 📝 Datos recibidos:', {
+    googleId,
+    email,
+    name,
+    role
+  });
+  
+  try {
+    const [result] = await executeQuery(
+      'INSERT INTO users (google_id, email, name, role, password) VALUES (?, ?, ?, ?, NULL)',
+      [googleId, email, name, role]
+    );
+    // @ts-ignore
+    const insertId = result.insertId as number;
+    
+    console.log('[USERS][CREATE_GOOGLE_USER] ✅ Usuario creado exitosamente con ID:', insertId);
+    return insertId;
+  } catch (error: any) {
+    console.error('[USERS][CREATE_GOOGLE_USER] ❌ ERROR al crear usuario:', error);
+    console.error('[USERS][CREATE_GOOGLE_USER] 🔍 Detalles del error:', {
+      message: error.message,
+      code: error.code,
+      errno: error.errno,
+      sql: error.sql,
+      sqlMessage: error.sqlMessage
+    });
+    throw error;
+  }
 }
 
 export async function getUserByGoogleId(googleId: string): Promise<UserRow | null> {
-  const [rows] = await executeQuery('SELECT id, google_id, name, email, password, role FROM users WHERE google_id = ? LIMIT 1', [googleId]);
-  const arr = rows as any[];
-  return arr.length ? (arr[0] as UserRow) : null;
+  console.log('[USERS][GET_BY_GOOGLE_ID] 🔍 Buscando usuario por Google ID:', googleId);
+  
+  try {
+    const [rows] = await executeQuery('SELECT id, google_id, name, email, password, role FROM users WHERE google_id = ? LIMIT 1', [googleId]);
+    const arr = rows as any[];
+    const user = arr.length ? (arr[0] as UserRow) : null;
+    
+    if (user) {
+      console.log('[USERS][GET_BY_GOOGLE_ID] ✅ Usuario encontrado:', {
+        id: user.id,
+        email: user.email,
+        role: user.role
+      });
+    } else {
+      console.log('[USERS][GET_BY_GOOGLE_ID] ⚠️ Usuario NO encontrado para Google ID:', googleId);
+    }
+    
+    return user;
+  } catch (error: any) {
+    console.error('[USERS][GET_BY_GOOGLE_ID] ❌ ERROR:', error);
+    throw error;
+  }
 }
 
 export async function linkGoogleAccount(userId: number, googleId: string): Promise<{ success: boolean; error?: string }> {

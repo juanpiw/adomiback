@@ -128,32 +128,64 @@ router.get('/auth/google/callback',
         console.warn('[GOOGLE_AUTH][CALLBACK] Error al parsear state, usando rol por defecto');
       }
 
+      console.log('[GOOGLE_AUTH][CALLBACK] ================================');
       console.log('[GOOGLE_AUTH][CALLBACK] Usuario de Google:', { googleId, email, name, role });
+      console.log('[GOOGLE_AUTH][CALLBACK] ================================');
 
       // Verificar si el usuario ya existe por Google ID
+      console.log('[GOOGLE_AUTH][CALLBACK] 🔍 PASO 1: Buscando usuario por Google ID...');
       let user = await getUserByGoogleId(googleId);
       
       if (!user) {
+        console.log('[GOOGLE_AUTH][CALLBACK] ⚠️ Usuario NO encontrado por Google ID');
+        console.log('[GOOGLE_AUTH][CALLBACK] 🔍 PASO 2: Buscando por email...');
+        
         // Verificar si existe por email
         const existingUser = await getUserByEmail(email!);
         
         if (existingUser) {
+          console.log('[GOOGLE_AUTH][CALLBACK] ✅ Usuario existente encontrado por email');
+          console.log('[GOOGLE_AUTH][CALLBACK] 🔗 PASO 3: Vinculando cuenta con Google...');
+          
           // Vincular cuenta existente con Google
           const linkResult = await linkGoogleAccount(existingUser.id, googleId);
           if (linkResult.success) {
+            console.log('[GOOGLE_AUTH][CALLBACK] ✅ Cuenta vinculada exitosamente');
             user = await getUserByGoogleId(googleId);
           } else {
-            console.error('[GOOGLE_AUTH][CALLBACK] Error al vincular cuenta:', linkResult.error);
+            console.error('[GOOGLE_AUTH][CALLBACK] ❌ Error al vincular cuenta:', linkResult.error);
             return res.status(500).json({
               success: false,
               error: 'Error al vincular cuenta con Google'
             });
           }
         } else {
-          // Crear nuevo usuario
-          const userId = await createGoogleUser(googleId, email!, name, role as 'client' | 'provider');
-          user = await getUserByGoogleId(googleId);
+          console.log('[GOOGLE_AUTH][CALLBACK] ⚠️ Usuario NO encontrado por email');
+          console.log('[GOOGLE_AUTH][CALLBACK] 🆕 PASO 3: Creando nuevo usuario...');
+          console.log('[GOOGLE_AUTH][CALLBACK] 📝 Datos a insertar:', {
+            googleId,
+            email: email!,
+            name,
+            role
+          });
+          
+          try {
+            // Crear nuevo usuario
+            const userId = await createGoogleUser(googleId, email!, name, role as 'client' | 'provider');
+            console.log('[GOOGLE_AUTH][CALLBACK] ✅ Usuario creado con ID:', userId);
+            console.log('[GOOGLE_AUTH][CALLBACK] 🔍 PASO 4: Recuperando usuario recién creado...');
+            user = await getUserByGoogleId(googleId);
+          } catch (createError: any) {
+            console.error('[GOOGLE_AUTH][CALLBACK] ❌ ERROR CRÍTICO al crear usuario:', createError);
+            console.error('[GOOGLE_AUTH][CALLBACK] 🔍 Stack trace:', createError.stack);
+            return res.status(500).json({
+              success: false,
+              error: 'Error al crear usuario: ' + createError.message
+            });
+          }
         }
+      } else {
+        console.log('[GOOGLE_AUTH][CALLBACK] ✅ Usuario existente encontrado por Google ID');
       }
 
       if (!user) {
