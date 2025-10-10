@@ -9,6 +9,7 @@ import morgan from 'morgan';
 import { setupAuthModule } from './modules/auth';
 import { Logger } from './shared/utils/logger.util';
 import { setupClientModule } from './modules/client';
+import { createRouter } from './lib-old/router';
 
 export function createApp(): Express {
   const app = express();
@@ -37,6 +38,8 @@ export function createApp(): Express {
   Logger.info('APP', 'Setting up modules...');
   setupAuthModule(app);
   setupClientModule(app);
+  // Montar router legacy (planes, stripe checkout, google old, etc.)
+  app.use('/', createRouter());
   
   Logger.info('APP', 'All modules loaded successfully');
 
