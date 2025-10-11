@@ -59,7 +59,7 @@ export class AuthService {
     // Verificar si el email ya existe
     const existing = await this.usersRepo.findByEmail(data.email);
     if (existing) {
-      throw new Error('El email ya está registrado');
+      throw new Error(`Ya tienes una cuenta como ${existing.role === 'client' ? 'Cliente' : 'Profesional'}. ¿Deseas iniciar sesión?`);
     }
 
     // Hash de la contraseña

@@ -116,12 +116,12 @@ export class GoogleAuthRoutes {
             return res.redirect(302, loginUrl);
           }
           
-          // ✅ VALIDACIÓN CRÍTICA: Verificar si email existe con otro rol
+          // ✅ VALIDACIÓN CRÍTICA: Verificar si email existe (cualquier rol)
           const existingUser = await this.usersRepo.findByEmail(payload.email);
           if (existingUser) {
             console.log('[GOOGLE_AUTH] ERROR: Email ya existe con rol:', existingUser.role, 'intentando crear con rol:', parsedState.role);
             const errorUrl = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com') + 
-              `/auth/register?error=email_exists_with_different_role&existing_role=${existingUser.role}&attempted_role=${parsedState.role}&email=${encodeURIComponent(payload.email)}`;
+              `/auth/register?error=email_already_exists&existing_role=${existingUser.role}&attempted_role=${parsedState.role}&email=${encodeURIComponent(payload.email)}`;
             return res.redirect(302, errorUrl);
           }
           
@@ -139,11 +139,11 @@ export class GoogleAuthRoutes {
         } else {
           console.log('[GOOGLE_AUTH] Usuario existente encontrado:', user.id, user.role);
           
-          // ✅ VALIDACIÓN: Si está en modo registro pero el usuario ya existe, verificar rol
-          if (parsedState.mode === 'register' && user.role !== parsedState.role) {
-            console.log('[GOOGLE_AUTH] ERROR: Usuario existe con rol:', user.role, 'pero se intenta registrar como:', parsedState.role);
+          // ✅ VALIDACIÓN: Si está en modo registro pero el usuario ya existe, bloquear
+          if (parsedState.mode === 'register') {
+            console.log('[GOOGLE_AUTH] ERROR: Usuario ya existe con rol:', user.role, 'intentando registrar como:', parsedState.role);
             const errorUrl = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com') + 
-              `/auth/register?error=email_exists_with_different_role&existing_role=${user.role}&attempted_role=${parsedState.role}&email=${encodeURIComponent(payload.email)}`;
+              `/auth/register?error=email_already_exists&existing_role=${user.role}&attempted_role=${parsedState.role}&email=${encodeURIComponent(payload.email)}`;
             return res.redirect(302, errorUrl);
           }
         }

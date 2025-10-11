@@ -22,7 +22,7 @@ export class AuthController {
     } catch (error: any) {
       Logger.error(MODULE, 'Registration failed', error);
       
-      if (error.message.includes('ya está registrado')) {
+      if (error.message.includes('Ya tienes una cuenta como') || error.message.includes('ya está registrado')) {
         return res.status(409).json(ResponseUtil.error(error.message));
       }
       
