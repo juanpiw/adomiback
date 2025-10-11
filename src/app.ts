@@ -9,6 +9,7 @@ import morgan from 'morgan';
 import { setupAuthModule } from './modules/auth';
 import { Logger } from './shared/utils/logger.util';
 import { setupClientModule } from './modules/client';
+import { setupProviderModule } from './modules/provider';
 import { setupSubscriptionsModule } from './modules/subscriptions';
 
 export function createApp(): Express {
@@ -38,6 +39,7 @@ export function createApp(): Express {
   Logger.info('APP', 'Setting up modules...');
   setupAuthModule(app);
   setupClientModule(app);
+  setupProviderModule(app);
   setupSubscriptionsModule(app);
   
   Logger.info('APP', 'All modules loaded successfully');
