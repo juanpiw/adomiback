@@ -63,7 +63,7 @@ export function setupSubscriptionsModule(app: any) {
       if (!stripeSecret) {
         return res.status(500).json({ ok: false, error: 'Stripe no configurado (STRIPE_SECRET_KEY faltante)' });
       }
-      const stripe = new Stripe(stripeSecret, { apiVersion: '2024-06-20' });
+      const stripe = new Stripe(stripeSecret);
 
       const { planId } = (req.body || {}) as { planId?: number };
       if (!planId) {
