@@ -38,27 +38,70 @@ export class ClientRoutes {
   }
 
   private mountRoutes() {
-    // GET /profile/validate
+    // GET /profile/validate - Endpoint genérico para validar perfiles de clientes y providers
     this.router.get('/profile/validate', authenticateToken, async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         const pool = DatabaseConnection.getPool();
-        const [rows] = await pool.query(
-          `SELECT full_name, phone, address, commune, region FROM client_profiles WHERE client_id = ?`,
-          [user.id]
-        );
-        const profile = (rows as any[])[0];
+        console.log('[PROFILE_VALIDATE] Validando perfil para usuario:', user.id, 'rol:', user.role);
 
-        const missingFields: string[] = [];
-        if (!profile || !profile.full_name || !String(profile.full_name).trim()) missingFields.push('Nombre completo');
-        if (!profile || !profile.phone || !String(profile.phone).trim()) missingFields.push('Teléfono de contacto');
-        if (!profile || !profile.address || !String(profile.address).trim()) missingFields.push('Dirección principal');
-        if (!profile || !profile.commune || !String(profile.commune).trim()) missingFields.push('Comuna');
-        if (!profile || !profile.region || !String(profile.region).trim()) missingFields.push('Región');
+        if (user.role === 'client') {
+          // Validar perfil de cliente
+          const [rows] = await pool.query(
+            `SELECT full_name, phone, address, commune, region FROM client_profiles WHERE client_id = ?`,
+            [user.id]
+          );
+          const profile = (rows as any[])[0];
 
-        const isComplete = missingFields.length === 0;
-        return res.status(200).json({ success: true, isComplete, missingFields, userType: 'client', message: isComplete ? 'Perfil completo' : 'Por favor completa tu perfil para continuar' });
+          const missingFields: string[] = [];
+          if (!profile || !profile.full_name || !String(profile.full_name).trim()) missingFields.push('Nombre completo');
+          if (!profile || !profile.phone || !String(profile.phone).trim()) missingFields.push('Teléfono de contacto');
+          if (!profile || !profile.address || !String(profile.address).trim()) missingFields.push('Dirección principal');
+          if (!profile || !profile.commune || !String(profile.commune).trim()) missingFields.push('Comuna');
+          if (!profile || !profile.region || !String(profile.region).trim()) missingFields.push('Región');
+
+          const isComplete = missingFields.length === 0;
+          console.log('[PROFILE_VALIDATE] Cliente - perfil completo:', isComplete, 'campos faltantes:', missingFields);
+          return res.status(200).json({ 
+            success: true, 
+            isComplete, 
+            missingFields, 
+            userType: user.role, 
+            message: isComplete ? 'Perfil completo' : 'Por favor completa tu perfil para continuar' 
+          });
+          
+        } else if (user.role === 'provider') {
+          // Validar perfil de provider
+          const [rows] = await pool.query(
+            `SELECT business_name, phone, address, commune, region, services FROM provider_profiles WHERE provider_id = ?`,
+            [user.id]
+          );
+          const profile = (rows as any[])[0];
+
+          const missingFields: string[] = [];
+          if (!profile || !profile.business_name || !String(profile.business_name).trim()) missingFields.push('Nombre del negocio');
+          if (!profile || !profile.phone || !String(profile.phone).trim()) missingFields.push('Teléfono de contacto');
+          if (!profile || !profile.address || !String(profile.address).trim()) missingFields.push('Dirección del negocio');
+          if (!profile || !profile.commune || !String(profile.commune).trim()) missingFields.push('Comuna');
+          if (!profile || !profile.region || !String(profile.region).trim()) missingFields.push('Región');
+          if (!profile || !profile.services || !String(profile.services).trim()) missingFields.push('Servicios ofrecidos');
+
+          const isComplete = missingFields.length === 0;
+          console.log('[PROFILE_VALIDATE] Provider - perfil completo:', isComplete, 'campos faltantes:', missingFields);
+          return res.status(200).json({ 
+            success: true, 
+            isComplete, 
+            missingFields, 
+            userType: user.role, 
+            message: isComplete ? 'Perfil completo' : 'Por favor completa tu perfil para continuar' 
+          });
+          
+        } else {
+          return res.status(400).json({ success: false, error: 'Rol de usuario no válido' });
+        }
+        
       } catch (error: any) {
+        console.error('[PROFILE_VALIDATE] Error:', error);
         return res.status(500).json({ success: false, error: 'Error al validar perfil', details: error.message });
       }
     });
