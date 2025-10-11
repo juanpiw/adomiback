@@ -41,8 +41,10 @@ export class GoogleAuthRoutes {
     // POST /auth/google -> devuelve URL de autorización
     this.router.post('/google', async (req: Request, res: Response) => {
       try {
+        console.log('[GOOGLE_AUTH] POST /auth/google - Body recibido:', req.body);
         const role: Role = (req.body?.role === 'provider' ? 'provider' : 'client');
         const mode: Mode = (req.body?.mode === 'register' ? 'register' : 'login');
+        console.log('[GOOGLE_AUTH] Rol determinado:', role, 'Modo:', mode);
 
         const scopes = [
           'openid',
@@ -80,6 +82,7 @@ export class GoogleAuthRoutes {
         if (!payload || !payload.email || !payload.sub) return res.status(400).send('Invalid Google payload');
 
         const parsedState: { role: Role; mode: Mode } = state ? JSON.parse(decodeURIComponent(state)) : { role: 'client', mode: 'login' };
+        console.log('[GOOGLE_AUTH] Callback - Estado parseado:', parsedState);
 
         // Buscar usuario por google_id o email
         let user = await this.usersRepo.findByGoogleId(payload.sub);
@@ -94,8 +97,10 @@ export class GoogleAuthRoutes {
             return res.redirect(302, loginUrl);
           }
           // crear usuario en modo registro
+          console.log('[GOOGLE_AUTH] Creando usuario con rol:', parsedState.role, 'email:', payload.email);
           const newId = await this.usersRepo.createGoogleUser(payload.sub, payload.email, payload.name || payload.email.split('@')[0], parsedState.role);
           user = await this.usersRepo.findById(newId);
+          console.log('[GOOGLE_AUTH] Usuario creado con ID:', newId, 'rol final:', user?.role);
         } else if (!user.google_id) {
           // vincular si falta google_id
           await this.usersRepo.linkGoogleAccount(user.id, payload.sub);
