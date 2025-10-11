@@ -115,6 +115,16 @@ export class GoogleAuthRoutes {
             const loginUrl = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com') + '/auth/login?error=no_account';
             return res.redirect(302, loginUrl);
           }
+          
+          // ✅ VALIDACIÓN CRÍTICA: Verificar si email existe con otro rol
+          const existingUser = await this.usersRepo.findByEmail(payload.email);
+          if (existingUser) {
+            console.log('[GOOGLE_AUTH] ERROR: Email ya existe con rol:', existingUser.role, 'intentando crear con rol:', parsedState.role);
+            const errorUrl = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com') + 
+              `/auth/register?error=email_exists_with_different_role&existing_role=${existingUser.role}&attempted_role=${parsedState.role}&email=${encodeURIComponent(payload.email)}`;
+            return res.redirect(302, errorUrl);
+          }
+          
           // crear usuario en modo registro
           console.log('[GOOGLE_AUTH] Creando usuario con rol:', parsedState.role, 'email:', payload.email);
           const newId = await this.usersRepo.createGoogleUser(payload.sub, payload.email, payload.name || payload.email.split('@')[0], parsedState.role);
@@ -128,6 +138,14 @@ export class GoogleAuthRoutes {
           console.log('[GOOGLE_AUTH] Cuenta vinculada, usuario actualizado:', user?.id, user?.role);
         } else {
           console.log('[GOOGLE_AUTH] Usuario existente encontrado:', user.id, user.role);
+          
+          // ✅ VALIDACIÓN: Si está en modo registro pero el usuario ya existe, verificar rol
+          if (parsedState.mode === 'register' && user.role !== parsedState.role) {
+            console.log('[GOOGLE_AUTH] ERROR: Usuario existe con rol:', user.role, 'pero se intenta registrar como:', parsedState.role);
+            const errorUrl = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com') + 
+              `/auth/register?error=email_exists_with_different_role&existing_role=${user.role}&attempted_role=${parsedState.role}&email=${encodeURIComponent(payload.email)}`;
+            return res.redirect(302, errorUrl);
+          }
         }
 
         // Emitir tokens propios

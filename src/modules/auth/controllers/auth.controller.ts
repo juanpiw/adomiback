@@ -173,5 +173,41 @@ export class AuthController {
       res.status(500).json(ResponseUtil.error('Error interno del servidor'));
     }
   };
+
+  /**
+   * Check if email exists and return user information
+   */
+  checkEmail = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const email = req.query.email as string;
+      
+      if (!email) {
+        return res.status(400).json(ResponseUtil.error('Email es requerido'));
+      }
+
+      const result = await this.authService.checkEmailExists(email);
+      
+      Logger.info(MODULE, 'Email check', { email, exists: !!result });
+      
+      return res.status(200).json(ResponseUtil.success({
+        email,
+        exists: !!result,
+        available: !result,
+        user: result ? {
+          id: result.id,
+          role: result.role,
+          name: result.name,
+          email: result.email
+        } : null,
+        message: result 
+          ? `Ya tienes una cuenta como ${result.role === 'client' ? 'Cliente' : 'Profesional'}. ¿Quieres iniciar sesión?`
+          : 'Email disponible'
+      }));
+      
+    } catch (error: any) {
+      Logger.error(MODULE, 'Email check failed', error);
+      res.status(500).json(ResponseUtil.error('Error al verificar email'));
+    }
+  };
 }
 

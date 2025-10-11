@@ -247,5 +247,27 @@ export class AuthService {
 
     Logger.info(MODULE, 'Password reset successful', { userId: resetToken.user_id });
   }
+
+  /**
+   * Check if email exists and return user information
+   */
+  async checkEmailExists(email: string) {
+    Logger.info(MODULE, 'Checking email existence', { email });
+    
+    const user = await this.usersRepo.findByEmail(email);
+    
+    if (user) {
+      Logger.info(MODULE, 'Email exists', { email, userId: user.id, role: user.role });
+      return {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role
+      };
+    }
+    
+    Logger.info(MODULE, 'Email does not exist', { email });
+    return null;
+  }
 }
 

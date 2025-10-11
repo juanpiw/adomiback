@@ -50,6 +50,9 @@ export class AuthRoutes {
 
     // POST /auth/change-password - Cambiar/crear contraseña (requiere login)
     this.router.post('/change-password', authenticateToken, this.controller.changePassword);
+
+    // GET /auth/check-email - Verificar si email existe y obtener información del usuario
+    this.router.get('/check-email', this.controller.checkEmail);
   }
 
   getRouter(): Router {
