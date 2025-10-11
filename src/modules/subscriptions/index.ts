@@ -98,24 +98,56 @@ export function setupSubscriptionsModule(app: any) {
 
       const FRONTEND_BASE_URL = process.env.FRONTEND_BASE_URL || 'https://adomiapp.com';
 
-      const session = await stripe.checkout.sessions.create({
-        mode: 'subscription',
-        line_items: [
-          {
-            price: plan.stripe_price_id,
-            quantity: 1
+      async function createSessionWithPrice(priceId: string) {
+        return await stripe.checkout.sessions.create({
+          mode: 'subscription',
+          line_items: [
+            {
+              price: priceId,
+              quantity: 1
+            }
+          ],
+          success_url: `${FRONTEND_BASE_URL}/auth/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${FRONTEND_BASE_URL}/auth/payment-error`,
+          allow_promotion_codes: true,
+          customer_email: userEmail,
+          client_reference_id: userId ? String(userId) : undefined,
+          metadata: {
+            planId: String(plan.id),
+            userId: userId ? String(userId) : 'guest'
           }
-        ],
-        success_url: `${FRONTEND_BASE_URL}/auth/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${FRONTEND_BASE_URL}/auth/payment-error`,
-        allow_promotion_codes: true,
-        customer_email: userEmail,
-        client_reference_id: userId ? String(userId) : undefined,
-        metadata: {
-          planId: String(plan.id),
-          userId: userId ? String(userId) : 'guest'
-        }
-      });
+        });
+      }
+
+      // helper para montos de moneda sin decimales (CLP, JPY, etc.)
+      const ZERO_DECIMAL = new Set(['bif','clp','djf','gnf','jpy','kmf','krw','mga','pyg','rwf','ugx','vnd','vuv','xaf','xof','xpf']);
+      const currency = String(plan.currency || 'CLP').toLowerCase();
+      const unitAmount = ZERO_DECIMAL.has(currency) ? Math.round(Number(plan.price)) : Math.round(Number(plan.price) * 100);
+
+      let session;
+      try {
+        session = await createSessionWithPrice(plan.stripe_price_id);
+      } catch (err: any) {
+        const isMissingPrice = err?.code === 'resource_missing' || /No such price/i.test(String(err?.message || ''));
+        if (!isMissingPrice) throw err;
+
+        // Crear Price al vuelo y actualizar BD
+        const lookupKey = `adomi_plan_${plan.id}_${String(plan.billing_period)}`;
+        const price = await stripe.prices.create({
+          currency,
+          unit_amount: unitAmount,
+          recurring: { interval: String(plan.billing_period) === 'year' ? 'year' : 'month' },
+          product_data: { name: plan.name, metadata: { planId: String(plan.id) } },
+          lookup_key: lookupKey
+        });
+
+        // Persistir nuevo price id
+        try {
+          await pool.execute('UPDATE plans SET stripe_price_id = ? WHERE id = ?', [price.id, plan.id]);
+        } catch {}
+
+        session = await createSessionWithPrice(price.id);
+      }
 
       return res.json({ ok: true, sessionId: session.id });
     } catch (error: any) {
