@@ -53,6 +53,7 @@ export class GoogleAuthRoutes {
         ];
 
         const state = encodeURIComponent(JSON.stringify({ role, mode }));
+        console.log('[GOOGLE_AUTH] Estado codificado:', state);
         const url = this.oauth.generateAuthUrl({
           access_type: 'offline',
           scope: scopes,
@@ -60,6 +61,7 @@ export class GoogleAuthRoutes {
           include_granted_scopes: true,
           state
         });
+        console.log('[GOOGLE_AUTH] URL de autorización generada:', url);
 
         return res.status(200).json({ success: true, authUrl: url });
       } catch (error: any) {
@@ -70,29 +72,46 @@ export class GoogleAuthRoutes {
     // GET /auth/google/callback
     this.router.get('/google/callback', async (req: Request, res: Response) => {
       try {
+        console.log('[GOOGLE_AUTH] Callback recibido');
         const { code, state } = req.query as { code?: string; state?: string };
+        console.log('[GOOGLE_AUTH] Query params:', { code: code ? 'presente' : 'ausente', state });
         if (!code) return res.status(400).send('Missing code');
 
+        console.log('[GOOGLE_AUTH] Intercambiando código por token...');
         const tokenResponse = await this.oauth.getToken(code);
         const idToken = tokenResponse.tokens.id_token;
+        console.log('[GOOGLE_AUTH] Token recibido:', idToken ? 'presente' : 'ausente');
         if (!idToken) return res.status(400).send('Missing id_token');
 
+        console.log('[GOOGLE_AUTH] Verificando token de ID...');
         const ticket = await this.oauth.verifyIdToken({ idToken, audience: getEnv('GOOGLE_CLIENT_ID') });
         const payload = ticket.getPayload();
+        console.log('[GOOGLE_AUTH] Payload de Google:', { 
+          email: payload?.email, 
+          name: payload?.name, 
+          sub: payload?.sub,
+          picture: payload?.picture ? 'presente' : 'ausente'
+        });
         if (!payload || !payload.email || !payload.sub) return res.status(400).send('Invalid Google payload');
 
         const parsedState: { role: Role; mode: Mode } = state ? JSON.parse(decodeURIComponent(state)) : { role: 'client', mode: 'login' };
         console.log('[GOOGLE_AUTH] Callback - Estado parseado:', parsedState);
 
         // Buscar usuario por google_id o email
+        console.log('[GOOGLE_AUTH] Buscando usuario existente...');
         let user = await this.usersRepo.findByGoogleId(payload.sub);
+        console.log('[GOOGLE_AUTH] Usuario encontrado por google_id:', user ? 'sí' : 'no');
         if (!user) {
+          console.log('[GOOGLE_AUTH] Buscando usuario por email...');
           const byEmail = await this.usersRepo.findByEmail(payload.email);
+          console.log('[GOOGLE_AUTH] Usuario encontrado por email:', byEmail ? 'sí' : 'no');
           if (byEmail) user = byEmail as any;
         }
 
         if (!user) {
+          console.log('[GOOGLE_AUTH] Usuario no encontrado, modo:', parsedState.mode);
           if (parsedState.mode === 'login') {
+            console.log('[GOOGLE_AUTH] Redirigiendo a login con error no_account');
             const loginUrl = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com') + '/auth/login?error=no_account';
             return res.redirect(302, loginUrl);
           }
@@ -103,16 +122,23 @@ export class GoogleAuthRoutes {
           console.log('[GOOGLE_AUTH] Usuario creado con ID:', newId, 'rol final:', user?.role);
         } else if (!user.google_id) {
           // vincular si falta google_id
+          console.log('[GOOGLE_AUTH] Vinculando cuenta existente con Google ID');
           await this.usersRepo.linkGoogleAccount(user.id, payload.sub);
           user = await this.usersRepo.findById(user.id);
+          console.log('[GOOGLE_AUTH] Cuenta vinculada, usuario actualizado:', user?.id, user?.role);
+        } else {
+          console.log('[GOOGLE_AUTH] Usuario existente encontrado:', user.id, user.role);
         }
 
         // Emitir tokens propios
+        console.log('[GOOGLE_AUTH] Generando tokens para usuario:', user!.id, user!.email, user!.role);
         const tokens = JWTUtil.generateTokenPair(user!.id, user!.email, user!.role);
         const refreshExpiry = new Date();
         refreshExpiry.setDate(refreshExpiry.getDate() + 7);
         const jti = tokens.refreshToken.split('.')[2];
+        console.log('[GOOGLE_AUTH] Creando refresh token en BD...');
         await this.refreshTokensRepo.create(user!.id, jti, refreshExpiry);
+        console.log('[GOOGLE_AUTH] Tokens generados exitosamente');
 
         // Intentar importar avatar de Google si está habilitado y no hay foto aún
         try {
@@ -154,7 +180,10 @@ export class GoogleAuthRoutes {
 
         // Redirigir a front success con tokens
         const base = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com');
-        const successUrl = `${base}/auth/google/success?token=${encodeURIComponent(tokens.accessToken)}&refresh=${encodeURIComponent(tokens.refreshToken)}&user=${encodeURIComponent(JSON.stringify({ id: user!.id, email: user!.email, name: user!.name, role: user!.role }))}`;
+        const userData = { id: user!.id, email: user!.email, name: user!.name, role: user!.role };
+        console.log('[GOOGLE_AUTH] Datos de usuario para redirect:', userData);
+        const successUrl = `${base}/auth/google/success?token=${encodeURIComponent(tokens.accessToken)}&refresh=${encodeURIComponent(tokens.refreshToken)}&user=${encodeURIComponent(JSON.stringify(userData))}`;
+        console.log('[GOOGLE_AUTH] Redirigiendo a:', successUrl);
         return res.redirect(302, successUrl);
       } catch (error: any) {
         const base = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com');

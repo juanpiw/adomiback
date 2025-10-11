@@ -30,12 +30,15 @@ export class UsersRepository {
   }
 
   async findById(id: number): Promise<UserRow | null> {
+    console.log('[USERS_REPO] findById llamado con ID:', id);
     const [rows] = await this.pool.query(
       'SELECT id, google_id, name, email, password, role FROM users WHERE id = ? LIMIT 1',
       [id]
     );
     const arr = rows as any[];
-    return arr.length ? (arr[0] as UserRow) : null;
+    const user = arr.length ? (arr[0] as UserRow) : null;
+    console.log('[USERS_REPO] Usuario encontrado:', user ? { id: user.id, email: user.email, role: user.role } : 'null');
+    return user;
   }
 
   async create(email: string, passwordHash: string | null, role: 'client' | 'provider' = 'client', name: string | null = null): Promise<number> {
@@ -48,11 +51,14 @@ export class UsersRepository {
   }
 
   async createGoogleUser(googleId: string, email: string, name: string, role: 'client' | 'provider' = 'client'): Promise<number> {
+    console.log('[USERS_REPO] createGoogleUser llamado con:', { googleId, email, name, role });
     const [result] = await this.pool.execute(
       'INSERT INTO users (google_id, email, name, role, password) VALUES (?, ?, ?, ?, NULL)',
       [googleId, email, name, role]
     );
-    return (result as any).insertId as number;
+    const insertId = (result as any).insertId as number;
+    console.log('[USERS_REPO] Usuario creado con ID:', insertId);
+    return insertId;
   }
 
   async findByGoogleId(googleId: string): Promise<UserRow | null> {
