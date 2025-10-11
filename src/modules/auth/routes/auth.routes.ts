@@ -47,6 +47,9 @@ export class AuthRoutes {
 
     // POST /auth/reset-password - Restablecer contraseña
     this.router.post('/reset-password', this.controller.resetPassword);
+
+    // POST /auth/change-password - Cambiar/crear contraseña (requiere login)
+    this.router.post('/change-password', authenticateToken, this.controller.changePassword);
   }
 
   getRouter(): Router {

@@ -141,5 +141,37 @@ export class AuthController {
       res.status(500).json(ResponseUtil.error('Error interno del servidor'));
     }
   };
+
+  /**
+   * Change password for logged-in user
+   * If user was created via Google (password null), this sets an initial password
+   */
+  changePassword = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const user = (req as any).user;
+      if (!user) {
+        return res.status(401).json(ResponseUtil.error('Autenticación requerida'));
+      }
+
+      const { currentPassword, newPassword } = (req.body || {}) as { currentPassword?: string; newPassword?: string };
+      if (!newPassword || newPassword.length < 6) {
+        return res.status(400).json(ResponseUtil.error('La contraseña debe tener al menos 6 caracteres'));
+      }
+
+      // Delegar en service usando el flujo de reset token interno
+      try {
+        // Generar un token de reset interno y reutilizar lógica de reset
+        const token = await this.authService.requestPasswordReset(user.email);
+        await this.authService.resetPassword(token, newPassword);
+        return res.json(ResponseUtil.success(undefined, 'Contraseña actualizada correctamente'));
+      } catch (e: any) {
+        Logger.error(MODULE, 'Change password failed', e);
+        return res.status(500).json(ResponseUtil.error('Error al actualizar contraseña'));
+      }
+    } catch (error: any) {
+      Logger.error(MODULE, 'Change password failed (outer)', error);
+      res.status(500).json(ResponseUtil.error('Error interno del servidor'));
+    }
+  };
 }
 
