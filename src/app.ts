@@ -17,6 +17,10 @@ export function createApp(): Express {
 
   // Middleware básicos
   app.use(cors());
+  
+  // ✅ Middleware específico para webhooks de Stripe (necesita body raw)
+  app.use('/webhooks/stripe', express.raw({ type: 'application/json' }));
+  
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
   

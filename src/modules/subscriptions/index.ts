@@ -7,6 +7,7 @@ import { Express, Router, Request, Response } from 'express';
 import DatabaseConnection from '../../shared/database/connection';
 import Stripe from 'stripe';
 import { JWTUtil } from '../../shared/utils/jwt.util';
+import { setupStripeWebhooks } from './webhooks';
 
 /**
  * Setup function to mount subscriptions routes
@@ -63,6 +64,10 @@ export function setupSubscriptionsModule(app: any) {
       if (!stripeSecret) {
         return res.status(500).json({ ok: false, error: 'Stripe no configurado (STRIPE_SECRET_KEY faltante)' });
       }
+      
+      // ✅ Log para verificar tipo de clave
+      console.log('[STRIPE] Usando clave:', stripeSecret.startsWith('sk_live_') ? 'LIVE' : 'TEST');
+      
       const stripe = new Stripe(stripeSecret);
 
       const { planId } = (req.body || {}) as { planId?: number };
@@ -155,6 +160,10 @@ export function setupSubscriptionsModule(app: any) {
       return res.status(500).json({ ok: false, error: 'Error al crear sesión de pago', details: error.message });
     }
   });
+
+  // ✅ Configurar webhooks de Stripe
+  setupStripeWebhooks(router);
+  console.log('[SUBSCRIPTIONS MODULE] Stripe webhooks configured');
 
   app.use('/', router);
   console.log('[SUBSCRIPTIONS MODULE] Routes mounted');
