@@ -155,9 +155,9 @@ async function handleSubscriptionUpdated(subscription: Stripe.Subscription, pool
        WHERE stripe_subscription_id = ?`,
       [
         subscription.status,
-        subscription.current_period_start,
-        subscription.current_period_end,
-        subscription.cancel_at_period_end,
+        (subscription as any).current_period_start,
+        (subscription as any).current_period_end,
+        subscription.cancel_at_period_end || false,
         subscription.id
       ]
     );
@@ -206,14 +206,18 @@ async function handlePaymentSucceeded(invoice: Stripe.Invoice, pool: any) {
   Logger.info(MODULE, 'Processing payment.succeeded', { invoiceId: invoice.id });
   
   try {
-    if (invoice.subscription) {
+    const subscriptionId = typeof invoice.subscription === 'string' 
+      ? invoice.subscription 
+      : (invoice.subscription as any)?.id;
+      
+    if (subscriptionId) {
       await pool.execute(
         `UPDATE subscriptions 
          SET status = 'active', updated_at = CURRENT_TIMESTAMP 
          WHERE stripe_subscription_id = ?`,
-        [invoice.subscription]
+        [subscriptionId]
       );
-      Logger.info(MODULE, 'Subscription reactivated after payment', { subscriptionId: invoice.subscription });
+      Logger.info(MODULE, 'Subscription reactivated after payment', { subscriptionId });
     }
   } catch (error: any) {
     Logger.error(MODULE, 'Error processing payment success', error);
@@ -228,14 +232,18 @@ async function handlePaymentFailed(invoice: Stripe.Invoice, pool: any) {
   Logger.info(MODULE, 'Processing payment.failed', { invoiceId: invoice.id });
   
   try {
-    if (invoice.subscription) {
+    const subscriptionId = typeof invoice.subscription === 'string' 
+      ? invoice.subscription 
+      : (invoice.subscription as any)?.id;
+      
+    if (subscriptionId) {
       await pool.execute(
         `UPDATE subscriptions 
          SET status = 'past_due', updated_at = CURRENT_TIMESTAMP 
          WHERE stripe_subscription_id = ?`,
-        [invoice.subscription]
+        [subscriptionId]
       );
-      Logger.info(MODULE, 'Subscription marked as past_due', { subscriptionId: invoice.subscription });
+      Logger.info(MODULE, 'Subscription marked as past_due', { subscriptionId });
     }
   } catch (error: any) {
     Logger.error(MODULE, 'Error processing payment failure', error);
