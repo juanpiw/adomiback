@@ -34,6 +34,10 @@ export class ClientSearchRoutes {
 
         const pool = DatabaseConnection.getPool();
         
+        // Validate and sanitize pagination to avoid prepared statements issues with LIMIT/OFFSET
+        const limitNumber = Math.max(1, Math.min(100, Number.parseInt(limit as string, 10) || 20));
+        const offsetNumber = Math.max(0, Number.parseInt(offset as string, 10) || 0);
+        
         // Construir la consulta base
         let query = `
           SELECT DISTINCT
@@ -110,27 +114,30 @@ export class ClientSearchRoutes {
           params.push(parseInt(price_max as string));
         }
 
-        // Filtro por rating mínimo
-        if (rating_min) {
-          conditions.push(`COALESCE(AVG(r.rating), 0) >= ?`);
-          params.push(parseFloat(rating_min as string));
-        }
+        // Nota: el filtro de rating mínimo se aplicará en HAVING para no usar agregados en WHERE
 
         // Agregar condiciones a la consulta
         if (conditions.length > 0) {
           query += ` AND ${conditions.join(' AND ')}`;
         }
 
-        // Agrupar y ordenar
+        // Agrupar
         query += `
           GROUP BY pp.provider_id, u.name, u.email, pp.professional_title, pp.bio, 
                    pp.profile_photo_url, pp.main_region, pp.main_commune, pp.years_experience, pp.is_online
-          HAVING services_count > 0
-          ORDER BY rating DESC, review_count DESC, services_count DESC
-          LIMIT ? OFFSET ?
         `;
 
-        params.push(parseInt(limit as string), parseInt(offset as string));
+        // HAVING dinámico (services_count y rating mínimo)
+        const havingClauses: string[] = ['services_count > 0'];
+        if (rating_min) {
+          havingClauses.push('rating >= ?');
+          params.push(parseFloat(rating_min as string));
+        }
+        query += `
+          HAVING ${havingClauses.join(' AND ')}
+          ORDER BY rating DESC, review_count DESC, services_count DESC
+          LIMIT ${limitNumber} OFFSET ${offsetNumber}
+        `;
 
         console.log('[CLIENT_SEARCH] Query final:', query);
         console.log('[CLIENT_SEARCH] Parámetros:', params);
@@ -196,10 +203,10 @@ export class ClientSearchRoutes {
           success: true,
           data: providers,
           pagination: {
-            limit: parseInt(limit as string),
-            offset: parseInt(offset as string),
+            limit: limitNumber,
+            offset: offsetNumber,
             total: providers.length,
-            has_more: providers.length === parseInt(limit as string)
+            has_more: providers.length === limitNumber
           }
         });
 
@@ -232,6 +239,10 @@ export class ClientSearchRoutes {
         });
 
         const pool = DatabaseConnection.getPool();
+        
+        // Validate and sanitize pagination to avoid prepared statements issues with LIMIT/OFFSET
+        const limitNumber = Math.max(1, Math.min(100, Number.parseInt(limit as string, 10) || 20));
+        const offsetNumber = Math.max(0, Number.parseInt(offset as string, 10) || 0);
         
         // Construir la consulta base
         let query = `
@@ -311,16 +322,14 @@ export class ClientSearchRoutes {
           query += ` AND ${conditions.join(' AND ')}`;
         }
 
-        // Agrupar y ordenar
+        // Agrupar, ordenar y paginar
         query += `
           GROUP BY ps.id, ps.name, ps.description, ps.price, ps.duration_minutes, ps.custom_category,
                    ps.service_image_url, ps.is_featured, ps.provider_id, u.name, pp.professional_title,
                    pp.profile_photo_url, pp.main_region, pp.main_commune
           ORDER BY ps.is_featured DESC, ps.order_index ASC, ps.price ASC
-          LIMIT ? OFFSET ?
+          LIMIT ${limitNumber} OFFSET ${offsetNumber}
         `;
-
-        params.push(parseInt(limit as string), parseInt(offset as string));
 
         console.log('[CLIENT_SEARCH] Query servicios:', query);
         console.log('[CLIENT_SEARCH] Parámetros servicios:', params);
@@ -361,10 +370,10 @@ export class ClientSearchRoutes {
           success: true,
           data: services,
           pagination: {
-            limit: parseInt(limit as string),
-            offset: parseInt(offset as string),
+            limit: limitNumber,
+            offset: offsetNumber,
             total: services.length,
-            has_more: services.length === parseInt(limit as string)
+            has_more: services.length === limitNumber
           }
         });
 
