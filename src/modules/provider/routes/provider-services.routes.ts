@@ -5,14 +5,8 @@
 
 import { Router, Request, Response } from 'express';
 import DatabaseConnection from '../../../shared/database/connection';
-import { authenticateToken } from '../../auth/middleware/auth.middleware';
+import { authenticateToken, AuthUser } from '../../../shared/middleware/auth.middleware';
 import { Logger } from '../../../shared/utils/logger.util';
-
-interface AuthUser {
-  id: number;
-  email: string;
-  role: string;
-}
 
 const MODULE = 'ProviderServicesRoutes';
 
