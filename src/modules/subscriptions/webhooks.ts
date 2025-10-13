@@ -206,9 +206,10 @@ async function handlePaymentSucceeded(invoice: Stripe.Invoice, pool: any) {
   Logger.info(MODULE, 'Processing payment.succeeded', { invoiceId: invoice.id });
   
   try {
-    const subscriptionId = typeof invoice.subscription === 'string' 
-      ? invoice.subscription 
-      : (invoice.subscription as any)?.id;
+    const invoiceAny = invoice as any;
+    const subscriptionId = typeof invoiceAny.subscription === 'string' 
+      ? invoiceAny.subscription 
+      : invoiceAny.subscription?.id;
       
     if (subscriptionId) {
       await pool.execute(
@@ -232,9 +233,10 @@ async function handlePaymentFailed(invoice: Stripe.Invoice, pool: any) {
   Logger.info(MODULE, 'Processing payment.failed', { invoiceId: invoice.id });
   
   try {
-    const subscriptionId = typeof invoice.subscription === 'string' 
-      ? invoice.subscription 
-      : (invoice.subscription as any)?.id;
+    const invoiceAny = invoice as any;
+    const subscriptionId = typeof invoiceAny.subscription === 'string' 
+      ? invoiceAny.subscription 
+      : invoiceAny.subscription?.id;
       
     if (subscriptionId) {
       await pool.execute(
