@@ -118,13 +118,13 @@ export class ClientSearchRoutes {
 
         // Agregar condiciones a la consulta
         if (conditions.length > 0) {
-          query += ` AND (${conditions.join(' AND ')})`;
+          query += ` AND ${conditions.join(' AND ')}`;
         }
 
         // Agrupar y ordenar
         query += `
           GROUP BY pp.provider_id, u.name, u.email, pp.professional_title, pp.bio, 
-                   pp.profile_photo_url, pp.main_region, pp.main_commune, pp.years_experience, pp.available_for_bookings
+                   pp.profile_photo_url, pp.main_region, pp.main_commune, pp.years_experience, pp.is_online
           HAVING services_count > 0
           ORDER BY rating DESC, review_count DESC, services_count DESC
           LIMIT ? OFFSET ?
@@ -305,7 +305,7 @@ export class ClientSearchRoutes {
 
         // Agregar condiciones a la consulta
         if (conditions.length > 0) {
-          query += ` AND (${conditions.join(' AND ')})`;
+          query += ` AND ${conditions.join(' AND ')}`;
         }
 
         // Agrupar y ordenar
