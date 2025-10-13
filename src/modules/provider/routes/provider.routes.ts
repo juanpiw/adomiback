@@ -152,6 +152,16 @@ export class ProviderRoutes {
           bio 
         } = req.body;
 
+        // Convertir undefined a null para MySQL2
+        const processedData = {
+          full_name: full_name || null,
+          professional_title: professional_title || null,
+          main_commune: main_commune || null,
+          main_region: main_region || null,
+          years_experience: years_experience || null,
+          bio: bio || null
+        };
+
         console.log('[PROVIDER_ROUTES] Datos recibidos:', {
           full_name, 
           professional_title, 
@@ -162,8 +172,13 @@ export class ProviderRoutes {
           userId: user.id
         });
 
+        console.log('[PROVIDER_ROUTES] Datos procesados:', {
+          ...processedData,
+          userId: user.id
+        });
+
         // Validar que al menos un campo tenga valor
-        if (!full_name && !professional_title && !main_commune && !years_experience && !bio) {
+        if (!processedData.full_name && !processedData.professional_title && !processedData.main_commune && !processedData.years_experience && !processedData.bio) {
           return res.status(400).json({ 
             success: false, 
             error: 'Al menos un campo debe tener un valor para actualizar' 
@@ -172,13 +187,8 @@ export class ProviderRoutes {
 
         const pool = DatabaseConnection.getPool();
         
-        console.log('[PROVIDER_ROUTES] Ejecutando query UPDATE con parámetros:', {
-          full_name, 
-          professional_title, 
-          main_commune, 
-          main_region, 
-          years_experience, 
-          bio, 
+        console.log('[PROVIDER_ROUTES] Ejecutando query UPDATE con parámetros procesados:', {
+          ...processedData,
           userId: user.id
         });
         
@@ -194,16 +204,24 @@ export class ProviderRoutes {
                last_profile_update = CURRENT_TIMESTAMP,
                updated_at = CURRENT_TIMESTAMP
            WHERE provider_id = ?`,
-          [full_name, professional_title, main_commune, main_region, years_experience, bio, user.id]
+          [
+            processedData.full_name, 
+            processedData.professional_title, 
+            processedData.main_commune, 
+            processedData.main_region, 
+            processedData.years_experience, 
+            processedData.bio, 
+            user.id
+          ]
         );
 
         console.log('[PROVIDER_ROUTES] Resultado del UPDATE:', updateResult);
 
         // También actualizar el nombre en la tabla users
-        if (full_name) {
+        if (processedData.full_name) {
           await pool.execute(
             `UPDATE users SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-            [full_name, user.id]
+            [processedData.full_name, user.id]
           );
         }
 
