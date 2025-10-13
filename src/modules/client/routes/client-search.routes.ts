@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { authenticateToken } from '../../../shared/middleware/auth.middleware';
-import { DatabaseConnection } from '../../../shared/database/database-connection';
-import { Logger } from '../../../shared/logger/logger';
+import DatabaseConnection from '../../../shared/database/connection';
+import { Logger } from '../../../shared/utils/logger.util';
 
 const MODULE = 'CLIENT_SEARCH';
 
