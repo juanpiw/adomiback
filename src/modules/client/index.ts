@@ -6,6 +6,7 @@
 import { Express } from 'express';
 import { ClientRoutes } from './routes/client.routes';
 import { ClientPhotoRoutes } from './routes/client-photo.routes';
+import { ClientSearchRoutes } from './routes/client-search.routes';
 
 /**
  * Setup function to mount client routes
@@ -16,6 +17,8 @@ export function setupClientModule(app: Express) {
   app.use('/', routes.getRouter());
   const photoRoutes = new ClientPhotoRoutes();
   app.use('/', photoRoutes.getRouter());
+  const searchRoutes = new ClientSearchRoutes();
+  app.use('/', searchRoutes.getRouter());
   console.log('[CLIENT MODULE] Client routes mounted');
 }
 
