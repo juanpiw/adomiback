@@ -3,41 +3,40 @@
  * Handles Stripe webhook events to update subscription status
  */
 
-import { Router, Request, Response } from 'express';
+import { Request, Response, Express } from 'express';
+import express from 'express';
 import Stripe from 'stripe';
 import DatabaseConnection from '../../shared/database/connection';
 import { Logger } from '../../shared/utils/logger.util';
 
 const MODULE = 'StripeWebhooks';
 
-export function setupStripeWebhooks(router: Router) {
+export function setupStripeWebhooks(app: Express) {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '');
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || '';
 
-  // Middleware para procesar webhooks de Stripe (necesita body raw)
-  router.use('/webhooks/stripe', (req: Request, res: Response, next: any) => {
-    // Preservar el body raw para verificación de firma
-    if (req.headers['stripe-signature']) {
-      // El body ya debe estar como Buffer
-      next();
-    } else {
-      next();
-    }
-  });
+  // ✅ IMPORTANTE: Montar el webhook CON express.raw() para preservar el body original
+  // Esto DEBE estar antes de express.json() en app.ts
+  app.post('/webhooks/stripe', 
+    express.raw({ type: 'application/json' }),
+    async (req: Request, res: Response) => {
+      const sig = req.headers['stripe-signature'] as string;
+      
+      if (!sig) {
+        Logger.error(MODULE, 'Missing stripe-signature header');
+        return res.status(400).send('Webhook Error: Missing signature');
+      }
 
-  // POST /webhooks/stripe - Recibir eventos de Stripe
-  router.post('/webhooks/stripe', async (req: Request, res: Response) => {
-    const sig = req.headers['stripe-signature'] as string;
-    let event: Stripe.Event;
+      let event: Stripe.Event;
 
-    try {
-      // Verificar firma del webhook
-      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
-      Logger.info(MODULE, 'Webhook event received', { type: event.type, id: event.id });
-    } catch (err: any) {
-      Logger.error(MODULE, 'Webhook signature verification failed', err);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
+      try {
+        // Verificar firma del webhook usando el body raw
+        event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+        Logger.info(MODULE, 'Webhook event received', { type: event.type, id: event.id });
+      } catch (err: any) {
+        Logger.error(MODULE, 'Webhook signature verification failed', err);
+        return res.status(400).send(`Webhook Error: ${err.message}`);
+      }
 
     const pool = DatabaseConnection.getPool();
 
@@ -73,6 +72,8 @@ export function setupStripeWebhooks(router: Router) {
       res.status(500).json({ error: 'Error processing webhook' });
     }
   });
+  
+  Logger.info(MODULE, 'Stripe webhook endpoint configured at POST /webhooks/stripe');
 }
 
 /**

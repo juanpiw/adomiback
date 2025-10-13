@@ -17,18 +17,19 @@ export function createApp(): Express {
 
   // Middleware básicos
   app.use(cors());
+  app.use(morgan('dev'));
   
-  // ✅ Middleware específico para webhooks de Stripe (necesita body raw)
-  app.use('/webhooks/stripe', express.raw({ type: 'application/json' }));
+  // ✅ IMPORTANTE: Configurar webhook de Stripe ANTES de express.json()
+  // El webhook necesita el body raw para verificar la firma
+  setupSubscriptionsModule(app); // Esto debe ir primero para que el webhook se monte con raw body
   
+  // Parsear JSON para el resto de rutas
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
   
   // Servir archivos estáticos (uploads de imágenes)
   app.use('/uploads', express.static('uploads'));
   Logger.info('APP', 'Serving static files from /uploads');
-  
-  app.use(morgan('dev'));
 
   // Health check
   app.get('/health', (req, res) => {
@@ -39,12 +40,11 @@ export function createApp(): Express {
     });
   });
 
-  // Setup modules
+  // Setup otros módulos
   Logger.info('APP', 'Setting up modules...');
   setupAuthModule(app);
   setupClientModule(app);
   setupProviderModule(app);
-  setupSubscriptionsModule(app);
   
   Logger.info('APP', 'All modules loaded successfully');
 

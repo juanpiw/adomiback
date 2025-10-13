@@ -14,6 +14,10 @@ import { setupStripeWebhooks } from './webhooks';
  * @param app Express application
  */
 export function setupSubscriptionsModule(app: any) {
+  // ✅ Montar webhook de Stripe CON raw body ANTES de cualquier parser JSON
+  setupStripeWebhooks(app);
+  console.log('[SUBSCRIPTIONS MODULE] Stripe webhooks configured with raw body');
+  
   const router = Router();
 
   // GET /plans - planes activos con shape esperado por el front
@@ -160,10 +164,6 @@ export function setupSubscriptionsModule(app: any) {
       return res.status(500).json({ ok: false, error: 'Error al crear sesión de pago', details: error.message });
     }
   });
-
-  // ✅ Configurar webhooks de Stripe
-  setupStripeWebhooks(router);
-  console.log('[SUBSCRIPTIONS MODULE] Stripe webhooks configured');
 
   app.use('/', router);
   console.log('[SUBSCRIPTIONS MODULE] Routes mounted');
