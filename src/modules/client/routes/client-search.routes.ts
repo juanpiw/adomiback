@@ -118,7 +118,7 @@ export class ClientSearchRoutes {
 
         // Agregar condiciones a la consulta
         if (conditions.length > 0) {
-          query += ` AND ${conditions.join(' AND ')}`;
+          query += ` AND (${conditions.join(' AND ')})`;
         }
 
         // Agrupar y ordenar
@@ -305,7 +305,7 @@ export class ClientSearchRoutes {
 
         // Agregar condiciones a la consulta
         if (conditions.length > 0) {
-          query += ` AND ${conditions.join(' AND ')}`;
+          query += ` AND (${conditions.join(' AND ')})`;
         }
 
         // Agrupar y ordenar
