@@ -89,15 +89,30 @@ export class ProviderServicesRoutes {
         }
 
         const pool = DatabaseConnection.getPool();
+        console.log('[PROVIDER_SERVICES] Conectando a la base de datos...');
 
         // Obtener el siguiente order_index
+        console.log('[PROVIDER_SERVICES] Obteniendo order_index para provider_id:', user.id);
         const [countResult] = await pool.query(
           'SELECT COUNT(*) as count FROM provider_services WHERE provider_id = ?',
           [user.id]
         );
         const nextOrder = (countResult as any[])[0].count;
+        console.log('[PROVIDER_SERVICES] nextOrder calculado:', nextOrder);
 
         // Insertar servicio
+        console.log('[PROVIDER_SERVICES] Ejecutando INSERT con parámetros:', {
+          provider_id: user.id,
+          name,
+          description: description || null,
+          price,
+          duration_minutes,
+          category_id: category_id || null,
+          custom_category: custom_category || null,
+          service_image_url: service_image_url || null,
+          order_index: nextOrder
+        });
+
         const [result] = await pool.execute(
           `INSERT INTO provider_services 
            (provider_id, name, description, price, duration_minutes, category_id, 
@@ -117,17 +132,21 @@ export class ProviderServicesRoutes {
         );
 
         const serviceId = (result as any).insertId;
+        console.log('[PROVIDER_SERVICES] Servicio insertado con ID:', serviceId);
 
         // Obtener el servicio creado
+        console.log('[PROVIDER_SERVICES] Obteniendo servicio creado con ID:', serviceId);
         const [rows] = await pool.query(
           'SELECT * FROM provider_services WHERE id = ?',
           [serviceId]
         );
 
         const service = (rows as any[])[0];
+        console.log('[PROVIDER_SERVICES] Servicio obtenido:', service);
 
         // Actualizar profile_completion (agregar +15% si es el primer servicio)
         if (nextOrder === 0) {
+          console.log('[PROVIDER_SERVICES] Actualizando profile_completion (primer servicio)');
           await pool.execute(
             `UPDATE provider_profiles 
              SET profile_completion = LEAST(100, profile_completion + 15)
@@ -136,9 +155,14 @@ export class ProviderServicesRoutes {
           );
         }
 
+        console.log('[PROVIDER_SERVICES] ✅ Servicio creado exitosamente:', { serviceId, userId: user.id });
         Logger.info(MODULE, 'Service created', { serviceId, userId: user.id });
         return res.status(201).json({ success: true, service });
       } catch (error: any) {
+        console.error('[PROVIDER_SERVICES] ❌ ERROR al crear servicio:', error);
+        console.error('[PROVIDER_SERVICES] Error message:', error.message);
+        console.error('[PROVIDER_SERVICES] Error code:', error.code);
+        console.error('[PROVIDER_SERVICES] Error stack:', error.stack);
         Logger.error(MODULE, 'Error creating service', error);
         return res.status(500).json({ success: false, error: 'Error al crear servicio' });
       }
