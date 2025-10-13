@@ -94,14 +94,19 @@ export class ClientSearchRoutes {
           params.push(categoryPattern, categoryPattern);
         }
 
-        // Filtro por ubicación
+        // Filtro por ubicación (acepta slug con guiones y con espacios)
         if (location) {
+          const rawLocation = String(location).toLowerCase();
+          const locationWithSpaces = rawLocation.replace(/-/g, ' ');
+          const patternSpaces = `%${locationWithSpaces}%`;
+          const patternSlug = `%${rawLocation}%`;
           conditions.push(`(
-            pp.main_region LIKE ? OR 
-            pp.main_commune LIKE ?
+            LOWER(pp.main_region) LIKE ? OR 
+            LOWER(pp.main_commune) LIKE ? OR
+            LOWER(REPLACE(pp.main_region, ' ', '-')) LIKE ? OR
+            LOWER(REPLACE(pp.main_commune, ' ', '-')) LIKE ?
           )`);
-          const locationPattern = `%${location}%`;
-          params.push(locationPattern, locationPattern);
+          params.push(patternSpaces, patternSpaces, patternSlug, patternSlug);
         }
 
         // Filtro por precio
@@ -166,13 +171,16 @@ export class ClientSearchRoutes {
             [provider.provider_id]
           );
 
+          const ratingNumber = Number(provider.rating ?? 0);
+          const ratingRounded = Math.round(ratingNumber * 10) / 10;
+
           return {
             id: provider.provider_id,
             name: provider.provider_name,
             email: provider.provider_email,
             profession: provider.profession || 'Profesional',
             description: provider.description || 'Sin descripción disponible',
-            rating: parseFloat(provider.rating.toFixed(1)),
+            rating: ratingRounded,
             review_count: provider.review_count,
             avatar_url: provider.avatar_url ? `${process.env.API_BASE_URL || 'http://localhost:3000'}${provider.avatar_url}` : null,
             location: provider.location || provider.main_region,
@@ -291,14 +299,19 @@ export class ClientSearchRoutes {
           params.push(`%${category}%`);
         }
 
-        // Filtro por ubicación
+        // Filtro por ubicación (acepta slug con guiones y con espacios)
         if (location) {
+          const rawLocation = String(location).toLowerCase();
+          const locationWithSpaces = rawLocation.replace(/-/g, ' ');
+          const patternSpaces = `%${locationWithSpaces}%`;
+          const patternSlug = `%${rawLocation}%`;
           conditions.push(`(
-            pp.main_region LIKE ? OR 
-            pp.main_commune LIKE ?
+            LOWER(pp.main_region) LIKE ? OR 
+            LOWER(pp.main_commune) LIKE ? OR
+            LOWER(REPLACE(pp.main_region, ' ', '-')) LIKE ? OR
+            LOWER(REPLACE(pp.main_commune, ' ', '-')) LIKE ?
           )`);
-          const locationPattern = `%${location}%`;
-          params.push(locationPattern, locationPattern);
+          params.push(patternSpaces, patternSpaces, patternSlug, patternSlug);
         }
 
         // Filtro por precio
@@ -339,25 +352,30 @@ export class ClientSearchRoutes {
 
         const [rows] = await pool.execute(query, params);
         
-        const services = (rows as any[]).map(service => ({
-          id: service.id,
-          name: service.name,
-          description: service.description,
-          price: service.price,
-          duration_minutes: service.duration_minutes,
-          category: service.custom_category,
-          image_url: service.service_image_url ? `${process.env.API_BASE_URL || 'http://localhost:3000'}${service.service_image_url}` : null,
-          is_featured: service.is_featured,
-          provider: {
-            id: service.provider_id,
-            name: service.provider_name,
-            profession: service.provider_profession,
-            avatar_url: service.provider_avatar_url ? `${process.env.API_BASE_URL || 'http://localhost:3000'}${service.provider_avatar_url}` : null,
-            location: service.provider_location || service.main_region,
-            rating: parseFloat(service.provider_rating.toFixed(1)),
-            review_count: service.provider_review_count
-          }
-        }));
+        const services = (rows as any[]).map(service => {
+          const providerRatingNumber = Number(service.provider_rating ?? 0);
+          const providerRatingRounded = Math.round(providerRatingNumber * 10) / 10;
+
+          return {
+            id: service.id,
+            name: service.name,
+            description: service.description,
+            price: service.price,
+            duration_minutes: service.duration_minutes,
+            category: service.custom_category,
+            image_url: service.service_image_url ? `${process.env.API_BASE_URL || 'http://localhost:3000'}${service.service_image_url}` : null,
+            is_featured: service.is_featured,
+            provider: {
+              id: service.provider_id,
+              name: service.provider_name,
+              profession: service.provider_profession,
+              avatar_url: service.provider_avatar_url ? `${process.env.API_BASE_URL || 'http://localhost:3000'}${service.provider_avatar_url}` : null,
+              location: service.provider_location || service.main_region,
+              rating: providerRatingRounded,
+              review_count: service.provider_review_count
+            }
+          };
+        });
 
         console.log('[CLIENT_SEARCH] ✅ Servicios encontrados:', services.length);
 
