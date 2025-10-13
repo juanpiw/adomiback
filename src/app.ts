@@ -19,9 +19,10 @@ export function createApp(): Express {
   app.use(cors());
   app.use(morgan('dev'));
   
-  // ✅ IMPORTANTE: Configurar webhook de Stripe ANTES de express.json()
+  // ✅ CRÍTICO: Montar SOLO el webhook de Stripe ANTES de express.json()
   // El webhook necesita el body raw para verificar la firma
-  setupSubscriptionsModule(app); // Esto debe ir primero para que el webhook se monte con raw body
+  // Esto se hace llamando setupSubscriptionsModule con un flag especial
+  setupSubscriptionsModule(app, true); // true = solo webhook
   
   // Parsear JSON para el resto de rutas
   app.use(express.json({ limit: '10mb' }));
@@ -40,11 +41,12 @@ export function createApp(): Express {
     });
   });
 
-  // Setup otros módulos
+  // Setup módulos (ahora sí con JSON parseado)
   Logger.info('APP', 'Setting up modules...');
   setupAuthModule(app);
   setupClientModule(app);
   setupProviderModule(app);
+  setupSubscriptionsModule(app, false); // false = rutas normales (sin webhook)
   
   Logger.info('APP', 'All modules loaded successfully');
 

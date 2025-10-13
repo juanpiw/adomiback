@@ -12,12 +12,17 @@ import { setupStripeWebhooks } from './webhooks';
 /**
  * Setup function to mount subscriptions routes
  * @param app Express application
+ * @param webhookOnly Si es true, solo monta el webhook (antes de express.json)
  */
-export function setupSubscriptionsModule(app: any) {
-  // ✅ Montar webhook de Stripe CON raw body ANTES de cualquier parser JSON
-  setupStripeWebhooks(app);
-  console.log('[SUBSCRIPTIONS MODULE] Stripe webhooks configured with raw body');
+export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false) {
+  // Si webhookOnly = true, solo montar el webhook y salir
+  if (webhookOnly) {
+    setupStripeWebhooks(app);
+    console.log('[SUBSCRIPTIONS MODULE] Stripe webhooks configured with raw body (webhook-only mode)');
+    return;
+  }
   
+  // Modo normal: montar todas las rutas (excepto webhook que ya se montó)
   const router = Router();
 
   // GET /plans - planes activos con shape esperado por el front
