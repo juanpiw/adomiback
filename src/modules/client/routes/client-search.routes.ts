@@ -46,7 +46,7 @@ export class ClientSearchRoutes {
             pp.main_region,
             pp.main_commune as location,
             pp.years_experience,
-            pp.available_for_bookings,
+            pp.is_online,
             COALESCE(AVG(r.rating), 0) as rating,
             COUNT(DISTINCT r.id) as review_count,
             COUNT(DISTINCT ps.id) as services_count
@@ -60,16 +60,21 @@ export class ClientSearchRoutes {
         const conditions: string[] = [];
         const params: any[] = [];
 
-        // Filtro de búsqueda por texto
+        // Filtro de búsqueda por texto (mejorado para incluir categorías)
         if (search) {
           conditions.push(`(
             u.name LIKE ? OR 
             pp.professional_title LIKE ? OR 
             pp.bio LIKE ? OR
-            ps.name LIKE ?
+            ps.name LIKE ? OR
+            ps.custom_category LIKE ? OR
+            EXISTS (
+              SELECT 1 FROM service_categories sc 
+              WHERE sc.id = ps.category_id AND sc.name LIKE ?
+            )
           )`);
           const searchPattern = `%${search}%`;
-          params.push(searchPattern, searchPattern, searchPattern, searchPattern);
+          params.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern);
         }
 
         // Filtro por categoría

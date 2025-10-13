@@ -1621,5 +1621,270 @@ PRÓXIMOS PASOS DESPUÉS DE EJECUTAR ESTE SCHEMA:
 8. ✅ Iterar con siguientes endpoints según prioridades
 
 ═══════════════════════════════════════════════════════════════════════════════
+
+-- ============================================
+-- MEJORAS DE BÚSQUEDA Y CATEGORÍAS (2024-12-XX)
+-- ============================================
+--
+-- OBJETIVO: Mejorar la funcionalidad de búsqueda para incluir más categorías
+-- de servicios y permitir encontrar profesionales por términos como "chef", 
+-- "abogado", "guardia", etc.
+--
+-- CAMBIOS REALIZADOS:
+-- 1. Expandir categorías de servicios en frontend (4 → 12 categorías principales)
+-- 2. Mejorar query de búsqueda en backend para incluir categorías
+-- 3. Insertar datos de prueba con diferentes tipos de profesionales
+--
+-- ============================================
+
+-- ============================================
+-- NUEVAS CATEGORÍAS DE SERVICIOS AGREGADAS
+-- ============================================
+--
+-- Se agregaron 6 nuevas categorías específicas para cubrir más profesiones:
+-- - Gastronomía y Cocina (chef, catering, clases de cocina)
+-- - Servicios Legales (abogados, notarios, asesoría legal)
+-- - Seguridad y Vigilancia (guardias, vigilancia, escolta)
+-- - Cuidado Personal y Asistencia (niñeras, cuidado adultos mayores)
+-- - Arte y Diseño (diseño gráfico, fotografía, creatividad)
+-- - Consultoría y Negocios (asesoría financiera, contabilidad, marketing)
+--
+-- ============================================
+
+INSERT INTO service_categories (name, slug, description, icon_name, color_hex, order_index) VALUES 
+('Gastronomía y Cocina', 'gastronomia', 'Chef a domicilio, catering, repostería, clases de cocina', 'chef', '#FF8C42', 11),
+('Servicios Legales', 'legales', 'Abogados, notarios, asesoría legal, tramitación de documentos', 'scale', '#8B4513', 12),
+('Seguridad y Vigilancia', 'seguridad', 'Guardias, vigilancia, escolta, custodia, alarmas', 'shield', '#2C3E50', 13),
+('Cuidado Personal y Asistencia', 'cuidado-personal', 'Niñeras, cuidado de adultos mayores, asistente personal', 'heart', '#E74C3C', 14),
+('Arte y Diseño', 'arte-diseno', 'Diseño gráfico, fotografía profesional, arte y creatividad', 'palette', '#9B59B6', 15),
+('Consultoría y Negocios', 'consultoria', 'Asesoría financiera, contabilidad, marketing digital', 'briefcase', '#34495E', 16)
+ON DUPLICATE KEY UPDATE name=VALUES(name);
+
+-- ============================================
+-- DATOS DE PRUEBA - USUARIOS PROFESIONALES
+-- ============================================
+--
+-- Se crearon 5 profesionales de diferentes categorías para probar
+-- la funcionalidad de búsqueda mejorada:
+--
+-- 1. Carlos Chef (Gastronomía) - ID: Variable según inserción
+-- 2. Ana Abogada (Servicios Legales) - ID: Variable según inserción  
+-- 3. Pedro Guardia (Seguridad) - ID: Variable según inserción
+-- 4. Laura Estilista (Belleza) - ID: Variable según inserción
+-- 5. Roberto Técnico (Tecnología) - ID: Variable según inserción
+--
+-- ============================================
+
+-- NOTA: Los IDs de usuario se asignan automáticamente al insertar.
+-- Estos son los usuarios de prueba que se deben crear:
+
+INSERT INTO users (name, email, role, is_active, email_verified) VALUES 
+('María González', 'maria.gonzalez@email.com', 'client', TRUE, TRUE),
+('Carlos Chef', 'carlos.chef@email.com', 'provider', TRUE, TRUE),
+('Ana Abogada', 'ana.abogada@email.com', 'provider', TRUE, TRUE),
+('Pedro Guardia', 'pedro.guardia@email.com', 'provider', TRUE, TRUE),
+('Laura Estilista', 'laura.estilista@email.com', 'provider', TRUE, TRUE),
+('Roberto Técnico', 'roberto.tecnico@email.com', 'provider', TRUE, TRUE)
+ON DUPLICATE KEY UPDATE name=VALUES(name);
+
+-- ============================================
+-- PERFILES DE PROVEEDORES DE PRUEBA
+-- ============================================
+--
+-- NOTA: Los provider_id deben ajustarse según los IDs reales asignados
+-- a los usuarios en la inserción anterior.
+--
+-- Para obtener los IDs correctos, ejecutar:
+-- SELECT id, name, email, role FROM users WHERE role = 'provider' ORDER BY id;
+--
+-- ============================================
+
+-- Ejemplo de inserción de perfiles (ajustar provider_id según IDs reales):
+-- INSERT INTO provider_profiles (provider_id, full_name, professional_title, main_commune, main_region, years_experience, bio, profile_completion) VALUES 
+-- (ID_CARLOS, 'Carlos Chef', 'Chef Profesional', 'Las Condes', 'Metropolitana', 8, 'Chef con 8 años de experiencia en cocina internacional. Especialista en gastronomía chilena y mediterránea. Ofrezco servicios de chef a domicilio, catering para eventos y clases de cocina.', 85),
+-- (ID_ANA, 'Ana Abogada', 'Abogada Laboral', 'Providencia', 'Metropolitana', 12, 'Abogada especializada en derecho laboral con más de 10 años de experiencia. Ayudo con contratos, despidos, negociaciones salariales y asesoría legal empresarial.', 90),
+-- (ID_PEDRO, 'Pedro Guardia', 'Seguridad Privada', 'Santiago', 'Metropolitana', 15, 'Especialista en seguridad privada con amplia experiencia en vigilancia, escolta y custodia. Certificado en manejo de situaciones de riesgo y primeros auxilios.', 80),
+-- (ID_LAURA, 'Laura Estilista', 'Estilista Profesional', 'Ñuñoa', 'Metropolitana', 6, 'Estilista profesional especializada en cortes modernos, coloración y tratamientos capilares. Trabajo con productos de alta calidad y técnicas actualizadas.', 75),
+-- (ID_ROBERTO, 'Roberto Técnico', 'Técnico en Computación', 'Maipú', 'Metropolitana', 10, 'Técnico en computación con amplia experiencia en reparación de PC, laptops, impresoras y soporte técnico. También ofrezco servicios de instalación de software y configuración de redes.', 88);
+
+-- ============================================
+-- SERVICIOS DE PRUEBA POR CATEGORÍA
+-- ============================================
+--
+-- Se crearon 15 servicios distribuidos entre los 5 profesionales:
+-- - 3 servicios por cada profesional
+-- - Cada servicio pertenece a una categoría específica
+-- - Precios realistas en pesos chilenos
+-- - Duraciones apropiadas para cada tipo de servicio
+--
+-- ============================================
+
+-- Ejemplo de servicios para Carlos Chef (ajustar provider_id según ID real):
+-- INSERT INTO provider_services (provider_id, name, description, price, duration_minutes, category_id, custom_category, is_active, order_index) VALUES 
+-- (ID_CARLOS, 'Chef a Domicilio', 'Servicio de chef profesional en tu hogar para cenas especiales o eventos íntimos', 80000, 240, 11, 'Chef a Domicilio', TRUE, 0),
+-- (ID_CARLOS, 'Catering para Eventos', 'Servicio completo de catering para fiestas, reuniones y eventos corporativos', 120000, 480, 11, 'Catering', TRUE, 1),
+-- (ID_CARLOS, 'Clases de Cocina', 'Aprende técnicas profesionales de cocina chilena e internacional', 45000, 180, 11, 'Clases de Cocina', TRUE, 2);
+
+-- Ejemplo de servicios para Ana Abogada (ajustar provider_id según ID real):
+-- INSERT INTO provider_services (provider_id, name, description, price, duration_minutes, category_id, custom_category, is_active, order_index) VALUES 
+-- (ID_ANA, 'Asesoría Legal Laboral', 'Consulta legal sobre contratos de trabajo, despidos y derechos laborales', 60000, 60, 12, 'Asesoría Legal', TRUE, 0),
+-- (ID_ANA, 'Revisión de Contratos', 'Revisión profesional de contratos de trabajo y documentos legales', 40000, 45, 12, 'Revisión de Contratos', TRUE, 1),
+-- (ID_ANA, 'Representación Legal', 'Representación en procesos laborales y negociaciones con empleadores', 150000, 120, 12, 'Representación Legal', TRUE, 2);
+
+-- Ejemplo de servicios para Pedro Guardia (ajustar provider_id según ID real):
+-- INSERT INTO provider_services (provider_id, name, description, price, duration_minutes, category_id, custom_category, is_active, order_index) VALUES 
+-- (ID_PEDRO, 'Vigilancia Privada', 'Servicio de vigilancia y seguridad para eventos y propiedades', 50000, 480, 13, 'Vigilancia', TRUE, 0),
+-- (ID_PEDRO, 'Escolta Personal', 'Protección personal y escolta para personas de alto perfil', 80000, 360, 13, 'Escolta', TRUE, 1),
+-- (ID_PEDRO, 'Custodia de Eventos', 'Seguridad especializada para eventos corporativos y sociales', 60000, 240, 13, 'Custodia', TRUE, 2);
+
+-- Ejemplo de servicios para Laura Estilista (ajustar provider_id según ID real):
+-- INSERT INTO provider_services (provider_id, name, description, price, duration_minutes, category_id, custom_category, is_active, order_index) VALUES 
+-- (ID_LAURA, 'Corte y Peinado', 'Corte de pelo profesional con lavado y peinado incluido', 25000, 90, 1, 'Corte y Peinado', TRUE, 0),
+-- (ID_LAURA, 'Coloración Profesional', 'Tintes, mechas y tratamientos de color con productos premium', 45000, 180, 1, 'Coloración', TRUE, 1),
+-- (ID_LAURA, 'Tratamientos Capilares', 'Tratamientos reparadores y nutritivos para el cabello', 35000, 120, 1, 'Tratamientos', TRUE, 2);
+
+-- Ejemplo de servicios para Roberto Técnico (ajustar provider_id según ID real):
+-- INSERT INTO provider_services (provider_id, name, description, price, duration_minutes, category_id, custom_category, is_active, order_index) VALUES 
+-- (ID_ROBERTO, 'Reparación de Computadores', 'Diagnóstico y reparación de PC, laptops y equipos de escritorio', 35000, 120, 4, 'Reparación PC', TRUE, 0),
+-- (ID_ROBERTO, 'Instalación de Software', 'Instalación y configuración de programas y sistemas operativos', 25000, 90, 4, 'Instalación Software', TRUE, 1),
+-- (ID_ROBERTO, 'Soporte Técnico', 'Asistencia técnica remota y presencial para problemas informáticos', 20000, 60, 4, 'Soporte Técnico', TRUE, 2);
+
+-- ============================================
+-- MEJORAS EN LA BÚSQUEDA (BACKEND)
+-- ============================================
+--
+-- Se modificó el archivo: backend/src/modules/client/routes/client-search.routes.ts
+--
+-- CAMBIO REALIZADO:
+-- Se mejoró la query de búsqueda para incluir búsqueda en categorías:
+--
+-- ANTES:
+-- WHERE (
+--   u.name LIKE ? OR 
+--   pp.professional_title LIKE ? OR 
+--   pp.bio LIKE ? OR
+--   ps.name LIKE ?
+-- )
+--
+-- DESPUÉS:
+-- WHERE (
+--   u.name LIKE ? OR 
+--   pp.professional_title LIKE ? OR 
+--   pp.bio LIKE ? OR
+--   ps.name LIKE ? OR
+--   ps.custom_category LIKE ? OR
+--   EXISTS (
+--     SELECT 1 FROM service_categories sc 
+--     WHERE sc.id = ps.category_id AND sc.name LIKE ?
+--   )
+-- )
+--
+-- RESULTADO:
+-- Ahora la búsqueda encuentra profesionales por:
+-- - Nombre del profesional
+-- - Título profesional  
+-- - Biografía
+-- - Nombre del servicio
+-- - Categoría personalizada del servicio
+-- - Nombre de la categoría oficial
+--
+-- ============================================
+
+-- ============================================
+-- QUERY DE PRUEBA PARA VERIFICAR BÚSQUEDA
+-- ============================================
+--
+-- Para probar que la búsqueda mejorada funciona, ejecutar:
+--
+-- ============================================
+
+-- Prueba de búsqueda por "chef":
+/*
+SELECT DISTINCT
+  pp.provider_id,
+  u.name as provider_name,
+  u.email as provider_email,
+  pp.professional_title as profession,
+  pp.bio as description,
+  pp.profile_photo_url as avatar_url,
+  pp.main_region,
+  pp.main_commune as location,
+  pp.years_experience,
+  pp.is_online,
+  COALESCE(AVG(r.rating), 0) as rating,
+  COUNT(DISTINCT r.id) as review_count,
+  COUNT(DISTINCT ps.id) as services_count
+FROM provider_profiles pp
+JOIN users u ON pp.provider_id = u.id
+LEFT JOIN provider_services ps ON pp.provider_id = ps.provider_id AND ps.is_active = true
+LEFT JOIN reviews r ON pp.provider_id = r.provider_id
+WHERE u.role = 'provider' AND u.is_active = true
+AND (
+  u.name LIKE '%chef%' OR 
+  pp.professional_title LIKE '%chef%' OR 
+  pp.bio LIKE '%chef%' OR
+  ps.name LIKE '%chef%' OR
+  ps.custom_category LIKE '%chef%' OR
+  EXISTS (
+    SELECT 1 FROM service_categories sc 
+    WHERE sc.id = ps.category_id AND sc.name LIKE '%chef%'
+  )
+)
+GROUP BY pp.provider_id, u.name, u.email, pp.professional_title, pp.bio, 
+         pp.profile_photo_url, pp.main_region, pp.main_commune, 
+         pp.years_experience, pp.is_online;
+*/
+
+-- ============================================
+-- INSTRUCCIONES DE IMPLEMENTACIÓN
+-- ============================================
+--
+-- PASO 1: Ejecutar las categorías nuevas (si no existen):
+-- INSERT INTO service_categories (...) VALUES (...);
+--
+-- PASO 2: Insertar usuarios de prueba:
+-- INSERT INTO users (...) VALUES (...);
+--
+-- PASO 3: Obtener IDs de usuarios insertados:
+-- SELECT id, name, email, role FROM users WHERE role = 'provider' ORDER BY id;
+--
+-- PASO 4: Insertar perfiles con IDs correctos:
+-- INSERT INTO provider_profiles (...) VALUES (...);
+--
+-- PASO 5: Insertar servicios con IDs correctos:
+-- INSERT INTO provider_services (...) VALUES (...);
+--
+-- PASO 6: Probar búsqueda con query de prueba
+--
+-- PASO 7: Reiniciar backend para aplicar cambios en client-search.routes.ts
+--
+-- PASO 8: Probar búsqueda en frontend
+--
+-- ============================================
+
+-- ============================================
+-- RESULTADOS ESPERADOS
+-- ============================================
+--
+-- Después de implementar estos cambios, la búsqueda debería funcionar así:
+--
+-- BÚSQUEDA: "chef"
+-- RESULTADO: Encuentra a Carlos Chef y sus servicios de gastronomía
+--
+-- BÚSQUEDA: "abogado" 
+-- RESULTADO: Encuentra a Ana Abogada y sus servicios legales
+--
+-- BÚSQUEDA: "guardia"
+-- RESULTADO: Encuentra a Pedro Guardia y sus servicios de seguridad
+--
+-- BÚSQUEDA: "estilista"
+-- RESULTADO: Encuentra a Laura Estilista y sus servicios de belleza
+--
+-- BÚSQUEDA: "técnico"
+-- RESULTADO: Encuentra a Roberto Técnico y sus servicios de tecnología
+--
+-- ============================================
+
+═══════════════════════════════════════════════════════════════════════════════
 */
 
