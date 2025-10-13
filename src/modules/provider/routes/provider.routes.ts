@@ -152,22 +152,52 @@ export class ProviderRoutes {
           bio 
         } = req.body;
 
+        console.log('[PROVIDER_ROUTES] Datos recibidos:', {
+          full_name, 
+          professional_title, 
+          main_commune, 
+          main_region, 
+          years_experience, 
+          bio,
+          userId: user.id
+        });
+
+        // Validar que al menos un campo tenga valor
+        if (!full_name && !professional_title && !main_commune && !years_experience && !bio) {
+          return res.status(400).json({ 
+            success: false, 
+            error: 'Al menos un campo debe tener un valor para actualizar' 
+          });
+        }
+
         const pool = DatabaseConnection.getPool();
         
+        console.log('[PROVIDER_ROUTES] Ejecutando query UPDATE con parámetros:', {
+          full_name, 
+          professional_title, 
+          main_commune, 
+          main_region, 
+          years_experience, 
+          bio, 
+          userId: user.id
+        });
+        
         // Actualizar perfil
-        await pool.execute(
+        const [updateResult] = await pool.execute(
           `UPDATE provider_profiles 
-           SET full_name = ?, 
-               professional_title = ?, 
-               main_commune = ?, 
+           SET full_name = COALESCE(NULLIF(?, ''), full_name), 
+               professional_title = COALESCE(NULLIF(?, ''), professional_title), 
+               main_commune = COALESCE(NULLIF(?, ''), main_commune), 
                main_region = ?, 
-               years_experience = ?, 
-               bio = ?,
+               years_experience = COALESCE(?, years_experience), 
+               bio = COALESCE(NULLIF(?, ''), bio),
                last_profile_update = CURRENT_TIMESTAMP,
                updated_at = CURRENT_TIMESTAMP
            WHERE provider_id = ?`,
           [full_name, professional_title, main_commune, main_region, years_experience, bio, user.id]
         );
+
+        console.log('[PROVIDER_ROUTES] Resultado del UPDATE:', updateResult);
 
         // También actualizar el nombre en la tabla users
         if (full_name) {

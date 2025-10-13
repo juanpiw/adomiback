@@ -52,6 +52,7 @@ export class ProviderServicesRoutes {
     this.router.post('/provider/services', authenticateToken, async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
+        console.log('[PROVIDER_SERVICES] POST /provider/services - Usuario:', user.id, 'Datos:', req.body);
         Logger.info(MODULE, 'POST /provider/services', { userId: user.id, body: req.body });
 
         if (user.role !== 'provider') {
