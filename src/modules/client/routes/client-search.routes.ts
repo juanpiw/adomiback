@@ -134,6 +134,8 @@ export class ClientSearchRoutes {
 
         console.log('[CLIENT_SEARCH] Query final:', query);
         console.log('[CLIENT_SEARCH] Parámetros:', params);
+        console.log('[CLIENT_SEARCH] Número de parámetros:', params.length);
+        console.log('[CLIENT_SEARCH] Número de ? en query:', (query.match(/\?/g) || []).length);
 
         const [rows] = await pool.execute(query, params);
         
@@ -321,6 +323,8 @@ export class ClientSearchRoutes {
 
         console.log('[CLIENT_SEARCH] Query servicios:', query);
         console.log('[CLIENT_SEARCH] Parámetros servicios:', params);
+        console.log('[CLIENT_SEARCH] Número de parámetros:', params.length);
+        console.log('[CLIENT_SEARCH] Número de ? en query:', (query.match(/\?/g) || []).length);
 
         const [rows] = await pool.execute(query, params);
         
