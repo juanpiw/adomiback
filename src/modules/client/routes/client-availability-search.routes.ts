@@ -14,7 +14,7 @@ export class ClientAvailabilitySearchRoutes {
     // GET /client/search/available-providers?date=YYYY-MM-DD&start=HH:mm&end=HH:mm&location=&category=
     this.router.get('/client/search/available-providers', authenticateToken, async (req: Request, res: Response) => {
       try {
-        const { date, start, end, location, category, limit = 20, offset = 0 } = req.query as any;
+        const { date, start, end, location, category, limit = 20, offset = 0, is_now } = req.query as any;
         if (!date || !start || !end) {
           return res.status(400).json({ success: false, error: 'Parámetros requeridos: date, start, end' });
         }
@@ -23,6 +23,9 @@ export class ClientAvailabilitySearchRoutes {
         const offsetNum = Math.max(0, parseInt(offset, 10) || 0);
 
         const pool = DatabaseConnection.getPool();
+
+        const todayIso = new Date().toISOString().slice(0, 10);
+        const isNow = String(is_now || '').toLowerCase() === '1' || String(is_now || '').toLowerCase() === 'true' || (date === todayIso);
 
         // Query base: providers activos con disponibilidad que cubra el intervalo solicitado
         let query = `
@@ -43,6 +46,13 @@ export class ClientAvailabilitySearchRoutes {
             AND pa.day_of_week = LOWER(DAYNAME(?))
             AND pa.start_time <= ?
             AND pa.end_time >= ?
+        `;
+
+        if (isNow) {
+          query += ` AND COALESCE(pp.is_online, FALSE) = TRUE`;
+        }
+
+        query += `
             AND NOT EXISTS (
               SELECT 1 FROM availability_exceptions ae
               WHERE ae.provider_id = u.id
