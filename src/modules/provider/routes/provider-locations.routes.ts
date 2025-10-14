@@ -160,7 +160,7 @@ export class ProviderLocationsRoutes {
           return res.status(403).json({ success: false, error: 'Solo providers pueden acceder' });
         }
 
-        const { is_online, share_real_time_location } = req.body;
+        const { is_online } = req.body;
 
         const pool = DatabaseConnection.getPool();
 
@@ -168,15 +168,14 @@ export class ProviderLocationsRoutes {
         await pool.execute(
           `UPDATE provider_profiles 
            SET is_online = COALESCE(?, is_online),
-               share_real_time_location = COALESCE(?, share_real_time_location),
                updated_at = CURRENT_TIMESTAMP
            WHERE provider_id = ?`,
-          [is_online, share_real_time_location, user.id]
+          [is_online, user.id]
         );
 
         // Obtener perfil actualizado
         const [rows] = await pool.query(
-          'SELECT is_online, share_real_time_location FROM provider_profiles WHERE provider_id = ?',
+          'SELECT is_online FROM provider_profiles WHERE provider_id = ?',
           [user.id]
         );
 
