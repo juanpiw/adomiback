@@ -82,9 +82,16 @@ export class ClientAvailabilitySearchRoutes {
           const withSpaces = raw.replace(/-/g, ' ');
           query += ` AND (
             LOWER(pp.main_region) LIKE ? OR LOWER(pp.main_commune) LIKE ? OR
-            LOWER(REPLACE(pp.main_region, ' ', '-')) LIKE ? OR LOWER(REPLACE(pp.main_commune, ' ', '-')) LIKE ?
+            LOWER(REPLACE(pp.main_region, ' ', '-')) LIKE ? OR LOWER(REPLACE(pp.main_commune, ' ', '-')) LIKE ? OR
+            EXISTS (
+              SELECT 1 FROM provider_locations pl
+              WHERE pl.provider_id = u.id AND (
+                LOWER(pl.region) LIKE ? OR LOWER(pl.commune) LIKE ? OR
+                LOWER(REPLACE(pl.region, ' ', '-')) LIKE ? OR LOWER(REPLACE(pl.commune, ' ', '-')) LIKE ?
+              )
+            )
           )`;
-          params.push(`%${withSpaces}%`, `%${withSpaces}%`, `%${raw}%`, `%${raw}%`);
+          params.push(`%${withSpaces}%`, `%${withSpaces}%`, `%${raw}%`, `%${raw}%`, `%${withSpaces}%`, `%${withSpaces}%`, `%${raw}%`, `%${raw}%`);
         }
 
         if (category) {

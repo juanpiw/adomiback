@@ -104,9 +104,18 @@ export class ClientSearchRoutes {
             LOWER(pp.main_region) LIKE ? OR 
             LOWER(pp.main_commune) LIKE ? OR
             LOWER(REPLACE(pp.main_region, ' ', '-')) LIKE ? OR
-            LOWER(REPLACE(pp.main_commune, ' ', '-')) LIKE ?
+            LOWER(REPLACE(pp.main_commune, ' ', '-')) LIKE ? OR
+            EXISTS (
+              SELECT 1 FROM provider_locations pl
+              WHERE pl.provider_id = pp.provider_id AND (
+                LOWER(pl.region) LIKE ? OR
+                LOWER(pl.commune) LIKE ? OR
+                LOWER(REPLACE(pl.region, ' ', '-')) LIKE ? OR
+                LOWER(REPLACE(pl.commune, ' ', '-')) LIKE ?
+              )
+            )
           )`);
-          params.push(patternSpaces, patternSpaces, patternSlug, patternSlug);
+          params.push(patternSpaces, patternSpaces, patternSlug, patternSlug, patternSpaces, patternSpaces, patternSlug, patternSlug);
         }
 
         // Filtro por precio
@@ -309,9 +318,18 @@ export class ClientSearchRoutes {
             LOWER(pp.main_region) LIKE ? OR 
             LOWER(pp.main_commune) LIKE ? OR
             LOWER(REPLACE(pp.main_region, ' ', '-')) LIKE ? OR
-            LOWER(REPLACE(pp.main_commune, ' ', '-')) LIKE ?
+            LOWER(REPLACE(pp.main_commune, ' ', '-')) LIKE ? OR
+            EXISTS (
+              SELECT 1 FROM provider_locations pl
+              WHERE pl.provider_id = pp.provider_id AND (
+                LOWER(pl.region) LIKE ? OR
+                LOWER(pl.commune) LIKE ? OR
+                LOWER(REPLACE(pl.region, ' ', '-')) LIKE ? OR
+                LOWER(REPLACE(pl.commune, ' ', '-')) LIKE ?
+              )
+            )
           )`);
-          params.push(patternSpaces, patternSpaces, patternSlug, patternSlug);
+          params.push(patternSpaces, patternSpaces, patternSlug, patternSlug, patternSpaces, patternSpaces, patternSlug, patternSlug);
         }
 
         // Filtro por precio
