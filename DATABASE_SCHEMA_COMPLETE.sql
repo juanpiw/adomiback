@@ -311,6 +311,11 @@ CREATE TABLE provider_profiles (
   last_profile_update TIMESTAMP,
   is_online BOOLEAN DEFAULT FALSE,
   last_seen TIMESTAMP,
+  -- Geolocalización (tiempo real, opcional)
+  current_lat DECIMAL(10,7) NULL,
+  current_lng DECIMAL(10,7) NULL,
+  current_location_updated_at TIMESTAMP NULL,
+  share_real_time_location BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   
@@ -323,6 +328,7 @@ CREATE TABLE provider_profiles (
   INDEX idx_completion (profile_completion),
   INDEX idx_rating (rating_average),
   INDEX idx_online (is_online),
+  INDEX idx_current_lat_lng (current_lat, current_lng),
   
   CONSTRAINT chk_provider_profiles_completion CHECK (profile_completion >= 0 AND profile_completion <= 100),
   CONSTRAINT chk_provider_profiles_experience CHECK (years_experience >= 0),
@@ -432,6 +438,9 @@ CREATE TABLE provider_locations (
   provider_id INT NOT NULL,
   commune VARCHAR(100) NOT NULL,
   region VARCHAR(100) NOT NULL,
+  -- Coordenadas aproximadas de la comuna / zona de cobertura
+  lat DECIMAL(10,7) NULL,
+  lng DECIMAL(10,7) NULL,
   is_primary BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   
@@ -439,8 +448,14 @@ CREATE TABLE provider_locations (
   INDEX idx_provider (provider_id),
   INDEX idx_commune (commune),
   INDEX idx_region (region),
+  INDEX idx_lat_lng (lat, lng),
   UNIQUE KEY unique_provider_commune (provider_id, commune)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Opcional (índice geoespacial). Requiere MySQL 8 con SRID 4326
+-- ALTER TABLE provider_locations ADD COLUMN geo POINT SRID 4326 NULL AFTER lng;
+-- ALTER TABLE provider_locations ADD SPATIAL INDEX idx_provider_locations_geo (geo);
+-- UPDATE provider_locations SET geo = ST_SRID(POINT(lng, lat), 4326) WHERE lat IS NOT NULL AND lng IS NOT NULL;
 
 -- ============================================
 -- VERIFICACIÓN DE IDENTIDAD
