@@ -150,7 +150,7 @@ export class ProviderLocationsRoutes {
       }
     });
 
-    // PUT /provider/availability - Actualizar disponibilidad
+    // PUT /provider/availability - Actualizar disponibilidad (online y compartir ubicación)
     this.router.put('/provider/availability', authenticateToken, async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
@@ -160,23 +160,23 @@ export class ProviderLocationsRoutes {
           return res.status(403).json({ success: false, error: 'Solo providers pueden acceder' });
         }
 
-        const { available_for_bookings, share_real_time_location } = req.body;
+        const { is_online, share_real_time_location } = req.body;
 
         const pool = DatabaseConnection.getPool();
 
         // Actualizar campos de disponibilidad
         await pool.execute(
           `UPDATE provider_profiles 
-           SET available_for_bookings = COALESCE(?, available_for_bookings),
+           SET is_online = COALESCE(?, is_online),
                share_real_time_location = COALESCE(?, share_real_time_location),
                updated_at = CURRENT_TIMESTAMP
            WHERE provider_id = ?`,
-          [available_for_bookings, share_real_time_location, user.id]
+          [is_online, share_real_time_location, user.id]
         );
 
         // Obtener perfil actualizado
         const [rows] = await pool.query(
-          'SELECT available_for_bookings, share_real_time_location FROM provider_profiles WHERE provider_id = ?',
+          'SELECT is_online, share_real_time_location FROM provider_profiles WHERE provider_id = ?',
           [user.id]
         );
 
