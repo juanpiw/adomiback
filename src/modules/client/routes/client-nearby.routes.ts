@@ -69,6 +69,7 @@ class ClientNearbySearchRoutes {
           LEFT JOIN provider_services ps ON ps.provider_id = u.id AND ps.is_active = TRUE
           LEFT JOIN reviews r ON r.provider_id = u.id
           WHERE u.role = 'provider' AND u.is_active = TRUE
+            AND (pp.share_real_time_location = TRUE OR (pp.current_lat IS NOT NULL AND pp.current_lng IS NOT NULL))
         `;
 
         const params: any[] = [latNum, lngNum, latNum];

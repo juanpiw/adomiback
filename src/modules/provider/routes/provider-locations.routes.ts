@@ -160,7 +160,7 @@ export class ProviderLocationsRoutes {
           return res.status(403).json({ success: false, error: 'Solo providers pueden acceder' });
         }
 
-        const { is_online } = req.body;
+        const { is_online, share_real_time_location } = req.body as any;
 
         const pool = DatabaseConnection.getPool();
 
@@ -168,14 +168,15 @@ export class ProviderLocationsRoutes {
         await pool.execute(
           `UPDATE provider_profiles 
            SET is_online = COALESCE(?, is_online),
+               share_real_time_location = COALESCE(?, share_real_time_location),
                updated_at = CURRENT_TIMESTAMP
            WHERE provider_id = ?`,
-          [is_online, user.id]
+          [is_online, share_real_time_location, user.id]
         );
 
         // Obtener perfil actualizado
         const [rows] = await pool.query(
-          'SELECT is_online FROM provider_profiles WHERE provider_id = ?',
+          'SELECT is_online, share_real_time_location FROM provider_profiles WHERE provider_id = ?',
           [user.id]
         );
 
@@ -186,6 +187,48 @@ export class ProviderLocationsRoutes {
       } catch (error: any) {
         Logger.error(MODULE, 'Error updating availability', error);
         return res.status(500).json({ success: false, error: 'Error al actualizar disponibilidad' });
+      }
+    });
+
+    // PUT /provider/current-location - Actualizar ubicación en tiempo real (lat/lng)
+    this.router.put('/provider/current-location', authenticateToken, async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user as AuthUser;
+        Logger.info(MODULE, 'PUT /provider/current-location', { userId: user.id, body: req.body });
+
+        if (user.role !== 'provider') {
+          return res.status(403).json({ success: false, error: 'Solo providers pueden acceder' });
+        }
+
+        const { lat, lng } = req.body as any;
+
+        const latNum = Number(lat);
+        const lngNum = Number(lng);
+        if (
+          Number.isNaN(latNum) || Number.isNaN(lngNum) ||
+          latNum < -90 || latNum > 90 ||
+          lngNum < -180 || lngNum > 180
+        ) {
+          return res.status(400).json({ success: false, error: 'lat/lng inválidos' });
+        }
+
+        const pool = DatabaseConnection.getPool();
+        await pool.execute(
+          `UPDATE provider_profiles
+           SET current_lat = ?, current_lng = ?, current_location_updated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+           WHERE provider_id = ?`,
+          [latNum, lngNum, user.id]
+        );
+
+        const [rows] = await pool.query(
+          'SELECT current_lat, current_lng, current_location_updated_at, share_real_time_location FROM provider_profiles WHERE provider_id = ?',
+          [user.id]
+        );
+
+        return res.json({ success: true, location: (rows as any[])[0] });
+      } catch (error: any) {
+        Logger.error(MODULE, 'Error updating current location', error);
+        return res.status(500).json({ success: false, error: 'Error al actualizar ubicación actual' });
       }
     });
   }
