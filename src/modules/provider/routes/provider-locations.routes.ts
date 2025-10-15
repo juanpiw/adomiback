@@ -150,6 +150,64 @@ export class ProviderLocationsRoutes {
       }
     });
 
+    // PUT /provider/coverage-zones/:id/location - Establecer coordenadas (lat/lng) de una zona
+    this.router.put('/provider/coverage-zones/:id/location', authenticateToken, async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user as AuthUser;
+        const zoneId = Number(req.params.id);
+        const { lat, lng } = req.body as any;
+
+        Logger.info(MODULE, 'PUT /provider/coverage-zones/:id/location', { userId: user.id, zoneId, body: req.body });
+
+        if (user.role !== 'provider') {
+          return res.status(403).json({ success: false, error: 'Solo providers pueden acceder' });
+        }
+
+        if (!zoneId || Number.isNaN(zoneId)) {
+          return res.status(400).json({ success: false, error: 'ID de zona inválido' });
+        }
+
+        const latNum = Number(lat);
+        const lngNum = Number(lng);
+        if (
+          Number.isNaN(latNum) || Number.isNaN(lngNum) ||
+          latNum < -90 || latNum > 90 ||
+          lngNum < -180 || lngNum > 180
+        ) {
+          return res.status(400).json({ success: false, error: 'lat/lng inválidos' });
+        }
+
+        const pool = DatabaseConnection.getPool();
+
+        // Verificar propiedad de la zona
+        const [rows] = await pool.query(
+          'SELECT id FROM provider_locations WHERE id = ? AND provider_id = ?',
+          [zoneId, user.id]
+        );
+        if ((rows as any[]).length === 0) {
+          return res.status(404).json({ success: false, error: 'Zona no encontrada' });
+        }
+
+        // Actualizar lat/lng de la zona
+        await pool.execute(
+          `UPDATE provider_locations
+           SET lat = ?, lng = ?
+           WHERE id = ? AND provider_id = ?`,
+          [latNum, lngNum, zoneId, user.id]
+        );
+
+        const [updated] = await pool.query(
+          'SELECT id, commune, region, lat, lng, is_primary, created_at FROM provider_locations WHERE id = ? AND provider_id = ?',
+          [zoneId, user.id]
+        );
+
+        return res.json({ success: true, zone: (updated as any[])[0] });
+      } catch (error: any) {
+        Logger.error(MODULE, 'Error updating coverage zone location', error);
+        return res.status(500).json({ success: false, error: 'Error al actualizar coordenadas de zona' });
+      }
+    });
+
     // PUT /provider/availability - Actualizar disponibilidad (online y compartir ubicación)
     this.router.put('/provider/availability', authenticateToken, async (req: Request, res: Response) => {
       try {
