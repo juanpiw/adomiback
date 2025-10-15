@@ -208,6 +208,59 @@ export class ProviderLocationsRoutes {
       }
     });
 
+    // PUT /provider/coverage-zones/:id/primary - Marcar una zona como principal
+    this.router.put('/provider/coverage-zones/:id/primary', authenticateToken, async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user as AuthUser;
+        const zoneId = Number(req.params.id);
+        Logger.info(MODULE, 'PUT /provider/coverage-zones/:id/primary', { userId: user.id, zoneId });
+
+        if (user.role !== 'provider') {
+          return res.status(403).json({ success: false, error: 'Solo providers pueden acceder' });
+        }
+
+        if (!zoneId || Number.isNaN(zoneId)) {
+          return res.status(400).json({ success: false, error: 'ID de zona inválido' });
+        }
+
+        const pool = DatabaseConnection.getPool();
+
+        // Verificar propiedad de la zona
+        const [rows] = await pool.query(
+          'SELECT id, commune FROM provider_locations WHERE id = ? AND provider_id = ?',
+          [zoneId, user.id]
+        );
+        const zone = (rows as any[])[0];
+        if (!zone) {
+          return res.status(404).json({ success: false, error: 'Zona no encontrada' });
+        }
+
+        // Desmarcar todas las zonas como principal
+        await pool.execute('UPDATE provider_locations SET is_primary = FALSE WHERE provider_id = ?', [user.id]);
+        // Marcar esta zona como principal
+        await pool.execute('UPDATE provider_locations SET is_primary = TRUE WHERE id = ? AND provider_id = ?', [zoneId, user.id]);
+
+        // Opcional: sincronizar main_commune en el perfil
+        if (zone?.commune) {
+          await pool.execute(
+            'UPDATE provider_profiles SET main_commune = ?, updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?',
+            [zone.commune, user.id]
+          );
+        }
+
+        // Devolver zonas actualizadas
+        const [zones] = await pool.query(
+          `SELECT id, commune, region, lat, lng, is_primary, created_at
+           FROM provider_locations WHERE provider_id = ? ORDER BY is_primary DESC, commune ASC`,
+          [user.id]
+        );
+        return res.json({ success: true, zones });
+      } catch (error: any) {
+        Logger.error(MODULE, 'Error setting primary zone', error);
+        return res.status(500).json({ success: false, error: 'Error al marcar zona principal' });
+      }
+    });
+
     // PUT /provider/availability - Actualizar disponibilidad (online y compartir ubicación)
     this.router.put('/provider/availability', authenticateToken, async (req: Request, res: Response) => {
       try {
