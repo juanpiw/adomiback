@@ -162,6 +162,7 @@ export class ClientSearchRoutes {
         const [rows] = await pool.execute(query, params);
         
         // Obtener servicios para cada profesional
+        const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || 'http://localhost:3000';
         const providers = await Promise.all((rows as any[]).map(async (provider) => {
           const [servicesRows] = await pool.execute(
             `SELECT 
@@ -191,7 +192,7 @@ export class ClientSearchRoutes {
             description: provider.description || 'Sin descripción disponible',
             rating: ratingRounded,
             review_count: provider.review_count,
-            avatar_url: provider.avatar_url ? `${process.env.API_BASE_URL || 'http://localhost:3000'}${provider.avatar_url}` : null,
+            avatar_url: provider.avatar_url ? `${publicBase}${provider.avatar_url}` : null,
             location: provider.location || provider.main_region,
             services_count: provider.services_count,
             experience_years: provider.years_experience,
@@ -203,7 +204,7 @@ export class ClientSearchRoutes {
               price: service.price,
               duration_minutes: service.duration_minutes,
               category: service.custom_category,
-              image_url: service.service_image_url ? `${process.env.API_BASE_URL || 'http://localhost:3000'}${service.service_image_url}` : null,
+              image_url: service.service_image_url ? `${publicBase}${service.service_image_url}` : null,
               is_featured: service.is_featured
             }))
           };

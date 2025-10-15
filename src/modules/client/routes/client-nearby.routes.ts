@@ -161,6 +161,7 @@ class ClientNearbySearchRoutes {
         Logger.debug(MODULE, 'Nearby final query', { query, params });
         const [rows] = await pool.query(query, params);
 
+        const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || 'http://localhost:3000';
         const providers = (rows as any[]).map(row => ({
           id: row.provider_id,
           name: row.provider_name,
@@ -168,7 +169,7 @@ class ClientNearbySearchRoutes {
           description: row.description || 'Sin descripción disponible',
           rating: Math.round(Number(row.rating || 0) * 10) / 10,
           reviews: Number(row.review_count || 0),
-          avatar_url: row.avatar_url ? `${process.env.API_BASE_URL || 'http://localhost:3000'}${row.avatar_url}` : null,
+          avatar_url: row.avatar_url ? `${publicBase}${row.avatar_url}` : null,
           location: row.location || row.main_region,
           is_online: !!row.is_online,
           distance_km: Math.round(Number(row.distance_km || 0) * 10) / 10

@@ -108,6 +108,7 @@ export class ClientAvailabilitySearchRoutes {
 
         const [rows] = await pool.query(query, params);
 
+        const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || 'http://localhost:3000';
         const providers = (rows as any[]).map(p => ({
           id: p.provider_id,
           name: p.provider_name,
@@ -115,7 +116,7 @@ export class ClientAvailabilitySearchRoutes {
           description: p.description || 'Sin descripción disponible',
           rating: Number(p.rating || 0),
           review_count: Number(p.review_count || 0),
-          avatar_url: p.avatar_url ? `${process.env.API_BASE_URL || 'http://localhost:3000'}${p.avatar_url}` : null,
+          avatar_url: p.avatar_url ? `${publicBase}${p.avatar_url}` : null,
           location: p.location || p.main_region,
           services_count: undefined,
           experience_years: undefined,
