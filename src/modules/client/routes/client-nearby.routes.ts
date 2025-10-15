@@ -56,6 +56,8 @@ class ClientNearbySearchRoutes {
             pp.main_region,
             pp.main_commune AS location,
             pp.is_online,
+            pl.lat AS lat,
+            pl.lng AS lng,
             COALESCE(AVG(r.rating), 0) AS rating,
             COUNT(DISTINCT r.id) AS review_count,
             COUNT(DISTINCT ps.id) AS services_count,
@@ -100,7 +102,7 @@ class ClientNearbySearchRoutes {
         }
 
         query += `
-          GROUP BY u.id, u.name, pp.professional_title, pp.bio, pp.profile_photo_url, pp.main_region, pp.main_commune, pp.is_online
+          GROUP BY u.id, u.name, pp.professional_title, pp.bio, pp.profile_photo_url, pp.main_region, pp.main_commune, pp.is_online, pl.lat, pl.lng
           HAVING distance_km <= ? AND services_count > 0
         `;
         params.push(radiusNum);
@@ -172,7 +174,9 @@ class ClientNearbySearchRoutes {
           avatar_url: row.avatar_url ? `${publicBase}${row.avatar_url}` : null,
           location: row.location || row.main_region,
           is_online: !!row.is_online,
-          distance_km: Math.round(Number(row.distance_km || 0) * 10) / 10
+          distance_km: Math.round(Number(row.distance_km || 0) * 10) / 10,
+          lat: row.lat !== null && row.lat !== undefined ? Number(row.lat) : null,
+          lng: row.lng !== null && row.lng !== undefined ? Number(row.lng) : null
         }));
 
         return res.json({
