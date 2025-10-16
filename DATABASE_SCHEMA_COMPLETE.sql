@@ -1061,6 +1061,7 @@ CREATE TABLE conversations (
   id INT AUTO_INCREMENT PRIMARY KEY,
   provider_id INT NOT NULL,
   client_id INT NOT NULL,
+  last_message_id INT NULL,
   last_message_at TIMESTAMP NULL,
   last_message_preview TEXT,
   provider_unread_count INT DEFAULT 0,
@@ -1073,6 +1074,7 @@ CREATE TABLE conversations (
   FOREIGN KEY (client_id) REFERENCES users(id) ON DELETE CASCADE,
   INDEX idx_provider (provider_id),
   INDEX idx_client (client_id),
+  INDEX idx_last_message_id (last_message_id),
   INDEX idx_last_message (last_message_at),
   UNIQUE KEY unique_conversation (provider_id, client_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -1082,6 +1084,7 @@ CREATE TABLE messages (
   id INT AUTO_INCREMENT PRIMARY KEY,
   conversation_id INT NOT NULL,
   sender_id INT NOT NULL,
+  receiver_id INT NOT NULL,
   content TEXT NOT NULL,
   is_read BOOLEAN DEFAULT FALSE,
   read_at TIMESTAMP NULL,
@@ -1091,11 +1094,19 @@ CREATE TABLE messages (
   
   FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
   FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE,
   INDEX idx_conversation (conversation_id),
   INDEX idx_sender (sender_id),
   INDEX idx_created (created_at),
-  INDEX idx_read (is_read)
+  INDEX idx_read (is_read),
+  INDEX idx_conversation_created_at (conversation_id, created_at),
+  INDEX idx_receiver_unread (receiver_id, read_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Agregar FK diferida para last_message_id (requiere que 'messages' exista)
+ALTER TABLE conversations
+  ADD CONSTRAINT fk_conv_last_msg
+  FOREIGN KEY (last_message_id) REFERENCES messages(id) ON DELETE SET NULL;
 
 -- ============================================
 -- NOTIFICACIONES

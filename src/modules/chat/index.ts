@@ -61,11 +61,17 @@ export function setupChatModule(app: any) {
       const [rows] = await pool.query(
         `SELECT c.*, 
                 (SELECT content FROM messages m WHERE m.id = c.last_message_id) AS last_message_preview,
-                (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.receiver_id = ? AND m.read_at IS NULL) AS unread_count
+                (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.receiver_id = ? AND m.read_at IS NULL) AS unread_count,
+                (SELECT name FROM users u1 WHERE u1.id = c.client_id) AS client_name,
+                (SELECT name FROM users u2 WHERE u2.id = c.provider_id) AS provider_name,
+                CASE WHEN c.client_id = ? 
+                     THEN (SELECT name FROM users ux WHERE ux.id = c.provider_id)
+                     ELSE (SELECT name FROM users uy WHERE uy.id = c.client_id)
+                END AS contact_name
          FROM conversations c
          WHERE c.client_id = ? OR c.provider_id = ?
          ORDER BY (c.last_message_at IS NULL), c.last_message_at DESC`,
-        [userId, userId, userId]
+        [userId, userId, userId, userId]
       );
       Logger.info(MODULE, 'Conversations listed', { count: (rows as any[])?.length || 0 });
       return res.json({ success: true, conversations: rows });
