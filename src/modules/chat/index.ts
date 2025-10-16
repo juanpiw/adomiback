@@ -64,7 +64,7 @@ export function setupChatModule(app: any) {
                 (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.receiver_id = ? AND m.read_at IS NULL) AS unread_count
          FROM conversations c
          WHERE c.client_id = ? OR c.provider_id = ?
-         ORDER BY c.last_message_at DESC NULLS LAST`,
+         ORDER BY (c.last_message_at IS NULL), c.last_message_at DESC`,
         [userId, userId, userId]
       );
       Logger.info(MODULE, 'Conversations listed', { count: (rows as any[])?.length || 0 });
