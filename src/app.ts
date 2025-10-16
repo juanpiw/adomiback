@@ -11,6 +11,7 @@ import { Logger } from './shared/utils/logger.util';
 import { setupClientModule } from './modules/client';
 import { setupProviderModule } from './modules/provider';
 import { setupSubscriptionsModule } from './modules/subscriptions';
+import { setupChatModule } from './modules/chat';
 
 export function createApp(): Express {
   const app = express();
@@ -47,6 +48,7 @@ export function createApp(): Express {
   setupClientModule(app);
   setupProviderModule(app);
   setupSubscriptionsModule(app, false); // false = rutas normales (sin webhook)
+  setupChatModule(app);
   
   Logger.info('APP', 'All modules loaded successfully');
 

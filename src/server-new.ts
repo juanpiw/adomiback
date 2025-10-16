@@ -10,6 +10,7 @@ import https from 'https';
 import http from 'http';
 import fs from 'fs';
 import { createApp } from './app';
+import { Server as SocketIOServer } from 'socket.io';
 import DatabaseConnection from './shared/database/connection';
 import { Logger } from './shared/utils/logger.util';
 
@@ -94,6 +95,24 @@ async function startServer() {
         
         // Crear servidor HTTPS
         const serverHttps = https.createServer(httpsServerOptions, app);
+        // Socket.io over HTTPS
+        const ioHttps = new SocketIOServer(serverHttps, {
+          path: '/socket.io',
+          cors: {
+            origin: '*',
+            methods: ['GET', 'POST']
+          }
+        });
+        ioHttps.on('connection', (socket) => {
+          Logger.info('SOCKET', `Client connected (HTTPS): ${socket.id}`);
+          socket.on('join', (payload: any) => {
+            const room = payload?.conversationId ? `conversation:${payload.conversationId}` : null;
+            if (room) socket.join(room);
+          });
+          socket.on('disconnect', () => {
+            Logger.info('SOCKET', `Client disconnected (HTTPS): ${socket.id}`);
+          });
+        });
         
         // Escuchar en puerto HTTPS
         serverHttps.listen(HTTPS_PORT, BIND_IP, () => {
@@ -106,6 +125,24 @@ async function startServer() {
         if (Number.isFinite(HTTP_PORT)) {
           Logger.info('SERVER', `Starting HTTP server on port ${HTTP_PORT}...`);
           const serverHttp = http.createServer(app);
+          // Socket.io over HTTP (dev/redirect)
+          const ioHttp = new SocketIOServer(serverHttp, {
+            path: '/socket.io',
+            cors: {
+              origin: '*',
+              methods: ['GET', 'POST']
+            }
+          });
+          ioHttp.on('connection', (socket) => {
+            Logger.info('SOCKET', `Client connected (HTTP): ${socket.id}`);
+            socket.on('join', (payload: any) => {
+              const room = payload?.conversationId ? `conversation:${payload.conversationId}` : null;
+              if (room) socket.join(room);
+            });
+            socket.on('disconnect', () => {
+              Logger.info('SOCKET', `Client disconnected (HTTP): ${socket.id}`);
+            });
+          });
           serverHttp.listen(HTTP_PORT, BIND_IP, () => {
             logEndpoints('http', HTTP_PORT!);
             Logger.info('SERVER', '✅ HTTP Server started successfully');
@@ -133,9 +170,24 @@ async function startServer() {
         'CERT_PATH exists': !!CERT_PATH
       });
       
-      app.listen(PORT, () => {
+      const serverHttp = app.listen(PORT, () => {
         logEndpoints('http', PORT);
         console.log('\n🚀 Server ready!\n');
+      });
+      // Socket.io (dev HTTP only)
+      const ioHttp = new SocketIOServer(serverHttp, {
+        path: '/socket.io',
+        cors: { origin: '*', methods: ['GET', 'POST'] }
+      });
+      ioHttp.on('connection', (socket) => {
+        Logger.info('SOCKET', `Client connected (HTTP-dev): ${socket.id}`);
+        socket.on('join', (payload: any) => {
+          const room = payload?.conversationId ? `conversation:${payload.conversationId}` : null;
+          if (room) socket.join(room);
+        });
+        socket.on('disconnect', () => {
+          Logger.info('SOCKET', `Client disconnected (HTTP-dev): ${socket.id}`);
+        });
       });
     }
 
