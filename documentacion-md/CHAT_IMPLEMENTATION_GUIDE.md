@@ -4,15 +4,14 @@ Objetivo: Implementar un sistema de chat 1-a-1 en tiempo real entre cliente y pr
 
 ## 1) Estado actual
 
-- Frontend UI:
-  - Cliente: `app/client/pages/conversaciones` usando `ChatContainerComponent` para listar y mostrar mensajes.
-  - Proveedor: `app/dash/pages/mensajes` con la misma base de componentes.
-  - Acciones emitidas: `sendMessage`, `selectConversation`, `searchConversations`, etc. Falta wiring a datos reales.
+- Frontend UI (integrado con datos reales):
+  - Cliente: `app/client/pages/conversaciones` conectado a `ChatService` (REST + Socket). Carga conversaciones/mensajes, envía y recibe `message:new`. Se une a salas con `join:conversation`.
+  - Proveedor: `app/dash/pages/mensajes` conectado a `ChatService` (REST + Socket) con el mismo flujo.
 
-- Backend:
-  - No hay endpoints de chat aún. Existe `backend/src/modules/chat/index.ts` como esqueleto.
-  - No hay WebSocket/socket.io inicializado.
-  - Roadmap y documentación señalan endpoints y tablas requeridas.
+- Backend (implementado):
+  - Endpoints REST activos en `backend/src/modules/chat/index.ts`: crear/obtener conversación, listar del usuario, listar mensajes, enviar mensaje (emite `message:new`), marcar leído.
+  - Socket.io inicializado en `backend/src/server-new.ts` y `src/shared/realtime/socket.ts` con auth JWT, path `/socket.io`, rooms `conversation:{id}`, evento `join:conversation`.
+  - Migración creada: `backend/migrations/add_conversations_and_messages.sql`.
 
 ## 2) Requisitos funcionales
 
