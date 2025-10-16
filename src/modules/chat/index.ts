@@ -7,6 +7,7 @@ import { Router, Request, Response } from 'express';
 import { authenticateToken } from '../../shared/middleware/auth.middleware';
 import DatabaseConnection from '../../shared/database/connection';
 import { Logger } from '../../shared/utils/logger.util';
+import { emitToConversation } from '../../shared/realtime/socket';
 
 const MODULE = 'CHAT';
 
@@ -122,6 +123,8 @@ export function setupChatModule(app: any) {
         'UPDATE conversations SET last_message_id = ?, last_message_at = ? WHERE id = ?',
         [lastMsg.id, lastMsg.created_at, conversation_id]
       );
+      // Emitir en tiempo real a la sala de la conversación
+      try { emitToConversation(conversation_id, 'message:new', lastMsg); } catch {}
       return res.status(201).json({ success: true, message: lastMsg });
     } catch (error: any) {
       Logger.error(MODULE, 'Error sending message', error);

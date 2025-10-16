@@ -114,20 +114,38 @@ curl -X PATCH "$API_BASE/messages/55/read" -H "Authorization: Bearer $TOKEN"
 
 ## 5) Tiempo real (socket.io)
 
-Inicialización:
-- Agregar socket.io en `server-new.ts` o un módulo `lib/websocket.ts`:
-  - Crear `const io = new Server(httpServer, { path: '/socket.io', cors: ... })`
-  - Middleware de auth: validar JWT en `auth` o en evento `connection` (token en query o header)
+Inicialización (implementado):
+- `backend/src/server-new.ts` inicializa socket.io tanto en HTTP (dev) como HTTPS (prod), con:
+  - path `/socket.io`
+  - CORS abierto (ajustar en prod a dominios permitidos)
+  - Eventos básicos de conexión/desconexión
 
-Eventos propuestos:
+Eventos:
 - `connection` / `disconnect`
-- `join`: { conversationId } → unir sala `conversation:<id>`
+- `join`: { conversationId } → unir sala `conversation:<id>` (ya implementado en server)
 - `message:new`: emitido por server al crear un mensaje → a sala de la conversación
 - `message:read`: notificar lectura
 - `typing:start` / `typing:stop` (opcional)
 
 Seguridad:
 - Validar que el usuario que hace `join` pertenece a la conversación
+
+### 5.1) Ejemplo cliente (socket.io-client)
+
+```ts
+import { io } from 'socket.io-client';
+
+const socket = io(API_BASE, { path: '/socket.io', transports: ['websocket'] });
+
+socket.on('connect', () => {
+  console.log('connected', socket.id);
+  socket.emit('join', { conversationId: 1 });
+});
+
+socket.on('message:new', (msg) => {
+  // actualizar UI con mensaje nuevo
+});
+```
 
 ## 6) Frontend (servicio de chat)
 

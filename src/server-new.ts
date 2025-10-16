@@ -11,6 +11,7 @@ import http from 'http';
 import fs from 'fs';
 import { createApp } from './app';
 import { Server as SocketIOServer } from 'socket.io';
+import { setSocketServer } from './shared/realtime/socket';
 import DatabaseConnection from './shared/database/connection';
 import { Logger } from './shared/utils/logger.util';
 
@@ -113,6 +114,7 @@ async function startServer() {
             Logger.info('SOCKET', `Client disconnected (HTTPS): ${socket.id}`);
           });
         });
+        setSocketServer(ioHttps);
         
         // Escuchar en puerto HTTPS
         serverHttps.listen(HTTPS_PORT, BIND_IP, () => {
@@ -143,6 +145,7 @@ async function startServer() {
               Logger.info('SOCKET', `Client disconnected (HTTP): ${socket.id}`);
             });
           });
+          setSocketServer(ioHttp);
           serverHttp.listen(HTTP_PORT, BIND_IP, () => {
             logEndpoints('http', HTTP_PORT!);
             Logger.info('SERVER', '✅ HTTP Server started successfully');
@@ -189,6 +192,7 @@ async function startServer() {
           Logger.info('SOCKET', `Client disconnected (HTTP-dev): ${socket.id}`);
         });
       });
+      setSocketServer(ioHttp);
     }
 
   } catch (error: any) {
