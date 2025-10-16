@@ -135,7 +135,10 @@ export function setupChatModule(app: any) {
       );
       Logger.info(MODULE, 'Message inserted', { conversation_id, sender_id: user.id, receiver_id, insertId: (insertRes as any)?.insertId });
       // actualizar last_message_* en conversación
-      const [last] = await pool.query('SELECT id, created_at, content FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT 1', [conversation_id]);
+      const [last] = await pool.query(
+        'SELECT id, conversation_id, sender_id, receiver_id, content, created_at, read_at FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT 1',
+        [conversation_id]
+      );
       const lastMsg = (last as any[])[0];
       await pool.execute(
         'UPDATE conversations SET last_message_id = ?, last_message_at = ? WHERE id = ?',
