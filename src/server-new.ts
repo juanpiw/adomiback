@@ -108,7 +108,17 @@ async function startServer() {
           Logger.info('SOCKET', `Client connected (HTTPS): ${socket.id}`);
           socket.on('join', (payload: any) => {
             const room = payload?.conversationId ? `conversation:${payload.conversationId}` : null;
-            if (room) socket.join(room);
+            if (room) {
+              socket.join(room);
+              Logger.info('SOCKET', `Socket ${socket.id} joined room ${room}`);
+            }
+          });
+          socket.on('join:conversation', (conversationId: number | string) => {
+            const room = conversationId ? `conversation:${conversationId}` : null;
+            if (room) {
+              socket.join(room);
+              Logger.info('SOCKET', `Socket ${socket.id} joined room ${room}`);
+            }
           });
           socket.on('disconnect', () => {
             Logger.info('SOCKET', `Client disconnected (HTTPS): ${socket.id}`);
@@ -139,7 +149,17 @@ async function startServer() {
             Logger.info('SOCKET', `Client connected (HTTP): ${socket.id}`);
             socket.on('join', (payload: any) => {
               const room = payload?.conversationId ? `conversation:${payload.conversationId}` : null;
-              if (room) socket.join(room);
+              if (room) {
+                socket.join(room);
+                Logger.info('SOCKET', `Socket ${socket.id} joined room ${room}`);
+              }
+            });
+            socket.on('join:conversation', (conversationId: number | string) => {
+              const room = conversationId ? `conversation:${conversationId}` : null;
+              if (room) {
+                socket.join(room);
+                Logger.info('SOCKET', `Socket ${socket.id} joined room ${room}`);
+              }
             });
             socket.on('disconnect', () => {
               Logger.info('SOCKET', `Client disconnected (HTTP): ${socket.id}`);
@@ -186,7 +206,17 @@ async function startServer() {
         Logger.info('SOCKET', `Client connected (HTTP-dev): ${socket.id}`);
         socket.on('join', (payload: any) => {
           const room = payload?.conversationId ? `conversation:${payload.conversationId}` : null;
-          if (room) socket.join(room);
+          if (room) {
+            socket.join(room);
+            Logger.info('SOCKET', `Socket ${socket.id} joined room ${room}`);
+          }
+        });
+        socket.on('join:conversation', (conversationId: number | string) => {
+          const room = conversationId ? `conversation:${conversationId}` : null;
+          if (room) {
+            socket.join(room);
+            Logger.info('SOCKET', `Socket ${socket.id} joined room ${room}`);
+          }
         });
         socket.on('disconnect', () => {
           Logger.info('SOCKET', `Client disconnected (HTTP-dev): ${socket.id}`);
