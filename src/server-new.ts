@@ -106,6 +106,9 @@ async function startServer() {
         });
         ioHttps.on('connection', (socket) => {
           Logger.info('SOCKET', `Client connected (HTTPS): ${socket.id}`);
+          socket.on('error', (err) => {
+            Logger.warn('SOCKET', `Socket error (HTTPS) ${socket.id}`, err as any);
+          });
           socket.on('join', (payload: any) => {
             const room = payload?.conversationId ? `conversation:${payload.conversationId}` : null;
             if (room) {
@@ -147,6 +150,9 @@ async function startServer() {
           });
           ioHttp.on('connection', (socket) => {
             Logger.info('SOCKET', `Client connected (HTTP): ${socket.id}`);
+            socket.on('error', (err) => {
+              Logger.warn('SOCKET', `Socket error (HTTP) ${socket.id}`, err as any);
+            });
             socket.on('join', (payload: any) => {
               const room = payload?.conversationId ? `conversation:${payload.conversationId}` : null;
               if (room) {
@@ -204,6 +210,9 @@ async function startServer() {
       });
       ioHttp.on('connection', (socket) => {
         Logger.info('SOCKET', `Client connected (HTTP-dev): ${socket.id}`);
+        socket.on('error', (err) => {
+          Logger.warn('SOCKET', `Socket error (HTTP-dev) ${socket.id}`, err as any);
+        });
         socket.on('join', (payload: any) => {
           const room = payload?.conversationId ? `conversation:${payload.conversationId}` : null;
           if (room) {
