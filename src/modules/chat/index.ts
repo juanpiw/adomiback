@@ -180,6 +180,47 @@ export function setupChatModule(app: any) {
     }
   });
 
+  // DELETE /conversations/:id - borrar conversación (hard delete, cascada elimina mensajes)
+  router.delete('/conversations/:id', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ success: false, error: 'conversationId inválido' });
+      const pool = DatabaseConnection.getPool();
+      // Validar pertenencia
+      const [rows] = await pool.query('SELECT id, client_id, provider_id FROM conversations WHERE id = ? LIMIT 1', [id]);
+      if ((rows as any[]).length === 0) return res.status(404).json({ success: false, error: 'Conversación no encontrada' });
+      const conv = (rows as any[])[0];
+      if (conv.client_id !== user.id && conv.provider_id !== user.id) {
+        return res.status(403).json({ success: false, error: 'No autorizado' });
+      }
+      await pool.execute('DELETE FROM conversations WHERE id = ?', [id]);
+      Logger.info(MODULE, 'Conversation deleted', { id, byUserId: user.id });
+      return res.json({ success: true });
+    } catch (error: any) {
+      Logger.error(MODULE, 'Error deleting conversation', error);
+      return res.status(500).json({ success: false, error: 'Error al borrar conversación' });
+    }
+  });
+
+  // GET /messages/unread/count - total de mensajes no leídos para el usuario autenticado
+  router.get('/messages/unread/count', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const pool = DatabaseConnection.getPool();
+      const [rows] = await pool.query(
+        'SELECT COUNT(*) AS cnt FROM messages WHERE receiver_id = ? AND read_at IS NULL',
+        [user.id]
+      );
+      const cnt = (rows as any[])[0]?.cnt || 0;
+      Logger.info(MODULE, 'Unread messages count', { userId: user.id, count: cnt });
+      return res.json({ success: true, count: Number(cnt) });
+    } catch (error: any) {
+      Logger.error(MODULE, 'Error getting unread count', error);
+      return res.status(500).json({ success: false, error: 'Error al obtener no leídos' });
+    }
+  });
+
   app.use('/', router);
   Logger.info(MODULE, 'Chat routes mounted');
 }
