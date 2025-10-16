@@ -146,7 +146,12 @@ export function setupChatModule(app: any) {
       );
       Logger.info(MODULE, 'Conversation updated with last message', { conversation_id, last_message_id: lastMsg.id });
       // Emitir en tiempo real a la sala de la conversación
-      try { emitToConversation(conversation_id, 'message:new', lastMsg); } catch {}
+      try {
+        Logger.info(MODULE, 'Emitting message:new', { conversation_id, messageId: lastMsg.id, sender_id: user.id, receiver_id });
+        emitToConversation(conversation_id, 'message:new', lastMsg);
+      } catch (e) {
+        Logger.warn(MODULE, 'Emit failed', e as any);
+      }
       return res.status(201).json({ success: true, message: lastMsg });
     } catch (error: any) {
       Logger.error(MODULE, 'Error sending message', error);
