@@ -7,6 +7,7 @@ import { Express, Router, Request, Response } from 'express';
 import DatabaseConnection from '../../shared/database/connection';
 import { authenticateToken } from '../../shared/middleware/auth.middleware';
 import { Logger } from '../../shared/utils/logger.util';
+import { emitToUser } from '../../shared/realtime/socket';
 
 const MODULE = 'APPOINTMENTS';
 
@@ -46,8 +47,12 @@ function buildRouter(): Router {
       );
       const id = (ins as any).insertId;
       const [row] = await pool.query('SELECT * FROM appointments WHERE id = ?', [id]);
+      const appointment = (row as any[])[0];
       Logger.info(MODULE, 'Appointment created', { id, provider_id, client_id });
-      return res.status(201).json({ success: true, appointment: (row as any[])[0] });
+      // Emitir en tiempo real a provider y client
+      try { emitToUser(provider_id, 'appointment:created', appointment); } catch {}
+      try { emitToUser(client_id, 'appointment:created', appointment); } catch {}
+      return res.status(201).json({ success: true, appointment });
     } catch (err) {
       Logger.error(MODULE, 'Error creating appointment', err as any);
       return res.status(500).json({ success: false, error: 'Error al crear cita' });
@@ -130,7 +135,11 @@ function buildRouter(): Router {
         [status, date, start_time, end_time, notes, id, user.id]
       );
       const [row] = await pool.query('SELECT * FROM appointments WHERE id = ?', [id]);
-      return res.json({ success: true, appointment: (row as any[])[0] });
+      const appointment = (row as any[])[0];
+      // Emitir actualización
+      try { emitToUser(appointment.provider_id, 'appointment:updated', appointment); } catch {}
+      try { emitToUser(appointment.client_id, 'appointment:updated', appointment); } catch {}
+      return res.json({ success: true, appointment });
     } catch (err) {
       Logger.error(MODULE, 'Error updating appointment', err as any);
       return res.status(500).json({ success: false, error: 'Error al actualizar cita' });
@@ -144,9 +153,13 @@ function buildRouter(): Router {
       const id = Number(req.params.id);
       if (!Number.isFinite(id)) return res.status(400).json({ success: false, error: 'id inválido' });
       const pool = DatabaseConnection.getPool();
-      const [own] = await pool.query('SELECT id FROM appointments WHERE id = ? AND provider_id = ? LIMIT 1', [id, user.id]);
+      const [own] = await pool.query('SELECT id, provider_id, client_id FROM appointments WHERE id = ? AND provider_id = ? LIMIT 1', [id, user.id]);
       if ((own as any[]).length === 0) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      const appt = (own as any[])[0];
       await pool.execute('DELETE FROM appointments WHERE id = ? AND provider_id = ?', [id, user.id]);
+      // Emitir eliminación
+      try { emitToUser(appt.provider_id, 'appointment:deleted', { id }); } catch {}
+      try { emitToUser(appt.client_id, 'appointment:deleted', { id }); } catch {}
       return res.json({ success: true });
     } catch (err) {
       Logger.error(MODULE, 'Error deleting appointment', err as any);
