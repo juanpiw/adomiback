@@ -204,6 +204,64 @@ function buildRouter(): Router {
     }
   });
 
+  // GET /client/appointments - listar citas del cliente autenticado (próximas/pasadas/canceladas)
+  router.get('/client/appointments', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const clientId = Number(user.id);
+      if (!clientId) return res.status(401).json({ success: false, error: 'No autorizado' });
+      const pool = DatabaseConnection.getPool();
+      const [rows] = await pool.query(
+        `SELECT a.*, 
+                (SELECT name FROM users WHERE id = a.provider_id) AS provider_name,
+                (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name
+         FROM appointments a
+         WHERE a.client_id = ?
+         ORDER BY a.\`date\` ASC, a.\`start_time\` ASC`,
+        [clientId]
+      );
+      return res.json({ success: true, appointments: rows });
+    } catch (err) {
+      Logger.error(MODULE, 'Error listing client appointments', err as any);
+      return res.status(500).json({ success: false, error: 'Error al listar citas del cliente' });
+    }
+  });
+
+  // PATCH /appointments/:id/status - actualizar sólo el estado
+  router.patch('/appointments/:id/status', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const id = Number(req.params.id);
+      const { status } = req.body || {};
+      if (!id || !status) return res.status(400).json({ success: false, error: 'id y status son requeridos' });
+      if (!['scheduled','confirmed','completed','cancelled'].includes(status)) {
+        return res.status(400).json({ success: false, error: 'status inválido' });
+      }
+      const pool = DatabaseConnection.getPool();
+      // Asegurar autorización: proveedor dueño o cliente dueño puede cambiar a cancelada; confirmado/completed solo provider
+      const [rows] = await pool.query('SELECT * FROM appointments WHERE id = ? LIMIT 1', [id]);
+      if ((rows as any[]).length === 0) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      const appt = (rows as any[])[0];
+      const isProvider = Number(appt.provider_id) === Number(user.id);
+      const isClient = Number(appt.client_id) === Number(user.id);
+      if (['confirmed','completed'].includes(status) && !isProvider) {
+        return res.status(403).json({ success: false, error: 'No autorizado para cambiar a ese estado' });
+      }
+      if (status === 'cancelled' && !(isProvider || isClient)) {
+        return res.status(403).json({ success: false, error: 'No autorizado' });
+      }
+      await pool.execute('UPDATE appointments SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [status, id]);
+      const [after] = await pool.query('SELECT * FROM appointments WHERE id = ?', [id]);
+      const updated = (after as any[])[0];
+      try { emitToUser(updated.provider_id, 'appointment:updated', updated); } catch {}
+      try { emitToUser(updated.client_id, 'appointment:updated', updated); } catch {}
+      return res.json({ success: true, appointment: updated });
+    } catch (err) {
+      Logger.error(MODULE, 'Error updating appointment status', err as any);
+      return res.status(500).json({ success: false, error: 'Error al actualizar estado' });
+    }
+  });
+
   function addMinutes(hhmm: string, minutes: number): string {
     const [hh, mm] = hhmm.split(':').map(Number);
     const d = new Date(1970, 0, 1, hh, mm);
