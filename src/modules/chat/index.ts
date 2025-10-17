@@ -7,7 +7,7 @@ import { Router, Request, Response } from 'express';
 import { authenticateToken } from '../../shared/middleware/auth.middleware';
 import DatabaseConnection from '../../shared/database/connection';
 import { Logger } from '../../shared/utils/logger.util';
-import { emitToConversation } from '../../shared/realtime/socket';
+import { emitToConversation, emitToUser } from '../../shared/realtime/socket';
 
 const MODULE = 'CHAT';
 
@@ -149,6 +149,8 @@ export function setupChatModule(app: any) {
       try {
         Logger.info(MODULE, 'Emitting message:new', { conversation_id, messageId: lastMsg.id, sender_id: user.id, receiver_id });
         emitToConversation(conversation_id, 'message:new', lastMsg);
+        // Notificar al receptor por sala de usuario (para badges globales)
+        try { emitToUser(receiver_id, 'message:new', lastMsg); } catch {}
       } catch (e) {
         Logger.warn(MODULE, 'Emit failed', e as any);
       }

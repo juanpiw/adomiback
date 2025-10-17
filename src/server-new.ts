@@ -106,6 +106,13 @@ async function startServer() {
         });
         ioHttps.on('connection', (socket) => {
           Logger.info('SOCKET', `Client connected (HTTPS): ${socket.id}`);
+          socket.on('join:user', (userId: number | string) => {
+            const room = userId ? `user:${userId}` : null;
+            if (room) {
+              socket.join(room);
+              Logger.info('SOCKET', `Socket ${socket.id} joined room ${room}`);
+            }
+          });
           socket.on('error', (err) => {
             Logger.warn('SOCKET', `Socket error (HTTPS) ${socket.id}`, err as any);
           });
@@ -150,6 +157,13 @@ async function startServer() {
           });
           ioHttp.on('connection', (socket) => {
             Logger.info('SOCKET', `Client connected (HTTP): ${socket.id}`);
+            socket.on('join:user', (userId: number | string) => {
+              const room = userId ? `user:${userId}` : null;
+              if (room) {
+                socket.join(room);
+                Logger.info('SOCKET', `Socket ${socket.id} joined room ${room}`);
+              }
+            });
             socket.on('error', (err) => {
               Logger.warn('SOCKET', `Socket error (HTTP) ${socket.id}`, err as any);
             });
@@ -210,6 +224,13 @@ async function startServer() {
       });
       ioHttp.on('connection', (socket) => {
         Logger.info('SOCKET', `Client connected (HTTP-dev): ${socket.id}`);
+        socket.on('join:user', (userId: number | string) => {
+          const room = userId ? `user:${userId}` : null;
+          if (room) {
+            socket.join(room);
+            Logger.info('SOCKET', `Socket ${socket.id} joined room ${room}`);
+          }
+        });
         socket.on('error', (err) => {
           Logger.warn('SOCKET', `Socket error (HTTP-dev) ${socket.id}`, err as any);
         });

@@ -16,4 +16,10 @@ export function emitToConversation(conversationId: number | string, event: strin
   io.to(room).emit(event, payload);
 }
 
+export function emitToUser(userId: number | string, event: string, payload: any) {
+  if (!io) return;
+  const room = `user:${userId}`;
+  io.to(room).emit(event, payload);
+}
+
 
