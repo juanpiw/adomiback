@@ -13,6 +13,7 @@ import { setupProviderModule } from './modules/provider';
 import { setupSubscriptionsModule } from './modules/subscriptions';
 import { setupChatModule } from './modules/chat';
 import { setupAppointmentsModule } from './modules/appointments';
+import { setupPaymentsModule } from './modules/payments';
 
 export function createApp(): Express {
   const app = express();
@@ -51,6 +52,7 @@ export function createApp(): Express {
   setupSubscriptionsModule(app, false); // false = rutas normales (sin webhook)
   setupChatModule(app);
   setupAppointmentsModule(app);
+  setupPaymentsModule(app);
   
   Logger.info('APP', 'All modules loaded successfully');
 

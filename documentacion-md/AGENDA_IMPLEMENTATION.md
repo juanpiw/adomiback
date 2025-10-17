@@ -121,27 +121,26 @@ Edge cases: solapamientos parciales, márgenes de setup/cleanup (si en futuro se
 ## Tiempo real (Socket)
 
 - Rooms: `user:{provider_id}` y `user:{client_id}`.
-- Eventos:
-  - `appointment:new` (cuando se crea una cita)
+- Eventos (implementados):
+  - `appointment:created` (cuando se crea una cita)
   - `appointment:updated` (cambios de estado/horario)
-  - `appointment:cancelled`
+  - `appointment:deleted` (cancelación/eliminación)
 - Frontend:
-  - Cliente: incrementar badge “Reservas” opcional y mostrar toast.
-  - Proveedor: refrescar lista del día/mes si corresponde o actualizar en memoria.
+  - Cliente: (pendiente) badge/toast opcional.
+  - Proveedor: refrescar lista del día/mes en vivo (implementado).
 
 ## Integración Frontend
 
 ### Cliente – Booking Panel
-- Al seleccionar servicio/fecha: llamar `GET /availability/time-slots` para poblar horarios.
-- Al confirmar: `POST /appointments`; mostrar toast y opcional navegar a “Mis Reservas”.
-- Fallback: si no hay slots, mostrar explicación (no disponibilidad) y CTA para enviar mensaje.
+- Al seleccionar servicio/fecha: llamar `GET /availability/time-slots` para poblar horarios. (implementado)
+- Al confirmar: `POST /appointments`; modal con loading/errores; inserta snapshot de `price`. (implementado)
+- Fallback: si no hay slots, `<input type="time">` manual. (implementado)
 
 ### Proveedor – Agenda
 - `AgendaComponent` (contenedor):
-  - Mes: `GET /appointments?month=YYYY-MM` → mapear a `CalendarEvent` (type y color).
-  - Día: `GET /appointments/by-day?date=YYYY-MM-DD` → lista en `DayDetail`.
-  - Crear desde modal → `POST /appointments` y refrescar.
-  - Cambios de estado/eliminación → `PUT/DELETE` y refrescar.
+  - Mes: `GET /appointments?month=YYYY-MM` → mapear a `CalendarEvent`. (implementado)
+  - Día: `GET /appointments/by-day?date=YYYY-MM-DD` → lista en `DayDetail` (incluye `client_name`). (implementado)
+  - Acciones: confirmar (PATCH status) y escucha realtime para actualizar en memoria. (parcial: endpoint listo; UI pendiente)
 
 ## Seguridad y permisos
 - JWT obligatorio.
@@ -187,45 +186,39 @@ Frontend: mapear a toasts claros; en 409 sugerir seleccionar otro horario.
 ## Implementación en curso (estado actual)
 
 - Backend
-  - appointments: módulo creado como scaffold (`backend/src/modules/appointments/index.ts`) a la espera de rutas.
-  - provider-services: endpoints completos (GET/POST/PUT/DELETE) para duración y precio de servicios (base del cálculo de slots).
-  - Realtime: rooms por usuario ya operativas (implementadas para chat) y reutilizables para eventos de citas.
+  - Rutas de citas implementadas: `POST /appointments`, `GET /appointments`, `GET /appointments/by-day`, `PATCH /appointments/:id/status`, `DELETE /appointments/:id`.
+  - Rutas cliente: `GET /client/appointments` (lista citas del cliente autenticado).
+  - Time-slots: `GET /availability/time-slots` (placeholder 09:00–18:00, resta citas del día, usa duración del servicio).
+  - Respuestas enriquecidas: `client_name`/`provider_name`/`service_name` donde aplica.
+  - Realtime citas: emite `appointment:created|updated|deleted` a `user:{provider_id}` y `user:{client_id}`.
 
 - Frontend
-  - Agenda proveedor: componentes listos (`calendar-mensual`, `day-detail`, `modal-agendar-cita`) emiten eventos `citaCreated` y navegación mes/día.
-  - Booking panel cliente: listo; se añadió modal de confirmación al pulsar “Agendar Cita”.
-  - Servicios listos para reuso: `ProviderProfileService` y `ProviderServicesService` (duración/precio).
-  - Pendiente: `AppointmentsService` (REST + tipos) y cableado de agenda/booking a endpoints reales.
+  - AppointmentsService: REST + sockets (falta exponer listClientAppointments/updateStatus en servicio; en curso).
+  - Booking Panel: validaciones, hora manual, modal con loading/errores y cierre controlado, creación con `price`. (implementado)
+  - Perfil del trabajador: consume slots y create; UI lista. (implementado)
+  - Agenda proveedor: carga mes/día, escucha realtime y preselecciona hoy. (implementado). Falta botón Confirmar (UI) → PATCH status.
+  - Mis Reservas: pendiente wiring para listar citas del cliente y mostrar estados “Esperando confirmación / Esperando pago (Pagar) / Pasadas / Canceladas”.
 
 ## Próximos pasos (acciones concretas)
 
-1) Backend – Rutas de citas (Fase 1)
-   - POST `/appointments` (crear)
-   - GET `/appointments?month=YYYY-MM` (listar mes)
-   - GET `/appointments/by-day?date=YYYY-MM-DD` (listar día)
-   - PUT `/appointments/:id` (actualizar estado/horario/notas)
-   - DELETE `/appointments/:id` (cancelar/eliminar)
+1) Backend – Time-slots (Fase 1.1)
+   - Integrar disponibilidad semanal real (bloques activos por día) y descansos/bloqueos.
 
-2) Backend – Time-slots (Fase 1)
-   - GET `/availability/time-slots?provider_id&date&service_id` (cálculo por disponibilidad semanal + citas existentes + duración del servicio)
+2) Frontend – Servicios y vistas (Fase 1.1)
+   - Extender AppointmentsService con `listClientAppointments()` y `updateStatus()`.
+   - /client/reservas: render de listados y CTA "Pagar" cuando `status=confirmed`.
+   - /dash/agenda: acción "Confirmar" en detalle del día → `updateStatus('confirmed')`.
 
-3) Frontend – AppointmentsService (Fase 1)
-   - Métodos: `listMonth`, `listDay`, `create`, `update`, `delete`, `getTimeSlots`
+3) UX/Toasts (Fase 1.1)
+   - Sustituir alert() por toasts; manejar 409 (solape) con explicación y reintento.
 
-4) Integración – Agenda proveedor (Fase 1)
-   - Cargar mes/día desde REST
-   - Crear cita desde modal (POST) y refresco de vista
-
-5) Integración – Booking cliente (Fase 1)
-   - Cargar time-slots al seleccionar servicio/fecha
-   - Crear cita (POST) al confirmar en el modal de booking
-
-6) Realtime (Fase 2)
-   - Eventos `appointment:new|updated|cancelled` a `user:{provider_id}` y `user:{client_id}`
+4) Realtime (Fase 1.2)
+   - Opcional: notificaciones para el cliente al confirmar el proveedor.
 
 ## Cambios recientes
 
-- Modal de confirmación en el Booking Panel (cliente) al pulsar “Agendar Cita”; confirma y emite `bookingConfirmed(summary)`.
+- Backend: INSERT de cita guarda snapshot de `price`. Nuevos endpoints `GET /client/appointments` y `PATCH /appointments/:id/status`.
+- Frontend: panel de booking validado; hora manual; agenda preselecciona día; realtime citas activo.
 
 ## Pruebas (plan mínimo)
 

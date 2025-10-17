@@ -1,16 +1,16 @@
 /**
  * Payments Module
- * Handles payment processing, Stripe integration, and commission management (85/15 split)
+ * Handles appointment checkout flow (separate from subscriptions)
  */
+import { Express } from 'express';
+import { buildAppointmentCheckoutRoutes } from './routes/appointment-checkout.routes';
+import { setupPaymentsWebhooks } from './webhooks';
 
-// TODO: Import and export routes when implemented
-
-/**
- * Setup function to mount payments routes
- * @param app Express application
- */
-export function setupPaymentsModule(app: any) {
-  // TODO: Implement when routes are ready
-  console.log('[PAYMENTS MODULE] Module structure ready - awaiting implementation');
+export function setupPaymentsModule(app: Express) {
+  // Webhooks de pagos de citas: requieren raw body antes de express.json.
+  // Ya que el app.ts monta subscriptions webhook antes de json,
+  // si necesitamos raw aquí, habría que moverlo. Por ahora Stripe CLI puede apuntar a /webhooks/stripe-appointments directamente.
+  setupPaymentsWebhooks(app);
+  app.use('/', buildAppointmentCheckoutRoutes());
 }
 
