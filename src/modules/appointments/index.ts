@@ -47,7 +47,13 @@ function buildRouter(): Router {
         [provider_id, client_id, service_id, date, start_time, end_time, service.price ?? 0, notes || null]
       );
       const id = (ins as any).insertId;
-      const [row] = await pool.query('SELECT * FROM appointments WHERE id = ?', [id]);
+      const [row] = await pool.query(
+        `SELECT a.*, 
+                (SELECT name FROM users WHERE id = a.client_id) AS client_name,
+                (SELECT name FROM users WHERE id = a.provider_id) AS provider_name
+         FROM appointments a WHERE a.id = ?`,
+        [id]
+      );
       const appointment = (row as any[])[0];
       Logger.info(MODULE, 'Appointment created', { id, provider_id, client_id });
       // Emitir en tiempo real a provider y client
