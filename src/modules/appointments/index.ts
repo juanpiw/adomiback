@@ -23,11 +23,12 @@ function buildRouter(): Router {
         return res.status(400).json({ success: false, error: 'provider_id, client_id, service_id, date, start_time, end_time son requeridos' });
       }
       const pool = DatabaseConnection.getPool();
-      // Validar service -> provider
-      const [sv] = await pool.query('SELECT id, provider_id, duration_minutes FROM provider_services WHERE id = ? LIMIT 1', [service_id]);
+      // Validar service -> provider y obtener precio/duración
+      const [sv] = await pool.query('SELECT id, provider_id, duration_minutes, price FROM provider_services WHERE id = ? LIMIT 1', [service_id]);
       if ((sv as any[]).length === 0 || (sv as any[])[0].provider_id !== Number(provider_id)) {
         return res.status(400).json({ success: false, error: 'Servicio inválido para el proveedor' });
       }
+      const service = (sv as any[])[0];
       // Validar solape simple (misma fecha)
       const [over] = await pool.query(
         `SELECT id FROM appointments
@@ -41,9 +42,9 @@ function buildRouter(): Router {
       }
       // Insertar cita
       const [ins] = await pool.execute(
-        `INSERT INTO appointments (provider_id, client_id, service_id, \`date\`, \`start_time\`, \`end_time\`, status, notes)
-         VALUES (?, ?, ?, ?, ?, ?, 'scheduled', ?)`,
-        [provider_id, client_id, service_id, date, start_time, end_time, notes || null]
+        `INSERT INTO appointments (provider_id, client_id, service_id, \`date\`, \`start_time\`, \`end_time\`, price, status, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled', ?)`,
+        [provider_id, client_id, service_id, date, start_time, end_time, service.price ?? 0, notes || null]
       );
       const id = (ins as any).insertId;
       const [row] = await pool.query('SELECT * FROM appointments WHERE id = ?', [id]);
