@@ -31,8 +31,8 @@ function buildRouter(): Router {
       // Validar solape simple (misma fecha)
       const [over] = await pool.query(
         `SELECT id FROM appointments
-         WHERE provider_id = ? AND date = ?
-           AND NOT (end_time <= ? OR start_time >= ?)
+         WHERE provider_id = ? AND \`date\` = ?
+           AND NOT (\`end_time\` <= ? OR \`start_time\` >= ?)
          LIMIT 1`,
         [provider_id, date, start_time, end_time]
       );
@@ -41,7 +41,7 @@ function buildRouter(): Router {
       }
       // Insertar cita
       const [ins] = await pool.execute(
-        `INSERT INTO appointments (provider_id, client_id, service_id, date, start_time, end_time, status, notes)
+        `INSERT INTO appointments (provider_id, client_id, service_id, \`date\`, \`start_time\`, \`end_time\`, status, notes)
          VALUES (?, ?, ?, ?, ?, ?, 'scheduled', ?)`,
         [provider_id, client_id, service_id, date, start_time, end_time, notes || null]
       );
@@ -69,8 +69,8 @@ function buildRouter(): Router {
       const [rows] = await pool.query(
         `SELECT a.*, (SELECT name FROM users WHERE id = a.client_id) AS client_name
          FROM appointments a
-         WHERE a.provider_id = ? AND DATE_FORMAT(a.date, '%Y-%m') = ?
-         ORDER BY a.date ASC, a.start_time ASC`,
+         WHERE a.provider_id = ? AND DATE_FORMAT(a.\`date\`, '%Y-%m') = ?
+         ORDER BY a.\`date\` ASC, a.\`start_time\` ASC`,
         [user.id, month]
       );
       return res.json({ success: true, appointments: rows });
@@ -90,8 +90,8 @@ function buildRouter(): Router {
       const [rows] = await pool.query(
         `SELECT a.*, (SELECT name FROM users WHERE id = a.client_id) AS client_name
          FROM appointments a
-         WHERE a.provider_id = ? AND a.date = ?
-         ORDER BY a.start_time ASC`,
+         WHERE a.provider_id = ? AND a.\`date\` = ?
+         ORDER BY a.\`start_time\` ASC`,
         [user.id, date]
       );
       return res.json({ success: true, appointments: rows });
@@ -116,8 +116,8 @@ function buildRouter(): Router {
       if (date && start_time && end_time) {
         const [over] = await pool.query(
           `SELECT id FROM appointments
-           WHERE provider_id = ? AND date = ? AND id <> ?
-             AND NOT (end_time <= ? OR start_time >= ?)
+           WHERE provider_id = ? AND \`date\` = ? AND id <> ?
+             AND NOT (\`end_time\` <= ? OR \`start_time\` >= ?)
            LIMIT 1`,
           [user.id, date, id, start_time, end_time]
         );
@@ -128,9 +128,9 @@ function buildRouter(): Router {
       await pool.execute(
         `UPDATE appointments
          SET status = COALESCE(?, status),
-             date = COALESCE(?, date),
-             start_time = COALESCE(?, start_time),
-             end_time = COALESCE(?, end_time),
+             \`date\` = COALESCE(?, \`date\`),
+             \`start_time\` = COALESCE(?, \`start_time\`),
+             \`end_time\` = COALESCE(?, \`end_time\`),
              notes = COALESCE(?, notes),
              updated_at = CURRENT_TIMESTAMP
          WHERE id = ? AND provider_id = ?`,
@@ -182,7 +182,7 @@ function buildRouter(): Router {
       if ((sv as any[]).length === 0) return res.status(404).json({ success: false, error: 'Servicio no encontrado' });
       const duration = Number((sv as any[])[0].duration_minutes || 30);
       // Citas existentes del día
-      const [apps] = await pool.query('SELECT start_time, end_time FROM appointments WHERE provider_id = ? AND date = ?', [provider_id, date]);
+      const [apps] = await pool.query('SELECT \`start_time\`, \`end_time\` FROM appointments WHERE provider_id = ? AND \`date\` = ?', [provider_id, date]);
       // TODO: obtener bloques de disponibilidad semanal (por ahora 09:00-18:00)
       const blocks = [{ start: '09:00', end: '18:00' }];
       // Generar slots
