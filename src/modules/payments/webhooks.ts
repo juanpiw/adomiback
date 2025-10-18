@@ -9,43 +9,73 @@ const MODULE = 'PAYMENTS_WEBHOOKS';
 export function setupPaymentsWebhooks(app: any) {
   const stripeSecret = process.env.STRIPE_SECRET_KEY;
   const webhookSecret = process.env.STRIPE_APPOINTMENTS_WEBHOOK_SECRET || process.env.STRIPE_WEBHOOK_SECRET;
+  
   if (!stripeSecret || !webhookSecret) {
-    Logger.warn(MODULE, 'Stripe webhook not configured (missing STRIPE_SECRET_KEY or STRIPE_APPOINTMENTS_WEBHOOK_SECRET)');
+    Logger.warn(MODULE, 'Stripe appointments webhook not configured (missing STRIPE_SECRET_KEY or STRIPE_APPOINTMENTS_WEBHOOK_SECRET)');
+    return;
   }
-  const stripe = stripeSecret ? new Stripe(stripeSecret) : null;
+  
+  const stripe = new Stripe(stripeSecret);
 
   // Webhook específico para pagos de citas (usar raw body)
   app.post('/webhooks/stripe-appointments', express.raw({ type: 'application/json' }), async (req: any, res: any) => {
+    Logger.info(MODULE, 'Appointments webhook request received', { 
+      headers: req.headers,
+      bodyLength: req.body?.length || 0,
+      timestamp: new Date().toISOString()
+    });
+    
+    const sig = req.headers['stripe-signature'];
+    if (!sig) {
+      Logger.error(MODULE, 'Missing stripe-signature header');
+      return res.status(400).send('Webhook Error: Missing signature');
+    }
+    
+    let event: Stripe.Event;
     try {
-      if (!stripe || !webhookSecret) {
-        return res.status(500).send('Stripe not configured');
-      }
-      const sig = req.headers['stripe-signature'];
-      let event: Stripe.Event;
-      try {
-        event = stripe.webhooks.constructEvent(req.body, sig as string, webhookSecret);
-      } catch (err: any) {
-        Logger.error(MODULE, 'Webhook signature verification failed', err);
-        return res.status(400).send(`Webhook Error: ${err.message}`);
-      }
+      event = stripe.webhooks.constructEvent(req.body, sig as string, webhookSecret);
+      Logger.info(MODULE, 'Appointments webhook event received', { type: event.type, id: event.id });
+    } catch (err: any) {
+      Logger.error(MODULE, 'Webhook signature verification failed', err);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
 
+    try {
       switch (event.type) {
         case 'checkout.session.completed':
           await handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session);
           break;
         case 'payment_intent.succeeded':
           // Optional: can be handled if needed
+          Logger.info(MODULE, 'Payment intent succeeded', { paymentIntentId: (event.data.object as any).id });
           break;
         default:
           Logger.info(MODULE, `Unhandled event type: ${event.type}`);
       }
 
-      res.json({ received: true });
+      Logger.info(MODULE, 'Appointments webhook processed successfully', { type: event.type, id: event.id });
+      res.status(200).json({ received: true });
     } catch (err) {
-      Logger.error(MODULE, 'Webhook handler error', err as any);
-      res.status(500).send('Webhook handler error');
+      Logger.error(MODULE, 'Webhook handler error', { 
+        error: (err as any).message, 
+        stack: (err as any).stack,
+        eventType: event.type,
+        eventId: event.id 
+      });
+      res.status(500).json({ error: 'Webhook handler error' });
     }
   });
+  
+  // Health check endpoint for appointments webhook
+  app.get('/webhooks/stripe-appointments/health', (req: any, res: any) => {
+    res.status(200).json({ 
+      status: 'ok', 
+      timestamp: new Date().toISOString(),
+      configured: !!(stripeSecret && webhookSecret)
+    });
+  });
+  
+  Logger.info(MODULE, 'Stripe appointments webhook endpoint configured at POST /webhooks/stripe-appointments');
 }
 
 async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) {

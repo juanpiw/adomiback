@@ -12,14 +12,27 @@ import { Logger } from '../../shared/utils/logger.util';
 const MODULE = 'StripeWebhooks';
 
 export function setupStripeWebhooks(app: Express) {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '');
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || '';
+  const stripeSecret = process.env.STRIPE_SECRET_KEY;
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  
+  if (!stripeSecret || !webhookSecret) {
+    Logger.error(MODULE, 'Stripe webhook not configured - missing STRIPE_SECRET_KEY or STRIPE_WEBHOOK_SECRET');
+    return;
+  }
+  
+  const stripe = new Stripe(stripeSecret);
 
   // ✅ IMPORTANTE: Montar el webhook CON express.raw() para preservar el body original
   // Esto DEBE estar antes de express.json() en app.ts
   app.post('/webhooks/stripe', 
     express.raw({ type: 'application/json' }),
     async (req: Request, res: Response) => {
+      Logger.info(MODULE, 'Webhook request received', { 
+        headers: req.headers,
+        bodyLength: req.body?.length || 0,
+        timestamp: new Date().toISOString()
+      });
+      
       const sig = req.headers['stripe-signature'] as string;
       
       if (!sig) {
@@ -38,42 +51,68 @@ export function setupStripeWebhooks(app: Express) {
         return res.status(400).send(`Webhook Error: ${err.message}`);
       }
 
-    const pool = DatabaseConnection.getPool();
-
-    try {
-      switch (event.type) {
-        case 'checkout.session.completed':
-          await handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session, pool);
-          break;
-
-        case 'customer.subscription.updated':
-          await handleSubscriptionUpdated(event.data.object as Stripe.Subscription, pool);
-          break;
-
-        case 'customer.subscription.deleted':
-          await handleSubscriptionDeleted(event.data.object as Stripe.Subscription, pool);
-          break;
-
-        case 'invoice.payment_succeeded':
-          await handlePaymentSucceeded(event.data.object as Stripe.Invoice, pool);
-          break;
-
-        case 'invoice.payment_failed':
-          await handlePaymentFailed(event.data.object as Stripe.Invoice, pool);
-          break;
-
-        default:
-          Logger.info(MODULE, 'Unhandled webhook event type', { type: event.type });
+      let pool;
+      try {
+        pool = DatabaseConnection.getPool();
+        if (!pool) {
+          throw new Error('Database connection not available');
+        }
+      } catch (dbError: any) {
+        Logger.error(MODULE, 'Database connection error', dbError);
+        return res.status(500).json({ error: 'Database connection error' });
       }
 
-      res.json({ received: true });
-    } catch (error: any) {
-      Logger.error(MODULE, 'Error processing webhook event', error);
-      res.status(500).json({ error: 'Error processing webhook' });
-    }
+      try {
+        switch (event.type) {
+          case 'checkout.session.completed':
+            await handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session, pool);
+            break;
+
+          case 'customer.subscription.updated':
+            await handleSubscriptionUpdated(event.data.object as Stripe.Subscription, pool);
+            break;
+
+          case 'customer.subscription.deleted':
+            await handleSubscriptionDeleted(event.data.object as Stripe.Subscription, pool);
+            break;
+
+          case 'invoice.payment_succeeded':
+            await handlePaymentSucceeded(event.data.object as Stripe.Invoice, pool);
+            break;
+
+          case 'invoice.payment_failed':
+            await handlePaymentFailed(event.data.object as Stripe.Invoice, pool);
+            break;
+
+          default:
+            Logger.info(MODULE, 'Unhandled webhook event type', { type: event.type });
+        }
+
+        // Always return 200 for successful webhook processing (even for unhandled events)
+        Logger.info(MODULE, 'Webhook processed successfully', { type: event.type, id: event.id });
+        res.status(200).json({ received: true });
+      } catch (error: any) {
+        Logger.error(MODULE, 'Error processing webhook event', { 
+          error: error.message, 
+          stack: error.stack,
+          eventType: event.type,
+          eventId: event.id 
+        });
+        res.status(500).json({ error: 'Error processing webhook' });
+      }
+  });
+  
+  // Health check endpoint for webhook debugging
+  app.get('/webhooks/stripe/health', (req: Request, res: Response) => {
+    res.status(200).json({ 
+      status: 'ok', 
+      timestamp: new Date().toISOString(),
+      configured: !!(stripeSecret && webhookSecret)
+    });
   });
   
   Logger.info(MODULE, 'Stripe webhook endpoint configured at POST /webhooks/stripe');
+  Logger.info(MODULE, 'Stripe webhook health check at GET /webhooks/stripe/health');
 }
 
 /**
