@@ -8,6 +8,7 @@ import DatabaseConnection from '../../shared/database/connection';
 import { authenticateToken } from '../../shared/middleware/auth.middleware';
 import { Logger } from '../../shared/utils/logger.util';
 import { emitToUser } from '../../shared/realtime/socket';
+import { PushService } from '../notifications/services/push.service';
 
 const MODULE = 'APPOINTMENTS';
 
@@ -59,6 +60,8 @@ function buildRouter(): Router {
       // Emitir en tiempo real a provider y client
       try { emitToUser(provider_id, 'appointment:created', appointment); } catch {}
       try { emitToUser(client_id, 'appointment:created', appointment); } catch {}
+      // Push al proveedor
+      try { await PushService.notifyUser(Number(provider_id), 'Nueva cita por confirmar', `Cliente: ${(appointment as any).client_name || ''} • ${String(start_time).slice(0,5)}`, { type: 'appointment', appointment_id: String(id) }); } catch {}
       return res.status(201).json({ success: true, appointment });
     } catch (err) {
       Logger.error(MODULE, 'Error creating appointment', err as any);

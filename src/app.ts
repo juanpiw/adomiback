@@ -14,6 +14,7 @@ import { setupSubscriptionsModule } from './modules/subscriptions';
 import { setupChatModule } from './modules/chat';
 import { setupAppointmentsModule } from './modules/appointments';
 import { setupPaymentsModule } from './modules/payments';
+import { setupNotificationsModule } from './modules/notifications';
 
 export function createApp(): Express {
   const app = express();
@@ -53,6 +54,7 @@ export function createApp(): Express {
   setupChatModule(app);
   setupAppointmentsModule(app);
   setupPaymentsModule(app);
+  setupNotificationsModule(app);
   
   Logger.info('APP', 'All modules loaded successfully');
 
