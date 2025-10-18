@@ -3,6 +3,7 @@ import { authenticateToken } from '../../../shared/middleware/auth.middleware';
 import DatabaseConnection from '../../../shared/database/connection';
 import { Logger } from '../../../shared/utils/logger.util';
 import Stripe from 'stripe';
+import { emitToUser } from '../../../shared/realtime/socket';
 
 const MODULE = 'PAYMENTS_APPOINTMENTS';
 
@@ -93,6 +94,56 @@ export function buildAppointmentCheckoutRoutes(): Router {
     } catch (err) {
       Logger.error(MODULE, 'Error getting payment status', err as any);
       return res.status(500).json({ success: false, error: 'Error al obtener estado de pago' });
+    }
+  });
+
+  // GET /payments/appointments/:id/confirm?session_id=...
+  router.get('/payments/appointments/:id/confirm', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const appointmentId = Number(req.params.id);
+      const sessionId = String(req.query.session_id || '');
+      if (!Number.isFinite(appointmentId) || !sessionId) {
+        return res.status(400).json({ success: false, error: 'Parámetros inválidos' });
+      }
+      const pool = DatabaseConnection.getPool();
+      const [apptRows] = await pool.query('SELECT * FROM appointments WHERE id = ? LIMIT 1', [appointmentId]);
+      if ((apptRows as any[]).length === 0) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      const appt = (apptRows as any[])[0];
+      if (Number(appt.client_id) !== Number(user.id) && Number(appt.provider_id) !== Number(user.id)) {
+        return res.status(403).json({ success: false, error: 'No autorizado' });
+      }
+
+      const stripeSecret = process.env.STRIPE_SECRET_KEY;
+      if (!stripeSecret) return res.status(500).json({ success: false, error: 'Stripe no configurado' });
+      const stripe = new Stripe(stripeSecret);
+
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+      const isPaid = session.payment_status === 'paid' || session.status === 'complete';
+      if (!isPaid) {
+        return res.json({ success: true, confirmed: false, payment: { status: session.payment_status || session.status } });
+      }
+
+      // Registrar pago si no existe
+      const [existing] = await pool.query('SELECT id FROM payments WHERE appointment_id = ? AND stripe_checkout_session_id = ? LIMIT 1', [appointmentId, sessionId]);
+      if ((existing as any[]).length === 0) {
+        const amount = Number(session.amount_total || 0);
+        const currency = String(session.currency || 'clp');
+        const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : (session.payment_intent as any)?.id;
+        await pool.execute(
+          `INSERT INTO payments (appointment_id, amount, currency, status, stripe_checkout_session_id, stripe_payment_intent_id, paid_at)
+           VALUES (?, ?, ?, 'succeeded', ?, ?, CURRENT_TIMESTAMP)`,
+          [appointmentId, amount, currency, sessionId, paymentIntentId || null]
+        );
+        // Emitir evento de pago completado a proveedor y cliente
+        try { emitToUser(appt.provider_id, 'payment:completed', { appointment_id: appointmentId, amount }); } catch {}
+        try { emitToUser(appt.client_id, 'payment:completed', { appointment_id: appointmentId, amount }); } catch {}
+      }
+
+      return res.json({ success: true, confirmed: true, payment: { status: 'succeeded' } });
+    } catch (err) {
+      Logger.error(MODULE, 'Error confirming appointment payment', err as any);
+      return res.status(500).json({ success: false, error: 'Error al confirmar pago' });
     }
   });
 
