@@ -281,6 +281,42 @@ function buildRouter(): Router {
       if (cancelledBy) (updated as any).cancelled_by = cancelledBy;
       try { emitToUser(updated.provider_id, 'appointment:updated', updated); } catch {}
       try { emitToUser(updated.client_id, 'appointment:updated', updated); } catch {}
+      
+      // Enviar notificaciones push según el estado
+      try {
+        if (status === 'confirmed') {
+          await PushService.notifyUser(
+            Number(updated.client_id), 
+            'Cita confirmada', 
+            `Tu cita con ${updated.provider_name} ha sido confirmada para el ${updated.date} a las ${updated.start_time}`, 
+            { type: 'appointment', appointment_id: String(id), status: 'confirmed' }
+          );
+        } else if (status === 'cancelled') {
+          const cancelledBy = user.role === 'provider' ? 'el proveedor' : 'el cliente';
+          await PushService.notifyUser(
+            Number(updated.client_id), 
+            'Cita cancelada', 
+            `Tu cita con ${updated.provider_name} ha sido cancelada por ${cancelledBy}`, 
+            { type: 'appointment', appointment_id: String(id), status: 'cancelled' }
+          );
+          await PushService.notifyUser(
+            Number(updated.provider_id), 
+            'Cita cancelada', 
+            `La cita con ${updated.client_name} ha sido cancelada por ${cancelledBy}`, 
+            { type: 'appointment', appointment_id: String(id), status: 'cancelled' }
+          );
+        } else if (status === 'completed') {
+          await PushService.notifyUser(
+            Number(updated.client_id), 
+            'Cita completada', 
+            `Tu cita con ${updated.provider_name} ha sido marcada como completada`, 
+            { type: 'appointment', appointment_id: String(id), status: 'completed' }
+          );
+        }
+      } catch (pushError) {
+        Logger.error(MODULE, 'Error sending push notification', pushError as any);
+      }
+      
       return res.json({ success: true, appointment: updated });
     } catch (err) {
       Logger.error(MODULE, 'Error updating appointment status', err as any);
