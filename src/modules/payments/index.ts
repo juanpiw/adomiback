@@ -4,6 +4,7 @@
  */
 import { Express } from 'express';
 import { buildAppointmentCheckoutRoutes } from './routes/appointment-checkout.routes';
+import { buildProviderFinancesRoutes } from './routes/provider-finances.routes';
 import { setupPaymentsWebhooks } from './webhooks';
 
 export function setupPaymentsModule(app: Express) {
@@ -12,5 +13,6 @@ export function setupPaymentsModule(app: Express) {
   // si necesitamos raw aquí, habría que moverlo. Por ahora Stripe CLI puede apuntar a /webhooks/stripe-appointments directamente.
   setupPaymentsWebhooks(app);
   app.use('/', buildAppointmentCheckoutRoutes());
+  app.use('/', buildProviderFinancesRoutes());
 }
 
