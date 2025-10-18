@@ -66,6 +66,84 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
     }
   });
 
+  // GET /plan-expirations/user/:userId/current - Obtener plan actual del usuario
+  router.get('/plan-expirations/user/:userId/current', async (req: Request, res: Response) => {
+    try {
+      const userId = Number(req.params.userId);
+      if (!userId) {
+        return res.status(400).json({ ok: false, error: 'ID de usuario requerido' });
+      }
+
+      const pool = DatabaseConnection.getPool();
+      
+      // Obtener información del plan actual del usuario
+      const [userRows] = await pool.query(`
+        SELECT 
+          u.id,
+          u.active_plan_id,
+          p.name as plan_name,
+          s.status as subscription_status,
+          s.current_period_end,
+          s.updated_at
+        FROM users u
+        LEFT JOIN plans p ON u.active_plan_id = p.id
+        LEFT JOIN subscriptions s ON u.id = s.user_id AND s.status = 'active'
+        WHERE u.id = ?
+      `, [userId]);
+
+      if ((userRows as any[]).length === 0) {
+        return res.status(404).json({ ok: false, error: 'Usuario no encontrado' });
+      }
+
+      const user = (userRows as any[])[0];
+      
+      // Si no tiene plan activo, retornar plan básico
+      if (!user.active_plan_id) {
+        return res.json({
+          ok: true,
+          currentPlan: {
+            id: 1,
+            name: 'Plan Básico',
+            expires_at: null,
+            is_expired: false,
+            days_remaining: null
+          }
+        });
+      }
+
+      // Calcular días restantes si hay suscripción activa
+      let expiresAt = null;
+      let isExpired = false;
+      let daysRemaining = null;
+
+      if (user.subscription_status === 'active' && user.current_period_end) {
+        expiresAt = user.current_period_end;
+        const now = new Date();
+        const expirationDate = new Date(user.current_period_end);
+        const diffTime = expirationDate.getTime() - now.getTime();
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        
+        isExpired = diffDays <= 0;
+        daysRemaining = diffDays > 0 ? diffDays : 0;
+      }
+
+      res.json({
+        ok: true,
+        currentPlan: {
+          id: user.active_plan_id,
+          name: user.plan_name || 'Plan Desconocido',
+          expires_at: expiresAt,
+          is_expired: isExpired,
+          days_remaining: daysRemaining
+        }
+      });
+
+    } catch (error: any) {
+      console.error('[PLAN-EXPIRATIONS][GET][ERROR]', error);
+      res.status(500).json({ ok: false, error: 'Error al obtener información del plan' });
+    }
+  });
+
   // POST /stripe/create-checkout-session - Crea sesión de checkout de Stripe (modo suscripción)
   router.post('/stripe/create-checkout-session', async (req: Request, res: Response) => {
     try {
