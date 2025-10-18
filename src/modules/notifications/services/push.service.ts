@@ -111,9 +111,9 @@ export class PushService {
       const dataJson = data ? JSON.stringify(data) : null;
       
       await pool.execute(
-        `INSERT INTO notifications (user_id, type, title, body, data, is_read, created_at)
-         VALUES (?, ?, ?, ?, ?, FALSE, CURRENT_TIMESTAMP)`,
-        [userId, type, title, body, dataJson]
+        `INSERT INTO notifications (user_id, type, title, body, message, data, is_read, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, FALSE, CURRENT_TIMESTAMP)`,
+        [userId, type, title, body, body, dataJson]
       );
       
       Logger.info(MODULE, `In-app notification created for user ${userId}: ${title}`);
