@@ -260,9 +260,18 @@ function buildRouter(): Router {
       if (status === 'cancelled' && !(isProvider || isClient)) {
         return res.status(403).json({ success: false, error: 'No autorizado' });
       }
+      // Determine who cancels (not persisted unless column exists)
+      const cancelledBy = status === 'cancelled' ? (user.role === 'provider' ? 'provider' : (user.role === 'client' ? 'client' : 'system')) : null;
       await pool.execute('UPDATE appointments SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [status, id]);
-      const [after] = await pool.query('SELECT * FROM appointments WHERE id = ?', [id]);
+      const [after] = await pool.query(
+        `SELECT a.*, 
+                (SELECT name FROM users WHERE id = a.provider_id) AS provider_name,
+                (SELECT name FROM users WHERE id = a.client_id) AS client_name
+         FROM appointments a WHERE a.id = ? LIMIT 1`,
+        [id]
+      );
       const updated = (after as any[])[0];
+      if (cancelledBy) (updated as any).cancelled_by = cancelledBy;
       try { emitToUser(updated.provider_id, 'appointment:updated', updated); } catch {}
       try { emitToUser(updated.client_id, 'appointment:updated', updated); } catch {}
       return res.json({ success: true, appointment: updated });
