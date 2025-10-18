@@ -8,6 +8,7 @@ import { authenticateToken } from '../../shared/middleware/auth.middleware';
 import DatabaseConnection from '../../shared/database/connection';
 import { Logger } from '../../shared/utils/logger.util';
 import { emitToConversation, emitToUser } from '../../shared/realtime/socket';
+import { PushService } from '../notifications/services/push.service';
 
 const MODULE = 'CHAT';
 
@@ -154,6 +155,11 @@ export function setupChatModule(app: any) {
       } catch (e) {
         Logger.warn(MODULE, 'Emit failed', e as any);
       }
+      // Enviar push al receptor
+      try {
+        const senderName = (conv as any).client_id === user.id ? 'Cliente' : 'Proveedor';
+        await PushService.notifyUser(Number(receiver_id), `Nuevo mensaje de ${senderName}`, String(content).slice(0, 100), { type: 'message', conversation_id: String(conversation_id) });
+      } catch {}
       return res.status(201).json({ success: true, message: lastMsg });
     } catch (error: any) {
       Logger.error(MODULE, 'Error sending message', error);

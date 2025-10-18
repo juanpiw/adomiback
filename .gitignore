@@ -292,6 +292,11 @@ k8s/
 .firebaserc
 firebase.json
 
+# Push notifications setup (sensitive data)
+env-push-example.txt
+documentacion-md/PUSH_NOTIFICATIONS_SETUP.md
+migrations/create_device_tokens_table.sql
+
 # Vercel
 .vercel
 

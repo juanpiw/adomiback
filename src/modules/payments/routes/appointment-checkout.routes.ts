@@ -4,6 +4,7 @@ import DatabaseConnection from '../../../shared/database/connection';
 import { Logger } from '../../../shared/utils/logger.util';
 import Stripe from 'stripe';
 import { emitToUser } from '../../../shared/realtime/socket';
+import { PushService } from '../../notifications/services/push.service';
 
 const MODULE = 'PAYMENTS_APPOINTMENTS';
 
@@ -130,14 +131,22 @@ export function buildAppointmentCheckoutRoutes(): Router {
         const amount = Number(session.amount_total || 0);
         const currency = String(session.currency || 'clp');
         const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : (session.payment_intent as any)?.id;
+        // Insertar pago con montos de comisión calculados
+        const commissionRate = 15.0; // 15% comisión Adomi
+        const commissionAmount = Math.round(amount * commissionRate / 100);
+        const providerAmount = amount - commissionAmount;
+        
         await pool.execute(
-          `INSERT INTO payments (appointment_id, amount, currency, status, stripe_checkout_session_id, stripe_payment_intent_id, paid_at)
-           VALUES (?, ?, ?, 'succeeded', ?, ?, CURRENT_TIMESTAMP)`,
-          [appointmentId, amount, currency, sessionId, paymentIntentId || null]
+          `INSERT INTO payments (appointment_id, client_id, provider_id, amount, commission_amount, provider_amount, currency, payment_method, status, stripe_checkout_session_id, stripe_payment_intent_id, paid_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'card', 'completed', ?, ?, CURRENT_TIMESTAMP)`,
+          [appointmentId, appt.client_id, appt.provider_id, amount, commissionAmount, providerAmount, currency, sessionId, paymentIntentId || null]
         );
+        Logger.info(MODULE, `Payment recorded: appointment_id=${appointmentId}, amount=${amount}, commission=${commissionAmount}, provider=${providerAmount}, status=completed`);
         // Emitir evento de pago completado a proveedor y cliente
         try { emitToUser(appt.provider_id, 'payment:completed', { appointment_id: appointmentId, amount }); } catch {}
         try { emitToUser(appt.client_id, 'payment:completed', { appointment_id: appointmentId, amount }); } catch {}
+        // Push al proveedor notificando pago recibido
+        try { await PushService.notifyUser(Number(appt.provider_id), 'Pago recibido', `Cliente pagó $${amount} por cita #${appointmentId}`, { type: 'payment', appointment_id: String(appointmentId) }); } catch {}
       }
 
       return res.json({ success: true, confirmed: true, payment: { status: 'succeeded' } });

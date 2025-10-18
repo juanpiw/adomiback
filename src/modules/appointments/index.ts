@@ -236,6 +236,7 @@ function buildRouter(): Router {
          ORDER BY a.\`date\` ASC, a.\`start_time\` ASC`,
         [clientId]
       );
+      Logger.info(MODULE, `Client appointments loaded: ${(rows as any[]).length} appointments`, { sample: (rows as any[])[0] });
       return res.json({ success: true, appointments: rows });
     } catch (err) {
       Logger.error(MODULE, 'Error listing client appointments', err as any);
