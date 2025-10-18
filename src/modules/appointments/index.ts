@@ -74,7 +74,9 @@ function buildRouter(): Router {
       if (!month) return res.status(400).json({ success: false, error: 'month requerido (YYYY-MM)' });
       const pool = DatabaseConnection.getPool();
       const [rows] = await pool.query(
-        `SELECT a.*, (SELECT name FROM users WHERE id = a.client_id) AS client_name
+        `SELECT a.*, 
+                (SELECT name FROM users WHERE id = a.client_id) AS client_name,
+                (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name
          FROM appointments a
          WHERE a.provider_id = ? AND DATE_FORMAT(a.\`date\`, '%Y-%m') = ?
          ORDER BY a.\`date\` ASC, a.\`start_time\` ASC`,
@@ -95,7 +97,9 @@ function buildRouter(): Router {
       if (!date) return res.status(400).json({ success: false, error: 'date requerido (YYYY-MM-DD)' });
       const pool = DatabaseConnection.getPool();
       const [rows] = await pool.query(
-        `SELECT a.*, (SELECT name FROM users WHERE id = a.client_id) AS client_name
+        `SELECT a.*, 
+                (SELECT name FROM users WHERE id = a.client_id) AS client_name,
+                (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name
          FROM appointments a
          WHERE a.provider_id = ? AND a.\`date\` = ?
          ORDER BY a.\`start_time\` ASC`,

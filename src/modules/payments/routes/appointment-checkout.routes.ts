@@ -32,7 +32,10 @@ export function buildAppointmentCheckoutRoutes(): Router {
       const ZERO_DECIMAL = new Set(['bif','clp','djf','gnf','jpy','kmf','krw','mga','pyg','rwf','ugx','vnd','vuv','xaf','xof','xpf']);
       const stripe = new Stripe(stripeSecret);
       const currency = 'clp';
-      const unitAmount = ZERO_DECIMAL.has(currency) ? Math.round(amount) : Math.round(amount * 100);
+      // Permitir monto de prueba fijo (CLP) vía env para probar flujo rápidamente
+      const testOverride = Number(process.env.STRIPE_APPOINTMENTS_TEST_AMOUNT_CLP || process.env.STRIPE_TEST_AMOUNT_CLP || 0);
+      const checkoutAmount = testOverride > 0 ? testOverride : amount;
+      const unitAmount = ZERO_DECIMAL.has(currency) ? Math.round(checkoutAmount) : Math.round(checkoutAmount * 100);
 
       const session = await stripe.checkout.sessions.create({
         mode: 'payment',
