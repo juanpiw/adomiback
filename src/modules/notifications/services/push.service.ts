@@ -111,8 +111,8 @@ export class PushService {
       const dataJson = data ? JSON.stringify(data) : null;
       
       await pool.execute(
-        `INSERT INTO notifications (user_id, type, title, body, message, data, is_read, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, FALSE, CURRENT_TIMESTAMP)`,
+        `INSERT INTO notifications (user_id, type, title, body, message, data, is_read)
+         VALUES (?, ?, ?, ?, ?, ?, FALSE)`,
         [userId, type, title, body, body, dataJson]
       );
       
