@@ -41,19 +41,29 @@ export class GoogleAuthRoutes {
     // POST /auth/google -> devuelve URL de autorización
     this.router.post('/google', async (req: Request, res: Response) => {
       try {
-        console.log('[GOOGLE_AUTH] POST /auth/google - Body recibido:', req.body);
+        console.log('🔵 [BACKEND] ==================== POST /auth/google ====================');
+        console.log('🔵 [BACKEND] Timestamp:', new Date().toISOString());
+        console.log('🔵 [BACKEND] Request body completo:', JSON.stringify(req.body));
+        console.log('🔵 [BACKEND] Headers:', JSON.stringify(req.headers));
+        
         const role: Role = (req.body?.role === 'provider' ? 'provider' : 'client');
         const mode: Mode = (req.body?.mode === 'register' ? 'register' : 'login');
-        console.log('[GOOGLE_AUTH] Rol determinado:', role, 'Modo:', mode);
+        
+        console.log('🔵 [BACKEND] Rol determinado:', role);
+        console.log('🔵 [BACKEND] Modo determinado:', mode);
 
         const scopes = [
           'openid',
           'email',
           'profile'
         ];
+        console.log('🔵 [BACKEND] Scopes solicitados:', scopes);
 
         const state = encodeURIComponent(JSON.stringify({ role, mode }));
-        console.log('[GOOGLE_AUTH] Estado codificado:', state);
+        console.log('🔵 [BACKEND] Estado sin codificar:', { role, mode });
+        console.log('🔵 [BACKEND] Estado codificado:', state);
+        
+        console.log('🔵 [BACKEND] Generando URL de autorización de Google...');
         const url = this.oauth.generateAuthUrl({
           access_type: 'offline',
           scope: scopes,
@@ -61,10 +71,15 @@ export class GoogleAuthRoutes {
           include_granted_scopes: true,
           state
         });
-        console.log('[GOOGLE_AUTH] URL de autorización generada:', url);
+        
+        console.log('🔵 [BACKEND] ✅ URL de autorización generada exitosamente');
+        console.log('🔵 [BACKEND] URL completa:', url);
 
         return res.status(200).json({ success: true, authUrl: url });
       } catch (error: any) {
+        console.error('🔴 [BACKEND] ❌ Error en POST /auth/google:', error);
+        console.error('🔴 [BACKEND] Error message:', error.message);
+        console.error('🔴 [BACKEND] Error stack:', error.stack);
         return res.status(500).json({ success: false, error: error.message });
       }
     });
@@ -72,91 +87,207 @@ export class GoogleAuthRoutes {
     // GET /auth/google/callback
     this.router.get('/google/callback', async (req: Request, res: Response) => {
       try {
-        console.log('[GOOGLE_AUTH] Callback recibido');
+        console.log('🟢 [BACKEND] ==================== GET /auth/google/callback ====================');
+        console.log('🟢 [BACKEND] Timestamp:', new Date().toISOString());
+        console.log('🟢 [BACKEND] URL completa:', req.url);
+        console.log('🟢 [BACKEND] Query string completo:', JSON.stringify(req.query));
+        
         const { code, state } = req.query as { code?: string; state?: string };
-        console.log('[GOOGLE_AUTH] Query params:', { code: code ? 'presente' : 'ausente', state });
-        if (!code) return res.status(400).send('Missing code');
+        
+        console.log('🟢 [BACKEND] Code:', code ? `${code.substring(0, 20)}...` : 'NULL');
+        console.log('🟢 [BACKEND] State:', state || 'NULL');
+        
+        if (!code) {
+          console.error('🔴 [BACKEND] ❌ Code ausente en callback');
+          return res.status(400).send('Missing code');
+        }
 
-        console.log('[GOOGLE_AUTH] Intercambiando código por token...');
+        console.log('🟢 [BACKEND] Intercambiando código por token con Google...');
         const tokenResponse = await this.oauth.getToken(code);
+        console.log('🟢 [BACKEND] ✅ Token response recibido');
+        console.log('🟢 [BACKEND] Token response keys:', Object.keys(tokenResponse.tokens));
+        
         const idToken = tokenResponse.tokens.id_token;
-        console.log('[GOOGLE_AUTH] Token recibido:', idToken ? 'presente' : 'ausente');
-        if (!idToken) return res.status(400).send('Missing id_token');
+        console.log('🟢 [BACKEND] ID Token:', idToken ? `${idToken.substring(0, 20)}...` : 'NULL');
+        
+        if (!idToken) {
+          console.error('🔴 [BACKEND] ❌ ID Token ausente en respuesta de Google');
+          return res.status(400).send('Missing id_token');
+        }
 
-        console.log('[GOOGLE_AUTH] Verificando token de ID...');
-        const ticket = await this.oauth.verifyIdToken({ idToken, audience: getEnv('GOOGLE_CLIENT_ID') });
+        console.log('🟢 [BACKEND] Verificando token de ID con Google...');
+        const ticket = await this.oauth.verifyIdToken({ 
+          idToken, 
+          audience: getEnv('GOOGLE_CLIENT_ID') 
+        });
+        
+        console.log('🟢 [BACKEND] ✅ Token verificado exitosamente');
         const payload = ticket.getPayload();
-        console.log('[GOOGLE_AUTH] Payload de Google:', { 
+        
+        console.log('🟢 [BACKEND] Payload de Google:', { 
           email: payload?.email, 
           name: payload?.name, 
           sub: payload?.sub,
-          picture: payload?.picture ? 'presente' : 'ausente'
+          picture: payload?.picture ? 'presente' : 'ausente',
+          email_verified: payload?.email_verified
         });
-        if (!payload || !payload.email || !payload.sub) return res.status(400).send('Invalid Google payload');
+        
+        if (!payload || !payload.email || !payload.sub) {
+          console.error('🔴 [BACKEND] ❌ Payload inválido de Google');
+          return res.status(400).send('Invalid Google payload');
+        }
 
+        console.log('🟢 [BACKEND] Parseando state...');
         const parsedState: { role: Role; mode: Mode } = state ? JSON.parse(decodeURIComponent(state)) : { role: 'client', mode: 'login' };
-        console.log('[GOOGLE_AUTH] Callback - Estado parseado:', parsedState);
+        console.log('🟢 [BACKEND] ✅ Estado parseado:', parsedState);
 
         // Buscar usuario por google_id o email
-        console.log('[GOOGLE_AUTH] Buscando usuario existente...');
+        console.log('🟢 [BACKEND] ==================== BÚSQUEDA DE USUARIO ====================');
+        console.log('🟢 [BACKEND] Buscando usuario por google_id:', payload.sub);
         let user = await this.usersRepo.findByGoogleId(payload.sub);
-        console.log('[GOOGLE_AUTH] Usuario encontrado por google_id:', user ? 'sí' : 'no');
-        if (!user) {
-          console.log('[GOOGLE_AUTH] Buscando usuario por email...');
+        
+        if (user) {
+          console.log('🟢 [BACKEND] ✅ Usuario encontrado por google_id:', {
+            id: user.id,
+            email: user.email,
+            role: user.role,
+            name: user.name
+          });
+        } else {
+          console.log('🟢 [BACKEND] Usuario NO encontrado por google_id');
+          console.log('🟢 [BACKEND] Buscando usuario por email:', payload.email);
+          
           const byEmail = await this.usersRepo.findByEmail(payload.email);
-          console.log('[GOOGLE_AUTH] Usuario encontrado por email:', byEmail ? 'sí' : 'no');
-          if (byEmail) user = byEmail as any;
+          
+          if (byEmail) {
+            console.log('🟢 [BACKEND] ✅ Usuario encontrado por email:', {
+              id: byEmail.id,
+              email: byEmail.email,
+              role: byEmail.role,
+              name: byEmail.name,
+              google_id: byEmail.google_id || 'NULL'
+            });
+            user = byEmail as any;
+          } else {
+            console.log('🟢 [BACKEND] Usuario NO encontrado por email');
+          }
         }
 
         if (!user) {
-          console.log('[GOOGLE_AUTH] Usuario no encontrado, modo:', parsedState.mode);
+          console.log('🟡 [BACKEND] ==================== USUARIO NO ENCONTRADO ====================');
+          console.log('🟡 [BACKEND] Modo actual:', parsedState.mode);
+          
           if (parsedState.mode === 'login') {
-            console.log('[GOOGLE_AUTH] Redirigiendo a login con error no_account');
+            console.log('🔴 [BACKEND] ❌ Modo LOGIN y usuario no existe - Rechazando');
             const loginUrl = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com') + '/auth/login?error=no_account';
+            console.log('🔴 [BACKEND] Redirigiendo a:', loginUrl);
             return res.redirect(302, loginUrl);
           }
           
+          console.log('🟡 [BACKEND] Modo REGISTER - Verificando si email ya existe...');
           // ✅ VALIDACIÓN CRÍTICA: Verificar si email existe (cualquier rol)
           const existingUser = await this.usersRepo.findByEmail(payload.email);
+          
           if (existingUser) {
-            console.log('[GOOGLE_AUTH] ERROR: Email ya existe con rol:', existingUser.role, 'intentando crear con rol:', parsedState.role);
+            console.log('🔴 [BACKEND] ❌ Email ya existe con rol:', existingUser.role);
+            console.log('🔴 [BACKEND] Intentando crear con rol:', parsedState.role);
             const errorUrl = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com') + 
               `/auth/register?error=email_already_exists&existing_role=${existingUser.role}&attempted_role=${parsedState.role}&email=${encodeURIComponent(payload.email)}`;
+            console.log('🔴 [BACKEND] Redirigiendo a:', errorUrl);
             return res.redirect(302, errorUrl);
           }
           
           // crear usuario en modo registro
-          console.log('[GOOGLE_AUTH] Creando usuario con rol:', parsedState.role, 'email:', payload.email);
-          const newId = await this.usersRepo.createGoogleUser(payload.sub, payload.email, payload.name || payload.email.split('@')[0], parsedState.role);
+          console.log('🟡 [BACKEND] ✅ Email disponible, creando usuario...');
+          console.log('🟡 [BACKEND] Datos del nuevo usuario:', {
+            google_id: payload.sub,
+            email: payload.email,
+            name: payload.name || payload.email.split('@')[0],
+            role: parsedState.role
+          });
+          
+          const newId = await this.usersRepo.createGoogleUser(
+            payload.sub, 
+            payload.email, 
+            payload.name || payload.email.split('@')[0], 
+            parsedState.role
+          );
+          
+          console.log('🟡 [BACKEND] ✅ Usuario creado con ID:', newId);
+          
           user = await this.usersRepo.findById(newId);
-          console.log('[GOOGLE_AUTH] Usuario creado con ID:', newId, 'rol final:', user?.role);
+          console.log('🟡 [BACKEND] Usuario recuperado de BD:', {
+            id: user?.id,
+            email: user?.email,
+            role: user?.role,
+            name: user?.name
+          });
+          
         } else if (!user.google_id) {
-          // vincular si falta google_id
-          console.log('[GOOGLE_AUTH] Vinculando cuenta existente con Google ID');
+          console.log('🟡 [BACKEND] ==================== VINCULANDO CUENTA EXISTENTE ====================');
+          console.log('🟡 [BACKEND] Usuario existe pero sin google_id');
+          console.log('🟡 [BACKEND] Usuario actual:', { id: user.id, email: user.email, role: user.role });
+          console.log('🟡 [BACKEND] Vinculando con Google ID:', payload.sub);
+          
           await this.usersRepo.linkGoogleAccount(user.id, payload.sub);
+          console.log('🟡 [BACKEND] ✅ Cuenta vinculada');
+          
           user = await this.usersRepo.findById(user.id);
-          console.log('[GOOGLE_AUTH] Cuenta vinculada, usuario actualizado:', user?.id, user?.role);
+          console.log('🟡 [BACKEND] Usuario actualizado:', {
+            id: user?.id,
+            email: user?.email,
+            role: user?.role,
+            google_id: user?.google_id
+          });
+          
         } else {
-          console.log('[GOOGLE_AUTH] Usuario existente encontrado:', user.id, user.role);
+          console.log('🟢 [BACKEND] ==================== USUARIO EXISTENTE ====================');
+          console.log('🟢 [BACKEND] Usuario ya tiene cuenta:', {
+            id: user.id,
+            email: user.email,
+            role: user.role,
+            google_id: user.google_id
+          });
           
           // ✅ VALIDACIÓN: Si está en modo registro pero el usuario ya existe, bloquear
           if (parsedState.mode === 'register') {
-            console.log('[GOOGLE_AUTH] ERROR: Usuario ya existe con rol:', user.role, 'intentando registrar como:', parsedState.role);
+            console.log('🔴 [BACKEND] ❌ Error: Usuario ya existe y está en modo REGISTER');
+            console.log('🔴 [BACKEND] Rol existente:', user.role, '- Rol intentado:', parsedState.role);
             const errorUrl = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com') + 
               `/auth/register?error=email_already_exists&existing_role=${user.role}&attempted_role=${parsedState.role}&email=${encodeURIComponent(payload.email)}`;
+            console.log('🔴 [BACKEND] Redirigiendo a:', errorUrl);
             return res.redirect(302, errorUrl);
           }
+          
+          console.log('🟢 [BACKEND] ✅ Modo LOGIN y usuario existe - Continuando...');
         }
 
         // Emitir tokens propios
-        console.log('[GOOGLE_AUTH] Generando tokens para usuario:', user!.id, user!.email, user!.role);
+        console.log('🟣 [BACKEND] ==================== GENERANDO TOKENS JWT ====================');
+        console.log('🟣 [BACKEND] Usuario final:', {
+          id: user!.id,
+          email: user!.email,
+          role: user!.role,
+          name: user!.name
+        });
+        
+        console.log('🟣 [BACKEND] Generando par de tokens JWT...');
         const tokens = JWTUtil.generateTokenPair(user!.id, user!.email, user!.role);
+        console.log('🟣 [BACKEND] ✅ Tokens generados:', {
+          accessToken: tokens.accessToken.substring(0, 20) + '...',
+          refreshToken: tokens.refreshToken.substring(0, 20) + '...'
+        });
+        
         const refreshExpiry = new Date();
         refreshExpiry.setDate(refreshExpiry.getDate() + 7);
         const jti = tokens.refreshToken.split('.')[2];
-        console.log('[GOOGLE_AUTH] Creando refresh token en BD...');
+        
+        console.log('🟣 [BACKEND] Guardando refresh token en BD...');
+        console.log('🟣 [BACKEND] JTI:', jti);
+        console.log('🟣 [BACKEND] Expira:', refreshExpiry.toISOString());
+        
         await this.refreshTokensRepo.create(user!.id, jti, refreshExpiry);
-        console.log('[GOOGLE_AUTH] Tokens generados exitosamente');
+        console.log('🟣 [BACKEND] ✅ Refresh token guardado en BD');
 
         // Intentar importar avatar de Google si está habilitado y no hay foto aún
         try {
@@ -197,15 +328,45 @@ export class GoogleAuthRoutes {
         }
 
         // Redirigir a front success con tokens
+        console.log('🟣 [BACKEND] ==================== PREPARANDO REDIRECCIÓN AL FRONTEND ====================');
         const base = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com');
-        const userData = { id: user!.id, email: user!.email, name: user!.name, role: user!.role };
-        console.log('[GOOGLE_AUTH] Datos de usuario para redirect:', userData);
-        const successUrl = `${base}/auth/google/success?token=${encodeURIComponent(tokens.accessToken)}&refresh=${encodeURIComponent(tokens.refreshToken)}&user=${encodeURIComponent(JSON.stringify(userData))}`;
-        console.log('[GOOGLE_AUTH] Redirigiendo a:', successUrl);
+        console.log('🟣 [BACKEND] Frontend base URL:', base);
+        
+        const userData = { 
+          id: user!.id, 
+          email: user!.email, 
+          name: user!.name, 
+          role: user!.role 
+        };
+        console.log('🟣 [BACKEND] User data a enviar:', userData);
+        
+        const encodedToken = encodeURIComponent(tokens.accessToken);
+        const encodedRefresh = encodeURIComponent(tokens.refreshToken);
+        const encodedUser = encodeURIComponent(JSON.stringify(userData));
+        
+        console.log('🟣 [BACKEND] Datos codificados:', {
+          token: encodedToken.substring(0, 20) + '...',
+          refresh: encodedRefresh.substring(0, 20) + '...',
+          user: encodedUser.substring(0, 50) + '...'
+        });
+        
+        const successUrl = `${base}/auth/google/success?token=${encodedToken}&refresh=${encodedRefresh}&user=${encodedUser}`;
+        console.log('🟣 [BACKEND] ✅ URL de success construida (truncada):', successUrl.substring(0, 150) + '...');
+        console.log('🟣 [BACKEND] Ejecutando redirect 302...');
+        
         return res.redirect(302, successUrl);
+        
       } catch (error: any) {
+        console.error('🔴 [BACKEND] ==================== ERROR CRÍTICO EN CALLBACK ====================');
+        console.error('🔴 [BACKEND] Error:', error);
+        console.error('🔴 [BACKEND] Error message:', error.message);
+        console.error('🔴 [BACKEND] Error stack:', error.stack);
+        
         const base = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com');
-        return res.redirect(302, `${base}/auth/login?error=google_auth_failed`);
+        const errorUrl = `${base}/auth/login?error=google_auth_failed`;
+        console.error('🔴 [BACKEND] Redirigiendo a error URL:', errorUrl);
+        
+        return res.redirect(302, errorUrl);
       }
     });
   }
