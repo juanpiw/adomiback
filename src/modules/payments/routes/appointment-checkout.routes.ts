@@ -17,6 +17,7 @@ export function buildAppointmentCheckoutRoutes(): Router {
     try {
       const user = (req as any).user || {};
       const appointmentId = Number(req.params.id);
+      Logger.info(MODULE, `🧭 [CHECKOUT] Inicio create session appt=${appointmentId}, user=${user.id}`);
       if (!Number.isFinite(appointmentId)) return res.status(400).json({ success: false, error: 'id inválido' });
 
       const pool = DatabaseConnection.getPool();
@@ -40,6 +41,7 @@ export function buildAppointmentCheckoutRoutes(): Router {
       const checkoutAmount = testOverride > 0 ? testOverride : amount;
       const unitAmount = ZERO_DECIMAL.has(currency) ? Math.round(checkoutAmount) : Math.round(checkoutAmount * 100);
 
+      Logger.info(MODULE, `🧭 [CHECKOUT] Creando sesión Stripe... amount=${amount}, currency=${currency}, client_id=${appt.client_id}, provider_id=${appt.provider_id}`);
       const session = await stripe.checkout.sessions.create({
         mode: 'payment',
         line_items: [{
@@ -62,15 +64,16 @@ export function buildAppointmentCheckoutRoutes(): Router {
         }
       });
 
+      Logger.info(MODULE, `🧭 [CHECKOUT] Sesión creada OK: id=${session.id}`);
       await pool.execute(
         `INSERT INTO appointment_checkout_sessions (appointment_id, client_id, provider_id, stripe_checkout_session_id, url, status)
          VALUES (?, ?, ?, ?, ?, 'created')`,
         [appt.id, appt.client_id, appt.provider_id, session.id, session.url || '']
       );
-      Logger.info(MODULE, 'Checkout session created', { appointmentId, sessionId: session.id });
+      Logger.info(MODULE, '🧭 [CHECKOUT] Registro de sesión persistido', { appointmentId, sessionId: session.id });
       return res.json({ success: true, url: session.url });
     } catch (err) {
-      Logger.error(MODULE, 'Error creating checkout session', err as any);
+      Logger.error(MODULE, '🔴 [CHECKOUT] Error creating checkout session', err as any);
       return res.status(500).json({ success: false, error: 'Error al crear checkout' });
     }
   });
@@ -105,6 +108,7 @@ export function buildAppointmentCheckoutRoutes(): Router {
       const user = (req as any).user || {};
       const appointmentId = Number(req.params.id);
       const sessionId = String(req.query.session_id || '');
+      Logger.info(MODULE, `🧭 [CONFIRM] Inicio confirm appt=${appointmentId}, session=${sessionId}, user=${user.id}`);
       if (!Number.isFinite(appointmentId) || !sessionId) {
         return res.status(400).json({ success: false, error: 'Parámetros inválidos' });
       }
@@ -121,8 +125,10 @@ export function buildAppointmentCheckoutRoutes(): Router {
       const stripe = new Stripe(stripeSecret);
 
       const session = await stripe.checkout.sessions.retrieve(sessionId);
+      Logger.info(MODULE, `🧭 [CONFIRM] Sesión Stripe: status=${session.status}, payment_status=${session.payment_status}`);
       const isPaid = session.payment_status === 'paid' || session.status === 'complete';
       if (!isPaid) {
+        Logger.warn(MODULE, `🧭 [CONFIRM] Aún no pagado. payment_status=${session.payment_status}, status=${session.status}`);
         return res.json({ success: true, confirmed: false, payment: { status: session.payment_status || session.status } });
       }
 
@@ -132,6 +138,7 @@ export function buildAppointmentCheckoutRoutes(): Router {
         const amount = Number(session.amount_total || 0);
         const currency = String(session.currency || 'clp');
         const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : (session.payment_intent as any)?.id;
+        Logger.info(MODULE, `🧭 [CONFIRM] Registrando pago amount=${amount} ${currency}, pi=${paymentIntentId}`);
         // Insertar pago con montos de comisión calculados
         const commissionRate = 15.0; // 15% comisión Adomi
         const commissionAmount = Math.round(amount * commissionRate / 100);
@@ -142,7 +149,7 @@ export function buildAppointmentCheckoutRoutes(): Router {
            VALUES (?, ?, ?, ?, ?, ?, ?, 'card', 'completed', ?, ?, CURRENT_TIMESTAMP)`,
           [appointmentId, appt.client_id, appt.provider_id, amount, commissionAmount, providerAmount, currency, sessionId, paymentIntentId || null]
         );
-        Logger.info(MODULE, `Payment recorded: appointment_id=${appointmentId}, amount=${amount}, commission=${commissionAmount}, provider=${providerAmount}, status=completed`);
+        Logger.info(MODULE, `🧭 [CONFIRM] Payment recorded: appointment_id=${appointmentId}, amount=${amount}, commission=${commissionAmount}, provider=${providerAmount}, status=completed`);
         
         // 🔐 GENERAR CÓDIGO DE VERIFICACIÓN
         const verificationCode = generateVerificationCode();
@@ -156,7 +163,7 @@ export function buildAppointmentCheckoutRoutes(): Router {
              WHERE id = ?`,
             [verificationCode, appointmentId]
           );
-          Logger.info(MODULE, `✅ Código ${verificationCode} guardado en cita ${appointmentId}`);
+          Logger.info(MODULE, `🧭 [CONFIRM] ✅ Código ${verificationCode} guardado en cita ${appointmentId}`);
           
           // Enviar código al cliente por notificación push
           await PushService.notifyUser(
@@ -197,7 +204,7 @@ export function buildAppointmentCheckoutRoutes(): Router {
 
       return res.json({ success: true, confirmed: true, payment: { status: 'succeeded' } });
     } catch (err) {
-      Logger.error(MODULE, 'Error confirming appointment payment', err as any);
+      Logger.error(MODULE, '🔴 [CONFIRM] Error confirming appointment payment', err as any);
       return res.status(500).json({ success: false, error: 'Error al confirmar pago' });
     }
   });

@@ -65,8 +65,9 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
   
   let event: Stripe.Event;
   try {
+    Logger.info(MODULE, '🔔 [WEBHOOK] Verifying signature...');
     event = stripe.webhooks.constructEvent(req.body, sig as string, webhookSecret);
-    Logger.info(MODULE, 'Webhook event received', { type: event.type, id: event.id });
+    Logger.info(MODULE, '🔔 [WEBHOOK] Event received', { type: event.type, id: event.id });
   } catch (err: any) {
     Logger.error(MODULE, 'Webhook signature verification failed', err);
     return res.status(400).send(`Webhook Error: ${err.message}`);
@@ -79,16 +80,17 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
   try {
     switch (event.type) {
       case 'checkout.session.completed':
+        Logger.info(MODULE, '🔔 [WEBHOOK] checkout.session.completed recibido');
         await handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session);
         break;
       case 'payment_intent.succeeded':
-        Logger.info(MODULE, 'Payment intent succeeded', { paymentIntentId: (event.data.object as any).id });
+        Logger.info(MODULE, '🔔 [WEBHOOK] payment_intent.succeeded', { paymentIntentId: (event.data.object as any).id });
         break;
       default:
-        Logger.info(MODULE, `Unhandled event type: ${event.type}`);
+        Logger.info(MODULE, `🔔 [WEBHOOK] Unhandled event type: ${event.type}`);
     }
 
-    Logger.info(MODULE, 'Webhook processed successfully', { type: event.type, id: event.id });
+    Logger.info(MODULE, '🔔 [WEBHOOK] Processed successfully', { type: event.type, id: event.id });
   } catch (err) {
     Logger.error(MODULE, 'Webhook handler error', { 
       error: (err as any).message, 
@@ -102,6 +104,7 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
 async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) {
   const pool = DatabaseConnection.getPool();
   try {
+    Logger.info(MODULE, '🧭 [HANDLE_COMPLETED] Start', { sessionId: session.id, payment_status: (session as any).payment_status, status: session.status });
     const appointmentId = Number(session.metadata?.appointmentId || 0);
     const clientId = Number(session.metadata?.clientId || 0);
     const providerId = Number(session.metadata?.providerId || 0);
@@ -125,20 +128,20 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
     // Avoid duplicate payments for the same appointment
     const [existingRows] = await pool.query('SELECT id FROM payments WHERE appointment_id = ? AND status = "completed" LIMIT 1', [appointmentId]);
     if ((existingRows as any[]).length > 0) {
-      Logger.info(MODULE, 'Payment already recorded for appointment', { appointmentId });
+      Logger.info(MODULE, '🧭 [HANDLE_COMPLETED] Payment already recorded', { appointmentId });
       return;
     }
 
     // Load appointment to get price and participants
     const [apptRows] = await pool.query('SELECT id, provider_id, client_id, price FROM appointments WHERE id = ? LIMIT 1', [appointmentId]);
     if ((apptRows as any[]).length === 0) {
-      Logger.warn(MODULE, 'Appointment not found for payment', { appointmentId });
+      Logger.warn(MODULE, '🧭 [HANDLE_COMPLETED] Appointment not found', { appointmentId });
       return;
     }
     const appt = (apptRows as any[])[0];
     const amount = Number(appt.price || 0);
     if (!(amount > 0)) {
-      Logger.warn(MODULE, 'Invalid appointment amount', { appointmentId, amount });
+      Logger.warn(MODULE, '🧭 [HANDLE_COMPLETED] Invalid amount', { appointmentId, amount });
       return;
     }
 
@@ -157,11 +160,11 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
       [appointmentId, clientId, providerId, amount, commissionAmount, providerAmount, paymentIntentId || null]
     );
 
-    Logger.info(MODULE, '💰 Payment recorded successfully', { appointmentId, amount, clientId, providerId });
+    Logger.info(MODULE, '💰 [HANDLE_COMPLETED] Payment recorded', { appointmentId, amount, clientId, providerId });
 
     // 🔐 GENERAR CÓDIGO DE VERIFICACIÓN
     const verificationCode = generateVerificationCode();
-    Logger.info(MODULE, `🔐 Generando código de verificación para cita ${appointmentId}: ${verificationCode}`);
+    Logger.info(MODULE, `🔐 [HANDLE_COMPLETED] Generando código cita ${appointmentId}: ${verificationCode}`);
     
     try {
       await pool.execute(
@@ -171,7 +174,7 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
          WHERE id = ?`,
         [verificationCode, appointmentId]
       );
-      Logger.info(MODULE, `✅ Código ${verificationCode} guardado en cita ${appointmentId}`);
+      Logger.info(MODULE, `✅ [HANDLE_COMPLETED] Código ${verificationCode} guardado en cita ${appointmentId}`);
       
       // Enviar código al cliente por notificación push
       await PushService.notifyUser(
@@ -196,7 +199,7 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
         }
       );
       
-      Logger.info(MODULE, `✅ Código enviado al cliente ${clientId} por push y notificación in-app`);
+      Logger.info(MODULE, `✅ [HANDLE_COMPLETED] Código enviado al cliente ${clientId}`);
       
     } catch (codeErr) {
       Logger.error(MODULE, `❌ Error generando/enviando código de verificación para cita ${appointmentId}`, codeErr as any);
@@ -204,8 +207,18 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
     }
 
     // Emit realtime notifications
-    try { emitToUser(providerId, 'payment:completed', { appointment_id: appointmentId, amount }); } catch {}
-    try { emitToUser(clientId, 'payment:completed', { appointment_id: appointmentId, amount }); } catch {}
+    try { 
+      Logger.info(MODULE, '🔔 Emitting payment:completed to provider', { providerId, appointmentId, amount });
+      emitToUser(providerId, 'payment:completed', { appointment_id: appointmentId, amount }); 
+    } catch (e) {
+      Logger.warn(MODULE, 'Socket emit to provider failed', e as any);
+    }
+    try { 
+      Logger.info(MODULE, '🔔 Emitting payment:completed to client', { clientId, appointmentId, amount });
+      emitToUser(clientId, 'payment:completed', { appointment_id: appointmentId, amount }); 
+    } catch (e) {
+      Logger.warn(MODULE, 'Socket emit to client failed', e as any);
+    }
   } catch (err) {
     Logger.error(MODULE, 'Error handling checkout.session.completed', err as any);
   }

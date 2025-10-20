@@ -141,6 +141,7 @@ function buildRouter(): Router {
       const date = String(req.query.date || '').trim();
       if (!date) return res.status(400).json({ success: false, error: 'date requerido (YYYY-MM-DD)' });
       const pool = DatabaseConnection.getPool();
+      Logger.info(MODULE, `📅 Listando citas del día para provider=${user.id} date=${date}`);
       const [rows] = await pool.query(
         `SELECT a.*, 
                 (SELECT name FROM users WHERE id = a.client_id) AS client_name,
@@ -151,6 +152,7 @@ function buildRouter(): Router {
          ORDER BY a.\`start_time\` ASC`,
         [user.id, date]
       );
+      Logger.info(MODULE, `📅 Citas retornadas: ${(rows as any[]).length}`, { sample: (rows as any[])[0] });
       return res.json({ success: true, appointments: rows });
     } catch (err) {
       Logger.error(MODULE, 'Error listing appointments by day', err as any);
