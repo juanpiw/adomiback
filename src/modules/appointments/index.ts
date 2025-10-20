@@ -57,11 +57,51 @@ function buildRouter(): Router {
       );
       const appointment = (row as any[])[0];
       Logger.info(MODULE, 'Appointment created', { id, provider_id, client_id });
+      
+      console.log('🟢 [APPOINTMENTS] ==================== NUEVA CITA CREADA ====================');
+      console.log('🟢 [APPOINTMENTS] Appointment ID:', id);
+      console.log('🟢 [APPOINTMENTS] Provider ID:', provider_id);
+      console.log('🟢 [APPOINTMENTS] Client ID:', client_id);
+      console.log('🟢 [APPOINTMENTS] Client Name:', (appointment as any).client_name);
+      console.log('🟢 [APPOINTMENTS] Start Time:', start_time);
+      console.log('🟢 [APPOINTMENTS] Appointment Data:', JSON.stringify(appointment, null, 2));
+      
       // Emitir en tiempo real a provider y client
-      try { emitToUser(provider_id, 'appointment:created', appointment); } catch {}
-      try { emitToUser(client_id, 'appointment:created', appointment); } catch {}
+      console.log('🔵 [APPOINTMENTS] Emitiendo socket a provider y client...');
+      try { 
+        emitToUser(provider_id, 'appointment:created', appointment);
+        console.log('🔵 [APPOINTMENTS] ✅ Socket emitido a provider:', provider_id);
+      } catch (err) {
+        console.error('🔴 [APPOINTMENTS] ❌ Error emitiendo socket a provider:', err);
+      }
+      
+      try { 
+        emitToUser(client_id, 'appointment:created', appointment);
+        console.log('🔵 [APPOINTMENTS] ✅ Socket emitido a client:', client_id);
+      } catch (err) {
+        console.error('🔴 [APPOINTMENTS] ❌ Error emitiendo socket a client:', err);
+      }
+      
       // Push al proveedor
-      try { await PushService.notifyUser(Number(provider_id), 'Nueva cita por confirmar', `Cliente: ${(appointment as any).client_name || ''} • ${String(start_time).slice(0,5)}`, { type: 'appointment', appointment_id: String(id) }); } catch {}
+      console.log('🟣 [APPOINTMENTS] ==================== ENVIANDO PUSH NOTIFICATION ====================');
+      console.log('🟣 [APPOINTMENTS] Provider ID para push:', provider_id);
+      console.log('🟣 [APPOINTMENTS] Título:', 'Nueva cita por confirmar');
+      console.log('🟣 [APPOINTMENTS] Mensaje:', `Cliente: ${(appointment as any).client_name || ''} • ${String(start_time).slice(0,5)}`);
+      
+      try { 
+        await PushService.notifyUser(
+          Number(provider_id), 
+          'Nueva cita por confirmar', 
+          `Cliente: ${(appointment as any).client_name || ''} • ${String(start_time).slice(0,5)}`, 
+          { type: 'appointment', appointment_id: String(id) }
+        );
+        console.log('🟣 [APPOINTMENTS] ✅ Push notification enviada exitosamente');
+      } catch (pushErr) {
+        console.error('🔴 [APPOINTMENTS] ❌ Error enviando push notification:', pushErr);
+        console.error('🔴 [APPOINTMENTS] Error stack:', (pushErr as Error).stack);
+      }
+      
+      console.log('🟢 [APPOINTMENTS] ==================== FIN CREACIÓN CITA ====================');
       return res.status(201).json({ success: true, appointment });
     } catch (err) {
       Logger.error(MODULE, 'Error creating appointment', err as any);

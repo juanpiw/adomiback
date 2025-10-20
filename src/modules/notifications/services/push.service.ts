@@ -66,32 +66,74 @@ export class PushService {
   }
 
   static async notifyUser(userId: number, title: string, body: string, data?: Record<string, string>): Promise<void> {
+    console.log('🟡 [PUSH_SERVICE] ==================== NOTIFY USER ====================');
+    console.log('🟡 [PUSH_SERVICE] Timestamp:', new Date().toISOString());
+    console.log('🟡 [PUSH_SERVICE] User ID:', userId);
+    console.log('🟡 [PUSH_SERVICE] Title:', title);
+    console.log('🟡 [PUSH_SERVICE] Body:', body);
+    console.log('🟡 [PUSH_SERVICE] Data:', JSON.stringify(data));
+    
     // Crear notificación in-app primero
+    console.log('🟡 [PUSH_SERVICE] Creando notificación in-app...');
     await this.createInAppNotification(userId, title, body, data);
+    console.log('🟡 [PUSH_SERVICE] ✅ Notificación in-app creada');
     
     // Intentar enviar push notification
+    console.log('🟡 [PUSH_SERVICE] Inicializando Firebase Admin...');
     initFirebaseAdminIfPossible();
+    
     if (!admin) {
+      console.error('🔴 [PUSH_SERVICE] ❌ Firebase NO está configurado');
       Logger.info(MODULE, 'Firebase not configured, skipping push notification');
       return;
     }
     
+    console.log('🟡 [PUSH_SERVICE] ✅ Firebase Admin está disponible');
+    
     const pool = DatabaseConnection.getPool();
     try {
+      console.log('🟡 [PUSH_SERVICE] Buscando tokens de dispositivo para user:', userId);
       const [rows] = await pool.query('SELECT token FROM device_tokens WHERE user_id = ?', [userId]);
       const tokens = (rows as any[]).map(r => String(r.token)).filter(Boolean);
+      
+      console.log('🟡 [PUSH_SERVICE] Tokens encontrados:', tokens.length);
+      console.log('🟡 [PUSH_SERVICE] Tokens:', tokens.map(t => t.substring(0, 20) + '...'));
+      
       if (tokens.length === 0) {
+        console.warn('⚠️ [PUSH_SERVICE] No hay tokens de dispositivo para el usuario', userId);
         Logger.info(MODULE, `No device tokens for user ${userId}`);
         return;
       }
+      
       const message = {
         notification: { title, body },
         data: data || {},
         tokens
       };
+      
+      console.log('🟡 [PUSH_SERVICE] Mensaje a enviar:', JSON.stringify(message, null, 2));
+      console.log('🟡 [PUSH_SERVICE] Enviando push notification...');
+      
       const resp = await admin.messaging().sendMulticast(message);
+      
+      console.log('🟡 [PUSH_SERVICE] ✅ Push enviado exitosamente');
+      console.log('🟡 [PUSH_SERVICE] Success:', resp.successCount);
+      console.log('🟡 [PUSH_SERVICE] Failures:', resp.failureCount);
+      
+      if (resp.failureCount > 0) {
+        console.error('🔴 [PUSH_SERVICE] Detalles de errores:');
+        resp.responses.forEach((r, i) => {
+          if (!r.success) {
+            console.error(`🔴 [PUSH_SERVICE] Token ${i}: ${r.error?.message}`);
+          }
+        });
+      }
+      
       Logger.info(MODULE, `Push sent: success ${resp.successCount} / failure ${resp.failureCount}`);
     } catch (err) {
+      console.error('🔴 [PUSH_SERVICE] ❌ Error enviando push:', err);
+      console.error('🔴 [PUSH_SERVICE] Error message:', (err as Error).message);
+      console.error('🔴 [PUSH_SERVICE] Error stack:', (err as Error).stack);
       Logger.error(MODULE, 'Error sending push', err as any);
     }
   }
