@@ -5,6 +5,7 @@ import { Logger } from '../../../shared/utils/logger.util';
 import Stripe from 'stripe';
 import { emitToUser } from '../../../shared/realtime/socket';
 import { PushService } from '../../notifications/services/push.service';
+import { generateVerificationCode } from '../../../shared/utils/verification-code.util';
 
 const MODULE = 'PAYMENTS_APPOINTMENTS';
 
@@ -142,6 +143,51 @@ export function buildAppointmentCheckoutRoutes(): Router {
           [appointmentId, appt.client_id, appt.provider_id, amount, commissionAmount, providerAmount, currency, sessionId, paymentIntentId || null]
         );
         Logger.info(MODULE, `Payment recorded: appointment_id=${appointmentId}, amount=${amount}, commission=${commissionAmount}, provider=${providerAmount}, status=completed`);
+        
+        // 🔐 GENERAR CÓDIGO DE VERIFICACIÓN
+        const verificationCode = generateVerificationCode();
+        Logger.info(MODULE, `🔐 Generando código de verificación para cita ${appointmentId}: ${verificationCode}`);
+        
+        try {
+          await pool.execute(
+            `UPDATE appointments 
+             SET verification_code = ?, 
+                 code_generated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+            [verificationCode, appointmentId]
+          );
+          Logger.info(MODULE, `✅ Código ${verificationCode} guardado en cita ${appointmentId}`);
+          
+          // Enviar código al cliente por notificación push
+          await PushService.notifyUser(
+            Number(appt.client_id),
+            '🔐 Código de Verificación',
+            `Tu código para verificar el servicio es: ${verificationCode}. Compártelo con el profesional SOLO cuando el servicio esté completado.`,
+            { 
+              type: 'verification_code', 
+              appointment_id: String(appointmentId), 
+              code: verificationCode 
+            }
+          );
+          
+          // Crear notificación in-app para el cliente
+          await PushService.createInAppNotification(
+            Number(appt.client_id),
+            '🔐 Código de Verificación Generado',
+            `Tu código de verificación para la cita #${appointmentId} es: ${verificationCode}. Guárdalo de forma segura.`,
+            { 
+              type: 'verification_code', 
+              appointment_id: String(appointmentId) 
+            }
+          );
+          
+          Logger.info(MODULE, `✅ Código enviado al cliente ${appt.client_id} por push y notificación in-app`);
+          
+        } catch (codeErr) {
+          Logger.error(MODULE, `❌ Error generando/enviando código de verificación para cita ${appointmentId}`, codeErr as any);
+          // No bloqueamos el flujo si falla el código, pero lo registramos
+        }
+        
         // Emitir evento de pago completado a proveedor y cliente
         try { emitToUser(appt.provider_id, 'payment:completed', { appointment_id: appointmentId, amount }); } catch {}
         try { emitToUser(appt.client_id, 'payment:completed', { appointment_id: appointmentId, amount }); } catch {}

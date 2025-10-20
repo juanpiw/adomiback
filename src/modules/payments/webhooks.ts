@@ -3,6 +3,8 @@ import Stripe from 'stripe';
 import DatabaseConnection from '../../shared/database/connection';
 import { Logger } from '../../shared/utils/logger.util';
 import { emitToUser } from '../../shared/realtime/socket';
+import { PushService } from '../notifications/services/push.service';
+import { generateVerificationCode } from '../../shared/utils/verification-code.util';
 
 const MODULE = 'PAYMENTS_WEBHOOKS';
 
@@ -17,56 +19,26 @@ export function setupPaymentsWebhooks(app: any) {
   
   const stripe = new Stripe(stripeSecret);
 
+  // Webhook genérico de Stripe (alias para compatibilidad)
+  app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (req: any, res: any) => {
+    return handleStripeWebhook(req, res, stripe, webhookSecret);
+  });
+
   // Webhook específico para pagos de citas (usar raw body)
   app.post('/webhooks/stripe-appointments', express.raw({ type: 'application/json' }), async (req: any, res: any) => {
-    Logger.info(MODULE, 'Appointments webhook request received', { 
-      headers: req.headers,
-      bodyLength: req.body?.length || 0,
-      timestamp: new Date().toISOString()
-    });
-    
-    const sig = req.headers['stripe-signature'];
-    if (!sig) {
-      Logger.error(MODULE, 'Missing stripe-signature header');
-      return res.status(400).send('Webhook Error: Missing signature');
-    }
-    
-    let event: Stripe.Event;
-    try {
-      event = stripe.webhooks.constructEvent(req.body, sig as string, webhookSecret);
-      Logger.info(MODULE, 'Appointments webhook event received', { type: event.type, id: event.id });
-    } catch (err: any) {
-      Logger.error(MODULE, 'Webhook signature verification failed', err);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-
-    try {
-      switch (event.type) {
-        case 'checkout.session.completed':
-          await handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session);
-          break;
-        case 'payment_intent.succeeded':
-          // Optional: can be handled if needed
-          Logger.info(MODULE, 'Payment intent succeeded', { paymentIntentId: (event.data.object as any).id });
-          break;
-        default:
-          Logger.info(MODULE, `Unhandled event type: ${event.type}`);
-      }
-
-      Logger.info(MODULE, 'Appointments webhook processed successfully', { type: event.type, id: event.id });
-      res.status(200).json({ received: true });
-    } catch (err) {
-      Logger.error(MODULE, 'Webhook handler error', { 
-        error: (err as any).message, 
-        stack: (err as any).stack,
-        eventType: event.type,
-        eventId: event.id 
-      });
-      res.status(500).json({ error: 'Webhook handler error' });
-    }
+    return handleStripeWebhook(req, res, stripe, webhookSecret);
   });
   
-  // Health check endpoint for appointments webhook
+  // Health check endpoint for webhooks
+  app.get('/webhooks/stripe/health', (req: any, res: any) => {
+    res.status(200).json({ 
+      status: 'ok', 
+      timestamp: new Date().toISOString(),
+      configured: !!(stripeSecret && webhookSecret),
+      endpoints: ['/webhooks/stripe', '/webhooks/stripe-appointments']
+    });
+  });
+  
   app.get('/webhooks/stripe-appointments/health', (req: any, res: any) => {
     res.status(200).json({ 
       status: 'ok', 
@@ -75,7 +47,56 @@ export function setupPaymentsWebhooks(app: any) {
     });
   });
   
-  Logger.info(MODULE, 'Stripe appointments webhook endpoint configured at POST /webhooks/stripe-appointments');
+  Logger.info(MODULE, 'Stripe webhook endpoints configured: POST /webhooks/stripe, POST /webhooks/stripe-appointments');
+}
+
+async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSecret: string) {
+  Logger.info(MODULE, 'Webhook request received', { 
+    headers: req.headers,
+    bodyLength: req.body?.length || 0,
+    timestamp: new Date().toISOString()
+  });
+  
+  const sig = req.headers['stripe-signature'];
+  if (!sig) {
+    Logger.error(MODULE, 'Missing stripe-signature header');
+    return res.status(400).send('Webhook Error: Missing signature');
+  }
+  
+  let event: Stripe.Event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig as string, webhookSecret);
+    Logger.info(MODULE, 'Webhook event received', { type: event.type, id: event.id });
+  } catch (err: any) {
+    Logger.error(MODULE, 'Webhook signature verification failed', err);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // ✅ RESPONDER 200 INMEDIATAMENTE (antes de procesar)
+  res.status(200).json({ received: true });
+
+  // Procesar evento de forma asíncrona (después de responder)
+  try {
+    switch (event.type) {
+      case 'checkout.session.completed':
+        await handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session);
+        break;
+      case 'payment_intent.succeeded':
+        Logger.info(MODULE, 'Payment intent succeeded', { paymentIntentId: (event.data.object as any).id });
+        break;
+      default:
+        Logger.info(MODULE, `Unhandled event type: ${event.type}`);
+    }
+
+    Logger.info(MODULE, 'Webhook processed successfully', { type: event.type, id: event.id });
+  } catch (err) {
+    Logger.error(MODULE, 'Webhook handler error', { 
+      error: (err as any).message, 
+      stack: (err as any).stack,
+      eventType: event.type,
+      eventId: event.id 
+    });
+  }
 }
 
 async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) {
@@ -135,6 +156,52 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
        VALUES (?, ?, ?, ?, ?, ?, 'CLP', 'card', ?, 'completed', CURRENT_TIMESTAMP)`,
       [appointmentId, clientId, providerId, amount, commissionAmount, providerAmount, paymentIntentId || null]
     );
+
+    Logger.info(MODULE, '💰 Payment recorded successfully', { appointmentId, amount, clientId, providerId });
+
+    // 🔐 GENERAR CÓDIGO DE VERIFICACIÓN
+    const verificationCode = generateVerificationCode();
+    Logger.info(MODULE, `🔐 Generando código de verificación para cita ${appointmentId}: ${verificationCode}`);
+    
+    try {
+      await pool.execute(
+        `UPDATE appointments 
+         SET verification_code = ?, 
+             code_generated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [verificationCode, appointmentId]
+      );
+      Logger.info(MODULE, `✅ Código ${verificationCode} guardado en cita ${appointmentId}`);
+      
+      // Enviar código al cliente por notificación push
+      await PushService.notifyUser(
+        clientId,
+        '🔐 Código de Verificación',
+        `Tu código para verificar el servicio es: ${verificationCode}. Compártelo con el profesional SOLO cuando el servicio esté completado.`,
+        { 
+          type: 'verification_code', 
+          appointment_id: String(appointmentId), 
+          code: verificationCode 
+        }
+      );
+      
+      // Crear notificación in-app para el cliente
+      await PushService.createInAppNotification(
+        clientId,
+        '🔐 Código de Verificación Generado',
+        `Tu código de verificación para la cita #${appointmentId} es: ${verificationCode}. Guárdalo de forma segura.`,
+        { 
+          type: 'verification_code', 
+          appointment_id: String(appointmentId) 
+        }
+      );
+      
+      Logger.info(MODULE, `✅ Código enviado al cliente ${clientId} por push y notificación in-app`);
+      
+    } catch (codeErr) {
+      Logger.error(MODULE, `❌ Error generando/enviando código de verificación para cita ${appointmentId}`, codeErr as any);
+      // No bloqueamos el flujo si falla el código, pero lo registramos
+    }
 
     // Emit realtime notifications
     try { emitToUser(providerId, 'payment:completed', { appointment_id: appointmentId, amount }); } catch {}

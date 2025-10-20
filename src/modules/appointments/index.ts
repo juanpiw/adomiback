@@ -9,6 +9,7 @@ import { authenticateToken } from '../../shared/middleware/auth.middleware';
 import { Logger } from '../../shared/utils/logger.util';
 import { emitToUser } from '../../shared/realtime/socket';
 import { PushService } from '../notifications/services/push.service';
+import { validateCodeFormat, compareVerificationCodes, sanitizeCode } from '../../shared/utils/verification-code.util';
 
 const MODULE = 'APPOINTMENTS';
 
@@ -496,6 +497,292 @@ function buildRouter(): Router {
     
     return daysMap[dayIndex] || 'monday';
   }
+
+  // ========================================
+  // ENDPOINTS DE VERIFICACIÓN DE CÓDIGOS
+  // ========================================
+
+  /**
+   * POST /appointments/:id/verify-completion
+   * Verifica el código de 4 dígitos para marcar servicio como completado
+   * Solo el proveedor puede llamar este endpoint
+   */
+  router.post('/appointments/:id/verify-completion', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const appointmentId = Number(req.params.id);
+      const { verification_code } = req.body || {};
+      
+      Logger.info(MODULE, '🔐 ==================== VERIFICANDO CÓDIGO ====================');
+      Logger.info(MODULE, `🔐 Appointment ID: ${appointmentId}`);
+      Logger.info(MODULE, `🔐 Provider ID: ${user.id}`);
+      Logger.info(MODULE, `🔐 Código ingresado: ${verification_code}`);
+      
+      // Validar formato del código
+      if (!verification_code || !validateCodeFormat(verification_code)) {
+        Logger.error(MODULE, '❌ Código inválido (formato incorrecto)');
+        return res.status(400).json({ 
+          success: false, 
+          error: 'Código de 4 dígitos requerido' 
+        });
+      }
+      
+      const pool = DatabaseConnection.getPool();
+      
+      // Obtener la cita
+      const [rows] = await pool.query(
+        `SELECT id, provider_id, client_id, service_id, verification_code, 
+                verification_attempts, status, date, start_time,
+                (SELECT name FROM users WHERE id = client_id) AS client_name,
+                (SELECT name FROM provider_services WHERE id = service_id) AS service_name
+         FROM appointments 
+         WHERE id = ? AND provider_id = ?
+         LIMIT 1`,
+        [appointmentId, user.id]
+      );
+      
+      if ((rows as any[]).length === 0) {
+        Logger.error(MODULE, '❌ Cita no encontrada o no pertenece al proveedor');
+        return res.status(404).json({ 
+          success: false, 
+          error: 'Cita no encontrada' 
+        });
+      }
+      
+      const appointment = (rows as any[])[0];
+      
+      Logger.info(MODULE, `🔐 Cita encontrada: ${JSON.stringify({
+        id: appointment.id,
+        status: appointment.status,
+        code: appointment.verification_code,
+        attempts: appointment.verification_attempts
+      })}`);
+      
+      // Verificar que la cita tenga código (fue pagada)
+      if (!appointment.verification_code) {
+        Logger.error(MODULE, '❌ Cita no tiene código de verificación (no fue pagada)');
+        return res.status(400).json({ 
+          success: false, 
+          error: 'Esta cita no tiene código de verificación. El cliente debe pagar primero.' 
+        });
+      }
+      
+      // Verificar límite de intentos
+      if (appointment.verification_attempts >= 3) {
+        Logger.error(MODULE, `❌ Límite de intentos excedido (${appointment.verification_attempts})`);
+        return res.status(429).json({ 
+          success: false, 
+          error: 'Límite de intentos excedido. Contacta a soporte.', 
+          remainingAttempts: 0
+        });
+      }
+      
+      // Sanitizar y comparar códigos
+      const inputCode = sanitizeCode(verification_code);
+      const storedCode = appointment.verification_code;
+      
+      Logger.info(MODULE, `🔐 Comparando: '${inputCode}' vs '${storedCode}'`);
+      
+      if (compareVerificationCodes(inputCode, storedCode)) {
+        Logger.info(MODULE, '✅ CÓDIGO CORRECTO - Marcando servicio como completado');
+        
+        // Marcar como completado y permitir liberación de fondos
+        await pool.execute(
+          `UPDATE appointments 
+           SET status = 'completed', 
+               completed_at = NOW(), 
+               verified_at = NOW(),
+               verified_by_provider_id = ?
+           WHERE id = ?`,
+          [user.id, appointmentId]
+        );
+        
+        // Permitir liberación de fondos en payments
+        await pool.execute(
+          `UPDATE payments 
+           SET can_release = TRUE
+           WHERE appointment_id = ?`,
+          [appointmentId]
+        );
+        
+        Logger.info(MODULE, '✅ Cita marcada como completada y fondos liberables');
+        
+        // Emitir socket a proveedor y cliente
+        try {
+          emitToUser(appointment.provider_id, 'appointment:completed', { id: appointmentId });
+          emitToUser(appointment.client_id, 'appointment:completed', { id: appointmentId });
+        } catch (socketErr) {
+          Logger.error(MODULE, 'Error emitting socket', socketErr as any);
+        }
+        
+        // Notificar al cliente
+        try {
+          await PushService.notifyUser(
+            appointment.client_id,
+            '✅ Servicio Completado',
+            `Tu servicio "${appointment.service_name}" ha sido verificado y completado.`,
+            { type: 'appointment', appointment_id: String(appointmentId), status: 'completed' }
+          );
+          
+          await PushService.createInAppNotification(
+            appointment.client_id,
+            '✅ Servicio Completado',
+            `Tu servicio "${appointment.service_name}" con ${appointment.client_name} ha sido completado exitosamente.`,
+            { type: 'appointment', appointment_id: String(appointmentId) }
+          );
+        } catch (pushErr) {
+          Logger.error(MODULE, 'Error sending push notification', pushErr as any);
+        }
+        
+        return res.json({ 
+          success: true, 
+          message: 'Servicio verificado exitosamente',
+          appointment: {
+            id: appointmentId,
+            status: 'completed',
+            completed_at: new Date()
+          }
+        });
+        
+      } else {
+        Logger.error(MODULE, '❌ CÓDIGO INCORRECTO');
+        
+        // Incrementar intentos fallidos
+        const newAttempts = appointment.verification_attempts + 1;
+        await pool.execute(
+          'UPDATE appointments SET verification_attempts = ? WHERE id = ?',
+          [newAttempts, appointmentId]
+        );
+        
+        // Registrar intento en tabla de auditoría (si existe)
+        try {
+          await pool.execute(
+            `INSERT INTO verification_attempts 
+             (appointment_id, provider_id, code_attempted, success, ip_address)
+             VALUES (?, ?, ?, FALSE, ?)`,
+            [appointmentId, user.id, inputCode, req.ip || 'unknown']
+          );
+        } catch (auditErr) {
+          // Tabla de auditoría puede no existir aún
+          Logger.warn(MODULE, 'Could not log verification attempt (table may not exist)');
+        }
+        
+        const remainingAttempts = 3 - newAttempts;
+        
+        Logger.warn(MODULE, `⚠️ Intentos restantes: ${remainingAttempts}`);
+        
+        return res.status(400).json({ 
+          success: false, 
+          error: `Código incorrecto. Intentos restantes: ${remainingAttempts}`,
+          remainingAttempts
+        });
+      }
+      
+    } catch (err) {
+      Logger.error(MODULE, '🔴 Error verificando código', err as any);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Error al verificar código' 
+      });
+    }
+  });
+
+  /**
+   * GET /appointments/:id/verification-code
+   * Obtiene el código de verificación de una cita (solo el cliente)
+   */
+  router.get('/appointments/:id/verification-code', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const appointmentId = Number(req.params.id);
+      
+      Logger.info(MODULE, `🔐 Cliente ${user.id} solicitando código para cita ${appointmentId}`);
+      
+      const pool = DatabaseConnection.getPool();
+      const [rows] = await pool.query(
+        `SELECT verification_code, code_generated_at, status
+         FROM appointments 
+         WHERE id = ? AND client_id = ? AND verification_code IS NOT NULL
+         LIMIT 1`,
+        [appointmentId, user.id]
+      );
+      
+      if ((rows as any[]).length === 0) {
+        Logger.warn(MODULE, '❌ Código no disponible (cita no existe, no pertenece al cliente, o no tiene código)');
+        return res.status(404).json({ 
+          success: false, 
+          error: 'Código no disponible. Verifica que la cita haya sido pagada.' 
+        });
+      }
+      
+      const { verification_code, code_generated_at, status } = (rows as any[])[0];
+      
+      Logger.info(MODULE, `✅ Código obtenido: ${verification_code} (generado: ${code_generated_at})`);
+      
+      return res.json({ 
+        success: true, 
+        code: verification_code,
+        generated_at: code_generated_at,
+        status
+      });
+      
+    } catch (err) {
+      Logger.error(MODULE, 'Error obteniendo código', err as any);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Error al obtener código' 
+      });
+    }
+  });
+
+  /**
+   * GET /provider/appointments/paid
+   * Lista citas pagadas del proveedor (esperando verificación)
+   */
+  router.get('/provider/appointments/paid', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      
+      Logger.info(MODULE, `💰 Proveedor ${user.id} solicitando citas pagadas`);
+      
+      const pool = DatabaseConnection.getPool();
+      
+      const [rows] = await pool.query(
+        `SELECT a.*, 
+                (SELECT name FROM users WHERE id = a.client_id) AS client_name,
+                (SELECT email FROM users WHERE id = a.client_id) AS client_email,
+                (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
+                p.id AS payment_id,
+                p.amount, 
+                p.status AS payment_status, 
+                p.paid_at, 
+                p.can_release,
+                p.released_at
+         FROM appointments a
+         INNER JOIN payments p ON p.appointment_id = a.id
+         WHERE a.provider_id = ? 
+           AND p.status = 'completed'
+           AND a.status IN ('confirmed', 'scheduled', 'in_progress')
+           AND a.verification_code IS NOT NULL
+         ORDER BY a.date ASC, a.start_time ASC`,
+        [user.id]
+      );
+      
+      Logger.info(MODULE, `✅ ${(rows as any[]).length} citas pagadas encontradas`);
+      
+      return res.json({ 
+        success: true, 
+        appointments: rows 
+      });
+      
+    } catch (err) {
+      Logger.error(MODULE, 'Error listando citas pagadas', err as any);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Error al listar citas pagadas' 
+      });
+    }
+  });
 
   return router;
 }
