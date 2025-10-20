@@ -231,29 +231,130 @@ function buildRouter(): Router {
       const provider_id = Number(req.query.provider_id);
       const date = String(req.query.date || '').trim();
       const service_id = Number(req.query.service_id);
+      
+      console.log('🟢 [TIME_SLOTS] ==================== OBTENIENDO TIME SLOTS ====================');
+      console.log('🟢 [TIME_SLOTS] Provider ID:', provider_id);
+      console.log('🟢 [TIME_SLOTS] Date:', date);
+      console.log('🟢 [TIME_SLOTS] Service ID:', service_id);
+      
       if (!provider_id || !date || !service_id) return res.status(400).json({ success: false, error: 'provider_id, date y service_id son requeridos' });
+      
       const pool = DatabaseConnection.getPool();
+      
       // Duración del servicio
       const [sv] = await pool.query('SELECT duration_minutes FROM provider_services WHERE id = ? AND provider_id = ? LIMIT 1', [service_id, provider_id]);
       if ((sv as any[]).length === 0) return res.status(404).json({ success: false, error: 'Servicio no encontrado' });
       const duration = Number((sv as any[])[0].duration_minutes || 30);
-      // Citas existentes del día
+      console.log('🟢 [TIME_SLOTS] Duración del servicio:', duration, 'minutos');
+      
+      // Obtener día de la semana
+      const dayOfWeek = getDayOfWeekFromDate(date);
+      console.log('🟢 [TIME_SLOTS] Día de la semana:', dayOfWeek);
+      
+      // 1. Obtener bloques semanales del proveedor
+      const [weekly] = await pool.query(
+        'SELECT start_time, end_time FROM provider_availability WHERE provider_id = ? AND day_of_week = ? AND is_active = TRUE',
+        [provider_id, dayOfWeek]
+      );
+      
+      let blocks = (weekly as any[]).length > 0 
+        ? (weekly as any[]).map((w: any) => ({ 
+            start: String(w.start_time).slice(0, 5), 
+            end: String(w.end_time).slice(0, 5) 
+          }))
+        : [{ start: '09:00', end: '18:00' }]; // Default si no hay configuración
+      
+      console.log('🟢 [TIME_SLOTS] Bloques semanales:', blocks);
+      
+      // 2. Verificar excepciones para esta fecha específica
+      const [exceptions] = await pool.query(
+        'SELECT is_available, start_time, end_time, reason FROM availability_exceptions WHERE provider_id = ? AND exception_date = ?',
+        [provider_id, date]
+      );
+      
+      console.log('🟢 [TIME_SLOTS] Excepciones encontradas:', (exceptions as any[]).length);
+      
+      let blockedRanges: Array<{ start: string; end: string; reason: string }> = [];
+      
+      for (const exc of (exceptions as any[])) {
+        console.log('🟢 [TIME_SLOTS] Excepción:', exc);
+        
+        if (!exc.is_available) {
+          // Es un bloqueo
+          if (!exc.start_time && !exc.end_time) {
+            // Bloqueo de todo el día
+            console.log('🔴 [TIME_SLOTS] ⚠️ TODO EL DÍA BLOQUEADO');
+            blocks = []; // No hay bloques disponibles
+          } else {
+            // Bloqueo de horario específico
+            blockedRanges.push({
+              start: String(exc.start_time).slice(0, 5),
+              end: String(exc.end_time).slice(0, 5),
+              reason: exc.reason || 'Bloqueado'
+            });
+            console.log('🔴 [TIME_SLOTS] Horario bloqueado:', exc.start_time, '-', exc.end_time);
+          }
+        } else {
+          // Es una habilitación especial (sobrescribe horario semanal)
+          if (exc.start_time && exc.end_time) {
+            blocks = [{
+              start: String(exc.start_time).slice(0, 5),
+              end: String(exc.end_time).slice(0, 5)
+            }];
+            console.log('🟢 [TIME_SLOTS] Horario especial habilitado:', exc.start_time, '-', exc.end_time);
+          }
+        }
+      }
+      
+      // 3. Obtener citas existentes del día
       const [apps] = await pool.query('SELECT \`start_time\`, \`end_time\` FROM appointments WHERE provider_id = ? AND \`date\` = ?', [provider_id, date]);
-      // TODO: obtener bloques de disponibilidad semanal (por ahora 09:00-18:00)
-      const blocks = [{ start: '09:00', end: '18:00' }];
-      // Generar slots
-      const slots: Array<{ time: string; is_available: boolean }> = [];
+      console.log('🟢 [TIME_SLOTS] Citas existentes:', (apps as any[]).length);
+      
+      // 4. Generar slots considerando bloques, bloqueos y citas
+      const slots: Array<{ time: string; is_available: boolean; reason?: string }> = [];
+      
       for (const b of blocks) {
         let cursor = b.start;
         while (addMinutes(cursor, duration) <= b.end) {
           const next = addMinutes(cursor, duration);
-          const overlaps = (apps as any[]).some((a) => !(a.end_time <= cursor || a.start_time >= next));
-          slots.push({ time: cursor, is_available: !overlaps });
+          
+          // Verificar overlap con citas
+          const hasAppointment = (apps as any[]).some((a: any) => {
+            const aStart = String(a.start_time).slice(0, 5);
+            const aEnd = String(a.end_time).slice(0, 5);
+            return !(aEnd <= cursor || aStart >= next);
+          });
+          
+          // Verificar si está en un rango bloqueado
+          const isBlocked = blockedRanges.some((br: any) => {
+            return !(br.end <= cursor || br.start >= next);
+          });
+          
+          let reason: string | undefined;
+          if (isBlocked) {
+            reason = 'blocked';
+          } else if (hasAppointment) {
+            reason = 'booked';
+          }
+          
+          slots.push({ 
+            time: cursor, 
+            is_available: !hasAppointment && !isBlocked,
+            ...(reason ? { reason } : {})
+          });
+          
           cursor = next;
         }
       }
+      
+      console.log('🟢 [TIME_SLOTS] Slots generados:', slots.length);
+      console.log('🟢 [TIME_SLOTS] Disponibles:', slots.filter(s => s.is_available).length);
+      console.log('🟢 [TIME_SLOTS] Bloqueados:', slots.filter(s => s.reason === 'blocked').length);
+      console.log('🟢 [TIME_SLOTS] Ocupados:', slots.filter(s => s.reason === 'booked').length);
+      
       return res.json({ success: true, time_slots: slots });
     } catch (err) {
+      console.error('🔴 [TIME_SLOTS] Error:', err);
       Logger.error(MODULE, 'Error getting time-slots', err as any);
       return res.status(500).json({ success: false, error: 'Error al obtener time-slots' });
     }
@@ -371,6 +472,29 @@ function buildRouter(): Router {
     const H = String(d.getHours()).padStart(2, '0');
     const M = String(d.getMinutes()).padStart(2, '0');
     return `${H}:${M}`;
+  }
+  
+  /**
+   * Obtener día de la semana desde fecha YYYY-MM-DD
+   * @param dateStr Fecha en formato YYYY-MM-DD
+   * @returns Día de la semana: 'monday', 'tuesday', etc.
+   */
+  function getDayOfWeekFromDate(dateStr: string): string {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    const dayIndex = date.getDay(); // 0=Sunday, 1=Monday, ..., 6=Saturday
+    
+    const daysMap: Record<number, string> = {
+      0: 'sunday',
+      1: 'monday',
+      2: 'tuesday',
+      3: 'wednesday',
+      4: 'thursday',
+      5: 'friday',
+      6: 'saturday'
+    };
+    
+    return daysMap[dayIndex] || 'monday';
   }
 
   return router;
