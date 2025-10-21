@@ -196,6 +196,7 @@ export class ClientSearchRoutes {
             location: provider.location || provider.main_region,
             services_count: provider.services_count,
             experience_years: provider.years_experience,
+            is_online: !!provider.is_online,
             available_for_bookings: provider.available_for_bookings,
             services: (servicesRows as any[]).map(service => ({
               id: service.id,
