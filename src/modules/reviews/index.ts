@@ -93,8 +93,5 @@ export function setupReviewsModule(app: Express) {
  * Setup function to mount reviews routes
  * @param app Express application
  */
-export function setupReviewsModule(app: any) {
-  // TODO: Implement when routes are ready
-  console.log('[REVIEWS MODULE] Module structure ready - awaiting implementation');
-}
+// (removed duplicate setupReviewsModule)
 
