@@ -209,6 +209,56 @@ export function buildAppointmentCheckoutRoutes(): Router {
     }
   });
 
+  // GET /provider/earnings/summary?month=YYYY-MM
+  router.get('/provider/earnings/summary', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const providerId = Number(user.id);
+      if (!providerId) return res.status(401).json({ success: false, error: 'No autorizado' });
+
+      const monthParam = String(req.query.month || '').trim();
+      const now = new Date();
+      const [y, m] = monthParam && /\d{4}-\d{2}/.test(monthParam)
+        ? monthParam.split('-').map(Number)
+        : [now.getFullYear(), now.getMonth() + 1];
+
+      const start = new Date(y, m - 1, 1);
+      const end = new Date(y, m, 0); // último día del mes
+
+      const startStr = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`;
+      const endStr = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`;
+
+      Logger.info(MODULE, `🧮 [EARNINGS] Provider=${providerId} month=${y}-${String(m).padStart(2,'0')} range=${startStr}..${endStr}`);
+
+      const pool = DatabaseConnection.getPool();
+      const [rows] = await pool.query(
+        `SELECT 
+            SUM(CASE WHEN status='completed' AND can_release = TRUE AND DATE(paid_at) BETWEEN ? AND ? THEN provider_amount ELSE 0 END) AS releasable_this_month,
+            SUM(CASE WHEN status='completed' AND can_release = FALSE AND DATE(paid_at) BETWEEN ? AND ? THEN provider_amount ELSE 0 END) AS pending_release_this_month,
+            SUM(CASE WHEN release_status='completed' AND released_at IS NOT NULL AND DATE(released_at) BETWEEN ? AND ? THEN provider_amount ELSE 0 END) AS released_this_month,
+            COUNT(CASE WHEN status='completed' AND DATE(paid_at) BETWEEN ? AND ? THEN 1 END) AS paid_count
+         FROM payments
+         WHERE provider_id = ?`,
+        [startStr, endStr, startStr, endStr, startStr, endStr, startStr, endStr, providerId]
+      );
+
+      const r: any = (rows as any[])[0] || {};
+      const summary = {
+        month: `${y}-${String(m).padStart(2,'0')}`,
+        releasable: Number(r.releasable_this_month || 0),
+        pending: Number(r.pending_release_this_month || 0),
+        released: Number(r.released_this_month || 0),
+        paidCount: Number(r.paid_count || 0)
+      };
+
+      Logger.info(MODULE, '🧮 [EARNINGS] Summary', summary);
+      return res.json({ success: true, summary });
+    } catch (err) {
+      Logger.error(MODULE, '🔴 [EARNINGS] Error getting summary', err as any);
+      return res.status(500).json({ success: false, error: 'Error al obtener ingresos' });
+    }
+  });
+
   return router;
 }
 
