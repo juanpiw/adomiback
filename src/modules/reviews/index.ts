@@ -11,9 +11,14 @@ function buildRouter(): Router {
   // POST /reviews – crear reseña de una cita completada
   router.post('/reviews', authenticateToken, async (req: Request, res: Response) => {
     try {
-      console.log('[REVIEWS][POST /reviews] incoming body:', req.body);
+      console.log('[REVIEWS] 🎯 POST /reviews recibido');
+      console.log('[REVIEWS] 📦 Body completo:', JSON.stringify(req.body, null, 2));
+      console.log('[REVIEWS] 🔐 Usuario autenticado:', (req as any).user);
+      
       const user = (req as any).user || {};
       const { appointment_id, provider_id, rating, comment } = req.body || {};
+      
+      console.log('[REVIEWS] 📋 Datos extraídos:', { appointment_id, provider_id, rating, comment });
       if (!appointment_id || !provider_id || !Number.isFinite(Number(rating))) {
         console.warn('[REVIEWS] validation failed', { appointment_id, provider_id, rating });
         return res.status(400).json({ success: false, error: 'appointment_id, provider_id y rating son requeridos' });
@@ -93,20 +98,9 @@ function buildRouter(): Router {
 }
 
 export function setupReviewsModule(app: Express) {
+  console.log('[REVIEWS] 🚀 Inicializando módulo de reviews...');
   app.use('/', buildRouter());
+  console.log('[REVIEWS] ✅ Rutas de reviews montadas correctamente');
   Logger.info(MODULE, 'Reviews routes mounted');
 }
-
-/**
- * Reviews Module
- * Handles reviews and ratings system
- */
-
-// TODO: Import and export routes when implemented
-
-/**
- * Setup function to mount reviews routes
- * @param app Express application
- */
-// (removed duplicate setupReviewsModule)
 

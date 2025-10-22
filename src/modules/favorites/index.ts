@@ -22,8 +22,10 @@ function buildRouter(): Router {
   // GET /client/favorites
   router.get('/client/favorites', authenticateToken, async (req: Request, res: Response) => {
     try {
+      console.log('[FAVORITES] 🎯 GET /client/favorites recibido');
       const user = (req as any).user || {};
       const clientId = Number(user.id);
+      console.log('[FAVORITES] 👤 Usuario:', user, 'ClientId:', clientId);
       if (!clientId) return res.status(401).json({ success: false, error: 'No autorizado' });
       await ensureTable();
       const pool = DatabaseConnection.getPool();
@@ -93,7 +95,9 @@ function buildRouter(): Router {
 }
 
 export function setupFavoritesModule(app: Express) {
+  console.log('[FAVORITES] 🚀 Inicializando módulo de favoritos...');
   app.use('/', buildRouter());
+  console.log('[FAVORITES] ✅ Rutas de favoritos montadas correctamente');
   Logger.info(MODULE, 'Favorites routes mounted');
 }
 
