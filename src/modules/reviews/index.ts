@@ -11,9 +11,11 @@ function buildRouter(): Router {
   // POST /reviews – crear reseña de una cita completada
   router.post('/reviews', authenticateToken, async (req: Request, res: Response) => {
     try {
+      console.log('[REVIEWS][POST /reviews] incoming body:', req.body);
       const user = (req as any).user || {};
       const { appointment_id, provider_id, rating, comment } = req.body || {};
       if (!appointment_id || !provider_id || !Number.isFinite(Number(rating))) {
+        console.warn('[REVIEWS] validation failed', { appointment_id, provider_id, rating });
         return res.status(400).json({ success: false, error: 'appointment_id, provider_id y rating son requeridos' });
       }
       const stars = Math.max(1, Math.min(5, Number(rating)));
@@ -24,10 +26,19 @@ function buildRouter(): Router {
         `SELECT id, client_id, provider_id, status FROM appointments WHERE id = ? LIMIT 1`,
         [appointment_id]
       );
-      if ((rows as any[]).length === 0) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      if ((rows as any[]).length === 0) {
+        console.warn('[REVIEWS] appointment not found', { appointment_id });
+        return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      }
       const appt = (rows as any[])[0];
-      if (Number(appt.client_id) !== Number(user.id)) return res.status(403).json({ success: false, error: 'No autorizado' });
-      if (String(appt.status) !== 'completed') return res.status(400).json({ success: false, error: 'La cita debe estar completada para reseñar' });
+      if (Number(appt.client_id) !== Number(user.id)) {
+        console.warn('[REVIEWS] forbidden: client mismatch', { user_id: user.id, appt_client_id: appt.client_id });
+        return res.status(403).json({ success: false, error: 'No autorizado' });
+      }
+      if (String(appt.status) !== 'completed') {
+        console.warn('[REVIEWS] invalid status for review', { appt_status: appt.status });
+        return res.status(400).json({ success: false, error: 'La cita debe estar completada para reseñar' });
+      }
 
       // Crear tabla si no existe (simple safeguard)
       await pool.query(`CREATE TABLE IF NOT EXISTS reviews (
@@ -45,10 +56,11 @@ function buildRouter(): Router {
          VALUES (?, ?, ?, ?, ?)`,
         [appointment_id, provider_id, user.id, stars, comment || null]
       );
-
+      console.log('[REVIEWS] review created', { appointment_id, provider_id, client_id: user.id, stars });
       Logger.info(MODULE, `Review creada para cita ${appointment_id} por cliente ${user.id}`);
       return res.json({ success: true, review: { appointment_id, provider_id, rating: stars, comment: comment || null } });
     } catch (err) {
+      console.error('[REVIEWS] error creating review:', (err as any)?.message, (err as any)?.stack);
       Logger.error(MODULE, 'Error creando review', err as any);
       return res.status(500).json({ success: false, error: 'Error al crear reseña' });
     }
@@ -58,6 +70,7 @@ function buildRouter(): Router {
   router.get('/providers/:id/reviews', async (req: Request, res: Response) => {
     try {
       const providerId = Number(req.params.id);
+      console.log('[REVIEWS][GET /providers/:id/reviews] providerId=', providerId);
       const pool = DatabaseConnection.getPool();
       const [rows] = await pool.query(
         `SELECT r.*, 
@@ -67,8 +80,10 @@ function buildRouter(): Router {
          ORDER BY r.created_at DESC`,
         [providerId]
       );
+      console.log('[REVIEWS] reviews fetched:', Array.isArray(rows) ? (rows as any[]).length : 0);
       return res.json({ success: true, reviews: rows });
     } catch (err) {
+      console.error('[REVIEWS] error listing reviews:', (err as any)?.message, (err as any)?.stack);
       Logger.error(MODULE, 'Error listando reviews', err as any);
       return res.status(500).json({ success: false, error: 'Error al listar reseñas' });
     }
