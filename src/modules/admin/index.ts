@@ -2,9 +2,25 @@ import { Express, Router } from 'express';
 import { adminAuth } from '../../shared/middleware/admin-auth';
 import { Logger } from '../../shared/utils/logger.util';
 import DatabaseConnection from '../../shared/database/connection';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 
 export function setupAdminModule(app: Express) {
   const router = Router();
+  // Multer para vouchers
+  const storage = multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      const dir = path.join('uploads', 'admin', 'vouchers');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname);
+      cb(null, `voucher-${Date.now()}-${Math.round(Math.random()*1e9)}${ext}`);
+    }
+  });
+  const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } });
 
   router.get('/health', adminAuth, (req, res) => {
     res.json({ success: true, message: 'admin ok', ts: new Date().toISOString() });
@@ -49,6 +65,7 @@ export function setupAdminModule(app: Express) {
                up.email AS provider_email,
                pr.full_name AS provider_name,
                pr.bank_name,
+               RIGHT(COALESCE(pr.bank_account,''), 4) AS bank_last4,
                p.amount, p.commission_amount, p.provider_amount,
                p.currency, p.payment_method, p.status, p.paid_at,
                p.release_status,
@@ -95,7 +112,10 @@ export function setupAdminModule(app: Express) {
                 COALESCE(SUM(p.provider_amount),0) AS total_provider,
                 SUM(CASE WHEN p.release_status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
                 SUM(CASE WHEN p.release_status = 'eligible' THEN 1 ELSE 0 END) AS eligible_count,
-                SUM(CASE WHEN p.release_status = 'completed' THEN 1 ELSE 0 END) AS completed_count
+                SUM(CASE WHEN p.release_status = 'completed' THEN 1 ELSE 0 END) AS completed_count,
+                COALESCE(SUM(CASE WHEN p.release_status = 'pending' THEN p.provider_amount ELSE 0 END),0) AS pending_total_provider,
+                COALESCE(SUM(CASE WHEN p.release_status = 'eligible' THEN p.provider_amount ELSE 0 END),0) AS eligible_total_provider,
+                COALESCE(SUM(CASE WHEN p.release_status = 'completed' THEN p.provider_amount ELSE 0 END),0) AS completed_total_provider
          FROM payments p ${whereSql}`,
         params
       );
@@ -143,6 +163,39 @@ export function setupAdminModule(app: Express) {
     }
   });
 
+  // Export PDF simple (tabla) - versión básica (CSV suele ser preferible)
+  router.get('/payments/export.pdf', adminAuth, async (req, res) => {
+    try {
+      const start = req.query.start as string | undefined;
+      const end = req.query.end as string | undefined;
+      const pool = DatabaseConnection.getPool();
+      const where: string[] = [];
+      const params: any[] = [];
+      if (start && end) { where.push('p.paid_at BETWEEN ? AND ?'); params.push(start, end); }
+      const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+      const [rows]: any = await pool.query(
+        `SELECT p.id, p.appointment_id, p.amount, p.commission_amount, p.provider_amount, p.currency, p.status, p.paid_at,
+                s.name AS service_name, uc.email AS client_email, up.email AS provider_email
+         FROM payments p
+         LEFT JOIN appointments a ON a.id = p.appointment_id
+         LEFT JOIN provider_services s ON s.id = a.service_id
+         LEFT JOIN users uc ON uc.id = p.client_id
+         LEFT JOIN users up ON up.id = p.provider_id
+         ${whereSql}
+         ORDER BY p.paid_at DESC, p.id DESC`,
+        params
+      );
+      // PDF simple como texto preformateado (placeholder); idealmente usar una lib PDF server-side
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'attachment; filename="payments.pdf"');
+      // Para mantener simple, devolvemos un PDF mínimo usando PDFKit si estuviera disponible; aquí devolvemos texto.
+      res.end(Buffer.from('PDF export not fully implemented. Use CSV for now.'));
+    } catch (e: any) {
+      Logger.error('ADMIN_MODULE', 'Error export pdf', e);
+      res.status(500).json({ success: false, error: 'export_pdf_error' });
+    }
+  });
+
   // Conteo rápido para badge
   router.get('/payments/pending-count', adminAuth, async (req, res) => {
     try {
@@ -157,6 +210,47 @@ export function setupAdminModule(app: Express) {
     } catch (e: any) {
       Logger.error('ADMIN_MODULE', 'Error pending count', e);
       res.status(500).json({ success: false, error: 'count_error' });
+    }
+  });
+
+  // Marcar pago como liberado manualmente (transferencia realizada)
+  router.post('/payments/:id/mark-released', adminAuth, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { reference, notes } = (req.body || {}) as { reference?: string; notes?: string };
+      if (!Number.isFinite(id)) return res.status(400).json({ success: false, error: 'id invalido' });
+      const pool = DatabaseConnection.getPool();
+      const payload = JSON.stringify({ reference: reference || null, notes: notes || null });
+      await pool.execute(
+        `UPDATE payments SET release_status = 'completed', released_at = NOW(), release_notes = ? WHERE id = ?`,
+        [payload, id]
+      );
+      return res.json({ success: true });
+    } catch (e: any) {
+      Logger.error('ADMIN_MODULE', 'Error mark released', e);
+      res.status(500).json({ success: false, error: 'mark_released_error' });
+    }
+  });
+
+  // Subir voucher
+  router.post('/payments/:id/upload-voucher', adminAuth, upload.single('voucher'), async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ success: false, error: 'id invalido' });
+      const file = (req as any).file as Express.Multer.File | undefined;
+      if (!file) return res.status(400).json({ success: false, error: 'Archivo requerido' });
+      const url = `/uploads/admin/vouchers/${file.filename}`;
+      // Guardar URL en release_notes (merge JSON si existe)
+      const pool = DatabaseConnection.getPool();
+      const [[row]]: any = await pool.query('SELECT release_notes FROM payments WHERE id = ? LIMIT 1', [id]);
+      let notes: any = {};
+      try { if (row?.release_notes) notes = JSON.parse(row.release_notes); } catch {}
+      notes.voucher = url;
+      await pool.execute('UPDATE payments SET release_notes = ? WHERE id = ?', [JSON.stringify(notes), id]);
+      return res.json({ success: true, url });
+    } catch (e: any) {
+      Logger.error('ADMIN_MODULE', 'Error uploading voucher', e);
+      res.status(500).json({ success: false, error: 'upload_voucher_error' });
     }
   });
 
