@@ -18,6 +18,7 @@ import { setupNotificationsModule } from './modules/notifications';
 import { setupPromotionsModule } from './modules/promotions';
 import { setupReviewsModule } from './modules/reviews';
 import { setupFavoritesModule } from './modules/favorites';
+import { EmailService } from './shared/services/email.service';
 
 export function createApp(): Express {
   const app = express();
@@ -46,6 +47,27 @@ export function createApp(): Express {
       timestamp: new Date().toISOString(),
       uptime: process.uptime()
     });
+  });
+
+  // Debug: send test email (secured via token)
+  app.get('/debug/send-test-email', async (req, res) => {
+    try {
+      const token = String(req.query.token || '');
+      if (!process.env.DEBUG_EMAIL_TOKEN || token !== process.env.DEBUG_EMAIL_TOKEN) {
+        return res.status(403).json({ success: false, error: 'forbidden' });
+      }
+
+      const to = String(req.query.to || process.env.SMTP_USER || process.env.FROM_EMAIL || '');
+      if (!to) return res.status(400).json({ success: false, error: 'to is required' });
+
+      const subject = `Adomi SMTP Test ${new Date().toISOString()}`;
+      const html = `<div style="font-family:system-ui;padding:16px"><h3>Adomi SMTP Test</h3><p>Fecha: ${new Date().toLocaleString()}</p><p>Este es un correo de prueba para validar la configuración SMTP.</p></div>`;
+
+      await EmailService.sendRaw(to, subject, html);
+      return res.json({ success: true, to, subject });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'send error' });
+    }
   });
 
   // Setup módulos (ahora sí con JSON parseado)
