@@ -6,13 +6,13 @@
 
 ## Estado actual (backend)
 
-- Hay dos registros del mismo endpoint `POST /webhooks/stripe`:
-  - `modules/subscriptions/webhooks.ts`: maneja suscripciones e invoices y responde 200 al final.
-  - `modules/payments/webhooks.ts`: maneja pagos de citas, responde 200 inmediatamente y procesa asincrónicamente, y expone `POST /webhooks/stripe-appointments`.
-- El orden de middlewares es correcto: los webhooks se montan antes de `express.json()` y usan `express.raw({ type: 'application/json' })`.
-- Existen endpoints de health: `GET /webhooks/stripe/health` y `GET /webhooks/stripe-appointments/health`.
-- No hay un `EmailService` implementado: no se envían correos de recibos/facturas desde la app. Hay dependencias de `nodemailer` listas.
-- Variables `.env` previstas: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `FROM_EMAIL`, `FROM_NAME`).
+- Un único endpoint unificado `POST /webhooks/stripe` montado en `modules/payments/webhooks.ts`, con respuesta 200 inmediata y procesamiento asíncrono. Se mantiene alias `POST /webhooks/stripe-appointments` apuntando al mismo handler.
+- El orden de middlewares es correcto: webhooks antes de `express.json()` y usando `express.raw({ type: 'application/json' })`.
+- Endpoints de health activos: `GET /webhooks/stripe/health` y `GET /webhooks/stripe-appointments/health`.
+- `EmailService` implementado con plantillas HTML (cliente y proveedor) e integrado en `checkout.session.completed` e `invoice.payment_succeeded`.
+- Idempotencia/auditoría implementadas: tabla `stripe_events` y registro de `received/processed/error` con `payload_hash`.
+- Endpoint de diagnóstico de correo activo: `GET /debug/send-test-email` protegido por `DEBUG_EMAIL_TOKEN`.
+- Variables `.env` previstas/soportadas: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` (o `STRIPE_APPOINTMENTS_WEBHOOK_SECRET`), SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `FROM_EMAIL`, `FROM_NAME`), `FRONTEND_URL`, `APP_NAME`, `DEBUG_EMAIL_TOKEN`.
 
 ## Problema reportado por Stripe
 
@@ -190,7 +190,7 @@ Objetivo: Llevar control integral de lo cobrado al cliente, la comisión de la p
 - [x] Unificar webhook Stripe en un único endpoint con 2xx inmediato (payments/webhooks.ts)
 - [x] Implementar EmailService y plantillas HTML (cliente y proveedor)
 - [ ] Configurar envíos automáticos de recibos/facturas en Stripe Dashboard
-- [ ] Idempotencia y auditoría de eventos (tabla stripe_events)
+- [x] Idempotencia y auditoría de eventos (tabla stripe_events)
 - [ ] Pruebas con Stripe CLI y reintentos manuales
 - [ ] Monitoreo/alertas para webhooks y emails
 - [ ] Backoffice de pagos/liquidaciones y flujo de efectivo
