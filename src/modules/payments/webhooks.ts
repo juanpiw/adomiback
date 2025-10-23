@@ -88,6 +88,28 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
       case 'invoice.payment_succeeded':
         Logger.info(MODULE, '🔔 [WEBHOOK] invoice.payment_succeeded', { invoiceId: (event.data.object as any).id });
         await handleInvoicePaymentSucceeded(event.data.object as Stripe.Invoice);
+        try {
+          // Enviar email de factura al cliente si existe invoice PDF
+          const inv = event.data.object as Stripe.Invoice;
+          const invoicePdfUrl = (inv as any).invoice_pdf || null;
+          const customerEmail = (inv as any).customer_email || (inv as any).customer?.email || null;
+          if (customerEmail && invoicePdfUrl) {
+            await EmailService.sendClientReceipt(customerEmail, {
+              appName: 'Adomi',
+              amount: Number((inv.amount_paid || 0) / 100),
+              currency: (inv.currency || 'clp').toUpperCase(),
+              receiptNumber: inv.number || null,
+              invoiceNumber: inv.number || null,
+              invoicePdfUrl,
+              receiptUrl: null,
+              paymentDateISO: inv.status_transitions?.paid_at ? new Date((inv.status_transitions.paid_at as any) * 1000).toISOString() : new Date().toISOString(),
+              appointmentId: null
+            });
+            Logger.info(MODULE, '✉️ Invoice email sent from invoice.payment_succeeded');
+          }
+        } catch (e) {
+          Logger.warn(MODULE, 'Could not send invoice email on invoice.payment_succeeded', e as any);
+        }
         break;
       case 'invoice.payment_failed':
         Logger.info(MODULE, '🔔 [WEBHOOK] invoice.payment_failed', { invoiceId: (event.data.object as any).id });
@@ -189,8 +211,14 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
       // Obtener emails de cliente y proveedor
       const [[clientRow]]: any = await pool.query('SELECT email FROM users WHERE id = ? LIMIT 1', [clientId]);
       const [[providerRow]]: any = await pool.query('SELECT email FROM users WHERE id = ? LIMIT 1', [providerId]);
-      const clientEmail: string | undefined = clientRow?.email;
+      let clientEmail: string | undefined = clientRow?.email;
       const providerEmail: string | undefined = providerRow?.email;
+
+      // Fallback a correo del Checkout Session si el usuario no tiene email en DB
+      if (!clientEmail) {
+        const s: any = session as any;
+        clientEmail = s?.customer_details?.email || s?.customer_email || clientEmail;
+      }
 
       // Intentar enriquecer con URLs de Stripe si hay invoice / recibo
       let invoicePdfUrl: string | null = null;
