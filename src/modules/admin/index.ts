@@ -150,8 +150,5 @@ export function setupAdminModule(app: Express) {
  * Setup function to mount admin routes
  * @param app Express application
  */
-export function setupAdminModule(app: any) {
-  // TODO: Implement when routes are ready
-  console.log('[ADMIN MODULE] Module structure ready - awaiting implementation');
-}
+// (definición única de setupAdminModule al inicio del archivo)
 
