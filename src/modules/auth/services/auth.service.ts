@@ -9,6 +9,7 @@ import { RefreshTokensRepository } from '../repositories/refresh-tokens.reposito
 import { PasswordResetRepository } from '../repositories/password-reset.repository';
 import { JWTUtil } from '../../../shared/utils/jwt.util';
 import { Logger } from '../../../shared/utils/logger.util';
+import { EmailService } from '../../../shared/services/email.service';
 
 const MODULE = 'AuthService';
 
@@ -215,6 +216,15 @@ export class AuthService {
 
     const token = await this.passwordResetRepo.create(user.id);
     Logger.info(MODULE, 'Password reset requested', { userId: user.id });
+    try {
+      const frontendUrl = process.env.FRONTEND_BASE_URL || process.env.FRONTEND_URL || 'http://localhost:4200';
+      const appName = process.env.APP_NAME || 'Adomi';
+      const resetUrl = `${frontendUrl}/auth/reset-password?token=${encodeURIComponent(token)}`;
+      await EmailService.sendPasswordReset(user.email, { appName, resetUrl });
+      Logger.info(MODULE, 'Password reset email queued/sent', { userId: user.id, email: user.email });
+    } catch (e: any) {
+      Logger.error(MODULE, 'Failed to send password reset email', e);
+    }
     return token;
   }
 

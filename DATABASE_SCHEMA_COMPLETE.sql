@@ -1914,3 +1914,78 @@ GROUP BY pp.provider_id, u.name, u.email, pp.professional_title, pp.bio,
 ═══════════════════════════════════════════════════════════════════════════════
 */
 
+-- ============================================
+-- ACTUALIZACIONES 2025-10-23 (WEBHOOKS/VERIFICACIÓN/PAGOS)
+-- ============================================
+
+-- 1) Auditoría/Idempotencia de Stripe webhooks
+CREATE TABLE IF NOT EXISTS stripe_events (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  event_id VARCHAR(255) NOT NULL,
+  event_type VARCHAR(100) NOT NULL,
+  payload_hash CHAR(64) NULL,
+  status ENUM('received','processed','duplicate','error') NOT NULL DEFAULT 'received',
+  delivered_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  processed_at DATETIME(6) NULL,
+  error_message TEXT NULL,
+  raw_payload JSON NULL,
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  UNIQUE KEY uq_stripe_events_event_id (event_id),
+  KEY idx_stripe_events_type_time (event_type, delivered_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 1.1) Tokens de recuperación de contraseña
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  token VARCHAR(191) NOT NULL,
+  expires_at DATETIME NOT NULL,
+  used TINYINT(1) NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_password_reset_token (token),
+  KEY idx_password_reset_user (user_id),
+  KEY idx_password_reset_expires (expires_at),
+  KEY idx_password_reset_used (used),
+  CONSTRAINT fk_password_reset_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 2) Auditoría de intentos de verificación de código (citas)
+CREATE TABLE IF NOT EXISTS verification_attempts (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  appointment_id INT NOT NULL,
+  provider_id INT NOT NULL,
+  code_attempted VARCHAR(4) NOT NULL,
+  success BOOLEAN DEFAULT FALSE,
+  ip_address VARCHAR(45) NULL,
+  user_agent TEXT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (appointment_id) REFERENCES appointments(id) ON DELETE CASCADE,
+  FOREIGN KEY (provider_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_appointment (appointment_id),
+  INDEX idx_provider (provider_id),
+  INDEX idx_success (success),
+  INDEX idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 3) Campos de verificación en appointments (si no existieran)
+-- NOTA: estos ALTER son idempotentes conceptualmente; ejecutarlos solo si faltan columnas
+-- ALTERs documentales: dejar como referencia en el schema completo
+-- ALTER TABLE appointments
+--   ADD COLUMN verification_code CHAR(4) NULL COMMENT 'Código de verificación de 4 dígitos',
+--   ADD COLUMN code_generated_at TIMESTAMP NULL COMMENT 'Fecha/hora en que se generó el código',
+--   ADD COLUMN verification_attempts INT NOT NULL DEFAULT 0 COMMENT 'Intentos fallidos',
+--   ADD COLUMN verified_at TIMESTAMP NULL COMMENT 'Fecha/hora verificada',
+--   ADD COLUMN verified_by_provider_id INT NULL COMMENT 'Proveedor que verificó';
+-- CREATE INDEX idx_verification_code ON appointments (verification_code);
+-- CREATE INDEX idx_verified_at ON appointments (verified_at);
+
+-- 4) Campos de liberación de fondos en payments (si no existieran)
+-- ALTER TABLE payments
+--   ADD COLUMN can_release BOOLEAN DEFAULT FALSE COMMENT 'Fondos liberables',
+--   ADD COLUMN released_at TIMESTAMP NULL COMMENT 'Fecha de liberación',
+--   ADD COLUMN release_status ENUM('pending','processing','completed','failed') DEFAULT 'pending' COMMENT 'Estado liberación',
+--   ADD COLUMN release_transaction_id VARCHAR(255) NULL COMMENT 'ID transacción de liberación',
+--   ADD COLUMN release_notes TEXT NULL COMMENT 'Notas';
+
+

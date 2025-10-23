@@ -24,6 +24,13 @@ export interface ProviderPaymentEmailData {
   brandLogoUrl?: string;
 }
 
+export interface PasswordResetEmailData {
+  appName: string;
+  resetUrl: string;
+  brandColorHex?: string;
+  brandLogoUrl?: string;
+}
+
 export function generateClientReceiptEmailHtml(data: ClientReceiptEmailData): string {
   const date = data.paymentDateISO ? new Date(data.paymentDateISO).toLocaleString() : '';
   const amountFormatted = `${data.currency.toUpperCase()} ${data.amount.toFixed(2)}`;
@@ -121,6 +128,48 @@ export function generateProviderPaymentEmailHtml(data: ProviderPaymentEmailData)
                           <tr><td style="padding:6px 0">Neto para proveedor</td><td style="padding:6px 0;text-align:right;color:${brand};font-weight:700">${f(data.providerAmount)}</td></tr>
                         </table>
                         <div style="margin-top:12px;color:#6b7280;font-size:12px">La liquidación se realizará según el calendario de pagos.</div>
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </div>`;
+}
+
+export function generatePasswordResetEmailHtml(data: PasswordResetEmailData): string {
+  const brand = data.brandColorHex || '#635bff';
+  const logo = data.brandLogoUrl ? `<img src="${data.brandLogoUrl}" alt="${data.appName}" style="height:24px;display:block;margin:0 auto 16px" />` : '';
+  return `
+  <div style="margin:0;padding:0;background:#0b0b0c">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#0b0b0c;padding:24px 12px">
+      <tr>
+        <td align="center">
+          <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="max-width:600px;width:100%">
+            <tr>
+              <td align="center" style="padding:16px 0;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;font-size:14px">
+                ${logo}
+                <div style="opacity:.9">${data.appName}</div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0">
+                <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#fff;border-radius:12px;overflow:hidden">
+                  <tr>
+                    <td style="padding:24px 24px 8px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;color:#111">
+                      <div style="font-size:18px;font-weight:600;margin:0 0 8px">Restablecer contraseña</div>
+                      <div style="color:#6b7280;font-size:13px">Has solicitado restablecer tu contraseña. Si no fuiste tú, ignora este correo.</div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:8px 24px 24px">
+                      <div style="border:1px solid #e5e7eb;border-radius:10px;padding:16px">
+                        <a href="${data.resetUrl}" style="display:inline-block;background:${brand};color:#fff;text-decoration:none;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:600">Crear nueva contraseña</a>
+                        <div style="margin-top:12px;color:#6b7280;font-size:12px">El enlace es válido por 60 minutos.</div>
                       </div>
                     </td>
                   </tr>

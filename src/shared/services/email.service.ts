@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 import { Logger } from '../utils/logger.util';
-import { generateClientReceiptEmailHtml, generateProviderPaymentEmailHtml, ClientReceiptEmailData, ProviderPaymentEmailData } from './email-templates';
+import { generateClientReceiptEmailHtml, generateProviderPaymentEmailHtml, generatePasswordResetEmailHtml, ClientReceiptEmailData, ProviderPaymentEmailData, PasswordResetEmailData } from './email-templates';
 
 const MODULE = 'EMAIL_SERVICE';
 
@@ -60,6 +60,13 @@ export class EmailService {
     Logger.info(MODULE, 'sendProviderPaymentSummary called', { to, data: { amount: data.amount, commissionAmount: data.commissionAmount, providerAmount: data.providerAmount } });
     const html = generateProviderPaymentEmailHtml(data);
     const subject = `${data.appName} – Pago confirmado cita #${data.appointmentId}`;
+    return this.sendRaw(to, subject, html);
+  }
+
+  static async sendPasswordReset(to: string, data: PasswordResetEmailData) {
+    Logger.info(MODULE, 'sendPasswordReset called', { to });
+    const html = generatePasswordResetEmailHtml(data);
+    const subject = `${data.appName} – Restablecer contraseña`;
     return this.sendRaw(to, subject, html);
   }
 }
