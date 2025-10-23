@@ -80,6 +80,7 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
 
   // Procesar evento de forma asíncrona (después de responder)
   try {
+    Logger.info(MODULE, '🔔 [WEBHOOK] Dispatching handler', { type: event.type });
     switch (event.type) {
       case 'checkout.session.completed':
         Logger.info(MODULE, '🔔 [WEBHOOK] checkout.session.completed recibido');
@@ -93,6 +94,13 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
           const inv = event.data.object as Stripe.Invoice;
           const invoicePdfUrl = (inv as any).invoice_pdf || null;
           const customerEmail = (inv as any).customer_email || (inv as any).customer?.email || null;
+          Logger.info(MODULE, '✉️ [INVOICE] Preparing email from invoice.payment_succeeded', {
+            customerEmail: !!customerEmail,
+            invoicePdfUrl: !!invoicePdfUrl,
+            amount_paid: inv.amount_paid,
+            currency: inv.currency,
+            number: (inv as any).number
+          });
           if (customerEmail && invoicePdfUrl) {
             await EmailService.sendClientReceipt(customerEmail, {
               appName: 'Adomi',
@@ -108,7 +116,7 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
             Logger.info(MODULE, '✉️ Invoice email sent from invoice.payment_succeeded');
           }
         } catch (e) {
-          Logger.warn(MODULE, 'Could not send invoice email on invoice.payment_succeeded', e as any);
+          Logger.warn(MODULE, '❕ Could not send invoice email on invoice.payment_succeeded', e as any);
         }
         break;
       case 'invoice.payment_failed':
@@ -233,6 +241,12 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
           // Nota: el invoice PDF existe principalmente en flujos de factura; en checkout de cita puede no existir
         }
       } catch {}
+
+      Logger.info(MODULE, '✉️ [EMAIL] Prepared emails', {
+        clientEmail: !!clientEmail,
+        providerEmail: !!providerEmail,
+        hasReceiptUrl: !!receiptUrl
+      });
 
       if (clientEmail) {
         await EmailService.sendClientReceipt(clientEmail, {

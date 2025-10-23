@@ -32,7 +32,9 @@ export class EmailService {
 
   static async sendRaw(to: string, subject: string, html: string) {
     try {
+      Logger.info(MODULE, 'Preparing to send email', { to, subject, from: this.fromEmail });
       const transporter = this.getTransporter();
+      Logger.info(MODULE, 'SMTP transport ready');
       const info = await transporter.sendMail({
         from: `${this.fromName} <${this.fromEmail}>`,
         to,
@@ -48,12 +50,14 @@ export class EmailService {
   }
 
   static async sendClientReceipt(to: string, data: ClientReceiptEmailData) {
+    Logger.info(MODULE, 'sendClientReceipt called', { to, data: { amount: data.amount, currency: data.currency, hasInvoice: !!data.invoicePdfUrl, hasReceipt: !!data.receiptUrl } });
     const html = generateClientReceiptEmailHtml(data);
     const subject = `${data.appName} – Confirmación de pago ${data.amount.toFixed(2)} ${data.currency.toUpperCase()}`;
     return this.sendRaw(to, subject, html);
   }
 
   static async sendProviderPaymentSummary(to: string, data: ProviderPaymentEmailData) {
+    Logger.info(MODULE, 'sendProviderPaymentSummary called', { to, data: { amount: data.amount, commissionAmount: data.commissionAmount, providerAmount: data.providerAmount } });
     const html = generateProviderPaymentEmailHtml(data);
     const subject = `${data.appName} – Pago confirmado cita #${data.appointmentId}`;
     return this.sendRaw(to, subject, html);
