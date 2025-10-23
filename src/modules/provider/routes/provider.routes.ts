@@ -80,6 +80,11 @@ export class ProviderRoutes {
             completed_appointments,
             is_online,
             last_seen,
+            bank_name,
+            bank_account,
+            account_holder,
+            account_rut,
+            account_type,
             created_at,
             updated_at
           FROM provider_profiles 
@@ -149,7 +154,12 @@ export class ProviderRoutes {
           main_commune, 
           main_region, 
           years_experience, 
-          bio 
+          bio,
+          bank_name,
+          bank_account,
+          account_holder,
+          account_rut,
+          account_type
         } = req.body;
 
         // Convertir undefined a null para MySQL2
@@ -159,7 +169,12 @@ export class ProviderRoutes {
           main_commune: main_commune || null,
           main_region: main_region || null,
           years_experience: years_experience || null,
-          bio: bio || null
+          bio: bio || null,
+          bank_name: bank_name || null,
+          bank_account: bank_account || null,
+          account_holder: account_holder || null,
+          account_rut: account_rut || null,
+          account_type: account_type || null
         };
 
         console.log('[PROVIDER_ROUTES] Datos recibidos:', {
@@ -169,6 +184,11 @@ export class ProviderRoutes {
           main_region, 
           years_experience, 
           bio,
+          bank_name,
+          bank_account,
+          account_holder,
+          account_rut,
+          account_type,
           userId: user.id
         });
 
@@ -178,7 +198,7 @@ export class ProviderRoutes {
         });
 
         // Validar que al menos un campo tenga valor
-        if (!processedData.full_name && !processedData.professional_title && !processedData.main_commune && !processedData.years_experience && !processedData.bio) {
+        if (!processedData.full_name && !processedData.professional_title && !processedData.main_commune && !processedData.years_experience && !processedData.bio && !processedData.bank_name && !processedData.bank_account && !processedData.account_holder && !processedData.account_rut && !processedData.account_type) {
           return res.status(400).json({ 
             success: false, 
             error: 'Al menos un campo debe tener un valor para actualizar' 
@@ -198,9 +218,14 @@ export class ProviderRoutes {
            SET full_name = COALESCE(NULLIF(?, ''), full_name), 
                professional_title = COALESCE(NULLIF(?, ''), professional_title), 
                main_commune = COALESCE(NULLIF(?, ''), main_commune), 
-               main_region = ?, 
+               main_region = COALESCE(?, main_region), 
                years_experience = COALESCE(?, years_experience), 
                bio = COALESCE(NULLIF(?, ''), bio),
+               bank_name = COALESCE(NULLIF(?, ''), bank_name),
+               bank_account = COALESCE(NULLIF(?, ''), bank_account),
+               account_holder = COALESCE(NULLIF(?, ''), account_holder),
+               account_rut = COALESCE(NULLIF(?, ''), account_rut),
+               account_type = COALESCE(NULLIF(?, ''), account_type),
                last_profile_update = CURRENT_TIMESTAMP,
                updated_at = CURRENT_TIMESTAMP
            WHERE provider_id = ?`,
@@ -210,7 +235,12 @@ export class ProviderRoutes {
             processedData.main_commune, 
             processedData.main_region, 
             processedData.years_experience, 
-            processedData.bio, 
+            processedData.bio,
+            processedData.bank_name,
+            processedData.bank_account,
+            processedData.account_holder,
+            processedData.account_rut,
+            processedData.account_type,
             user.id
           ]
         );
