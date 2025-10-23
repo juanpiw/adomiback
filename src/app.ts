@@ -15,6 +15,8 @@ import { setupChatModule } from './modules/chat';
 import { setupAppointmentsModule } from './modules/appointments';
 import { setupPaymentsModule } from './modules/payments';
 import { setupNotificationsModule } from './modules/notifications';
+import { setupReviewsModule } from './modules/reviews';
+import { setupFavoritesModule } from './modules/favorites';
 
 export function createApp(): Express {
   const app = express();
@@ -58,9 +60,33 @@ export function createApp(): Express {
   setupChatModule(app);
   setupAppointmentsModule(app);
   setupPaymentsModule(app);
+  // 🔗 NUEVO: montar módulos de Reviews y Favorites
+  Logger.info('APP', 'Mounting Reviews and Favorites modules...');
+  setupReviewsModule(app);
+  setupFavoritesModule(app);
   setupNotificationsModule(app);
   
   Logger.info('APP', 'All modules loaded successfully');
+
+  // Endpoint de depuración para listar rutas en ejecución
+  app.get('/__debug/routes', (_req, res) => {
+    try {
+      const stack: any[] = (app as any)?._router?.stack || [];
+      const routes: Array<{ method: string; path: string }> = [];
+      const collect = (layer: any, prefix = '') => {
+        if (layer.route && layer.route.path) {
+          const methods = Object.keys(layer.route.methods || {}).filter((k) => layer.route.methods[k]);
+          routes.push({ method: (methods.join(',') || 'ALL').toUpperCase(), path: prefix + layer.route.path });
+        } else if (layer.name === 'router' && layer.handle?.stack) {
+          layer.handle.stack.forEach((l: any) => collect(l, prefix));
+        }
+      };
+      stack.forEach((l) => collect(l));
+      res.json({ success: true, total: routes.length, routes });
+    } catch (err) {
+      res.status(500).json({ success: false, error: 'cannot inspect routes' });
+    }
+  });
 
   return app;
 }
