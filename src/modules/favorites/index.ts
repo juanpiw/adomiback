@@ -96,8 +96,18 @@ function buildRouter(): Router {
 
 export function setupFavoritesModule(app: Express) {
   console.log('[FAVORITES] 🚀 Inicializando módulo de favoritos...');
+  console.log('[FAVORITES] 📁 Archivo: backend/src/modules/favorites/index.ts');
+  console.log('[FAVORITES] 🎯 Montando rutas en app...');
+  
   app.use('/', buildRouter());
+  
   console.log('[FAVORITES] ✅ Rutas de favoritos montadas correctamente');
+  console.log('[FAVORITES] 🔗 Endpoints disponibles:');
+  console.log('[FAVORITES]   - GET /client/favorites');
+  console.log('[FAVORITES]   - POST /client/favorites');
+  console.log('[FAVORITES]   - DELETE /client/favorites/:providerId');
+  console.log('[FAVORITES] 📊 Módulo de favoritos completamente inicializado');
+  
   Logger.info(MODULE, 'Favorites routes mounted');
 }
 
