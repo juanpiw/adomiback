@@ -786,6 +786,103 @@ function buildRouter(): Router {
     }
   });
 
+  /**
+   * GET /provider/appointments/pending-requests
+   * Lista citas confirmadas sin pagar del proveedor (solicitudes pendientes)
+   */
+  router.get('/provider/appointments/pending-requests', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      
+      console.log('[APPOINTMENTS] 🎯 GET /provider/appointments/pending-requests para provider:', user.id);
+      Logger.info(MODULE, `⏳ Proveedor ${user.id} solicitando citas confirmadas sin pagar`);
+      
+      const pool = DatabaseConnection.getPool();
+      
+      const [rows] = await pool.query(
+        `SELECT a.*, 
+                (SELECT name FROM users WHERE id = a.client_id) AS client_name,
+                (SELECT email FROM users WHERE id = a.client_id) AS client_email,
+                (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
+                a.price AS scheduled_price,
+                (SELECT p.status FROM payments p WHERE p.appointment_id = a.id ORDER BY p.id DESC LIMIT 1) AS payment_status
+         FROM appointments a
+         WHERE a.provider_id = ? 
+           AND a.status = 'confirmed'
+           AND NOT EXISTS (
+             SELECT 1 FROM payments p 
+             WHERE p.appointment_id = a.id 
+             AND p.status = 'completed'
+           )
+         ORDER BY a.date ASC, a.start_time ASC`,
+        [user.id]
+      );
+      
+      console.log('[APPOINTMENTS] 📋 Citas confirmadas sin pagar encontradas:', (rows as any[]).length);
+      Logger.info(MODULE, `✅ ${(rows as any[]).length} citas confirmadas sin pagar encontradas`);
+      
+      return res.json({ 
+        success: true, 
+        appointments: rows 
+      });
+      
+    } catch (err) {
+      console.error('[APPOINTMENTS] ❌ Error listando citas confirmadas sin pagar:', err);
+      Logger.error(MODULE, 'Error listando citas confirmadas sin pagar', err as any);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Error al listar citas confirmadas sin pagar' 
+      });
+    }
+  });
+
+  /**
+   * GET /provider/appointments/next
+   * Obtiene la próxima cita confirmada del proveedor
+   */
+  router.get('/provider/appointments/next', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      
+      console.log('[APPOINTMENTS] 🎯 GET /provider/appointments/next para provider:', user.id);
+      Logger.info(MODULE, `➡️ Proveedor ${user.id} solicitando próxima cita confirmada`);
+      
+      const pool = DatabaseConnection.getPool();
+      
+      const [rows] = await pool.query(
+        `SELECT a.*, 
+                (SELECT name FROM users WHERE id = a.client_id) AS client_name,
+                (SELECT email FROM users WHERE id = a.client_id) AS client_email,
+                (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
+                a.price AS scheduled_price
+         FROM appointments a
+         WHERE a.provider_id = ? 
+           AND a.status = 'confirmed'
+           AND a.date >= CURDATE()
+         ORDER BY a.date ASC, a.start_time ASC
+         LIMIT 1`,
+        [user.id]
+      );
+      
+      const nextAppointment = (rows as any[])[0] || null;
+      console.log('[APPOINTMENTS] 📅 Próxima cita encontrada:', nextAppointment ? nextAppointment.id : 'ninguna');
+      Logger.info(MODULE, `✅ Próxima cita encontrada: ${nextAppointment ? nextAppointment.id : 'ninguna'}`);
+      
+      return res.json({ 
+        success: true, 
+        appointment: nextAppointment 
+      });
+      
+    } catch (err) {
+      console.error('[APPOINTMENTS] ❌ Error obteniendo próxima cita:', err);
+      Logger.error(MODULE, 'Error obteniendo próxima cita', err as any);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Error al obtener próxima cita' 
+      });
+    }
+  });
+
   return router;
 }
 
