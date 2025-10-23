@@ -33,7 +33,7 @@ export function setupAdminModule(app: Express) {
       const sql = `
         SELECT p.id,
                p.appointment_id,
-               a.`date` AS appointment_date,
+               a.date AS appointment_date,
                a.start_time,
                a.end_time,
                s.name AS service_name,
@@ -44,7 +44,6 @@ export function setupAdminModule(app: Express) {
                up.email AS provider_email,
                pr.full_name AS provider_name,
                pr.bank_name,
-               pr.bank_account,
                p.amount, p.commission_amount, p.provider_amount,
                p.currency, p.payment_method, p.status, p.paid_at,
                p.release_status,
