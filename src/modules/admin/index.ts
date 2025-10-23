@@ -60,10 +60,78 @@ export function setupAdminModule(app: Express) {
         LIMIT ? OFFSET ?`;
       params.push(limit, offset);
       const [rows] = await pool.query(sql, params);
-      res.json({ success: true, data: rows, pagination: { limit, offset } });
+      // Agregar columna derivada: settlement_status
+      const enriched = (rows as any[]).map((r: any) => {
+        let settlement_status = r.release_status || 'pending';
+        return { ...r, settlement_status };
+      });
+      res.json({ success: true, data: enriched, pagination: { limit, offset } });
     } catch (e: any) {
       Logger.error('ADMIN_MODULE', 'Error fetching payments', e);
       res.status(500).json({ success: false, error: 'query_error' });
+    }
+  });
+
+  // Totales por rango
+  router.get('/payments/summary', adminAuth, async (req, res) => {
+    try {
+      const start = req.query.start as string | undefined;
+      const end = req.query.end as string | undefined;
+      const pool = DatabaseConnection.getPool();
+      const where: string[] = [];
+      const params: any[] = [];
+      if (start && end) { where.push('p.paid_at BETWEEN ? AND ?'); params.push(start, end); }
+      const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+      const [rows]: any = await pool.query(
+        `SELECT COUNT(*) AS count,
+                COALESCE(SUM(p.amount),0) AS total_gross,
+                COALESCE(SUM(p.tax_amount),0) AS total_tax,
+                COALESCE(SUM(p.commission_amount),0) AS total_commission,
+                COALESCE(SUM(p.provider_amount),0) AS total_provider
+         FROM payments p ${whereSql}`,
+        params
+      );
+      res.json({ success: true, summary: rows[0] });
+    } catch (e: any) {
+      Logger.error('ADMIN_MODULE', 'Error summary payments', e);
+      res.status(500).json({ success: false, error: 'summary_error' });
+    }
+  });
+
+  // Export CSV
+  router.get('/payments/export.csv', adminAuth, async (req, res) => {
+    try {
+      const start = req.query.start as string | undefined;
+      const end = req.query.end as string | undefined;
+      const pool = DatabaseConnection.getPool();
+      const where: string[] = [];
+      const params: any[] = [];
+      if (start && end) { where.push('p.paid_at BETWEEN ? AND ?'); params.push(start, end); }
+      const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+      const [rows]: any = await pool.query(
+        `SELECT p.id, p.appointment_id, p.client_id, p.provider_id, p.amount, p.tax_amount, p.commission_amount, p.provider_amount, p.currency, p.status, p.paid_at,
+                s.name AS service_name, uc.email AS client_email, up.email AS provider_email
+         FROM payments p
+         LEFT JOIN appointments a ON a.id = p.appointment_id
+         LEFT JOIN provider_services s ON s.id = a.service_id
+         LEFT JOIN users uc ON uc.id = p.client_id
+         LEFT JOIN users up ON up.id = p.provider_id
+         ${whereSql}
+         ORDER BY p.paid_at DESC, p.id DESC`,
+        params
+      );
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="payments.csv"');
+      const header = ['id','appointment_id','client_id','provider_id','service_name','client_email','provider_email','amount','tax_amount','commission_amount','provider_amount','currency','status','paid_at'];
+      res.write(header.join(',') + '\n');
+      for (const r of rows) {
+        const line = [r.id,r.appointment_id,r.client_id,r.provider_id,`"${r.service_name||''}"`,r.client_email,r.provider_email,r.amount,r.tax_amount,r.commission_amount,r.provider_amount,r.currency,r.status,r.paid_at?new Date(r.paid_at).toISOString():'' ].join(',');
+        res.write(line + '\n');
+      }
+      res.end();
+    } catch (e: any) {
+      Logger.error('ADMIN_MODULE', 'Error export csv', e);
+      res.status(500).json({ success: false, error: 'export_error' });
     }
   });
 

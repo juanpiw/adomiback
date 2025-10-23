@@ -238,19 +238,26 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
       return;
     }
 
-    // Commission rate from settings or default 15%
+    // Commission over net base (amount without VAT if configured)
     let commissionRate = 15.0;
+    let vatPercent = 0.0;
     try {
-      const [setRows] = await pool.query('SELECT setting_value FROM platform_settings WHERE setting_key = "default_commission_rate" LIMIT 1');
-      if ((setRows as any[]).length) commissionRate = Number((setRows as any[])[0].setting_value) || 15.0;
+      const [setRows] = await pool.query('SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN ("default_commission_rate","vat_rate_percent")');
+      (setRows as any[]).forEach((r: any) => {
+        if (r.setting_key === 'default_commission_rate') commissionRate = Number(r.setting_value) || 15.0;
+        if (r.setting_key === 'vat_rate_percent') vatPercent = Number(r.setting_value) || 0.0;
+      });
     } catch {}
-    const commissionAmount = Number((amount * (commissionRate / 100)).toFixed(2));
+    // If VAT configured, assume amount is VAT-inclusive: tax = amount * vat/(100+vat)
+    const taxAmount = vatPercent > 0 ? Number((amount * (vatPercent / (100 + vatPercent))).toFixed(2)) : 0;
+    const netBase = Number((amount - taxAmount).toFixed(2));
+    const commissionAmount = Number((netBase * (commissionRate / 100)).toFixed(2));
     const providerAmount = Number((amount - commissionAmount).toFixed(2));
 
     await pool.execute(
-      `INSERT INTO payments (appointment_id, client_id, provider_id, amount, commission_amount, provider_amount, currency, payment_method, stripe_payment_intent_id, status, paid_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'CLP', 'card', ?, 'completed', CURRENT_TIMESTAMP)`,
-      [appointmentId, clientId, providerId, amount, commissionAmount, providerAmount, paymentIntentId || null]
+      `INSERT INTO payments (appointment_id, client_id, provider_id, amount, tax_amount, commission_amount, provider_amount, currency, payment_method, stripe_payment_intent_id, status, paid_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'CLP', 'card', ?, 'completed', CURRENT_TIMESTAMP)`,
+      [appointmentId, clientId, providerId, amount, taxAmount, commissionAmount, providerAmount, paymentIntentId || null]
     );
 
     Logger.info(MODULE, '💰 [HANDLE_COMPLETED] Payment recorded', { appointmentId, amount, clientId, providerId });

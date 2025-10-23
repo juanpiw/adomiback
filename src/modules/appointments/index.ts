@@ -599,15 +599,62 @@ function buildRouter(): Router {
           [user.id, appointmentId]
         );
         
-        // Permitir liberación de fondos en payments
+        // Permitir liberación de fondos con evaluación de retención (Stripe)
+        let stripeReleaseDays = 10;
+        try {
+          const [cfg]: any = await pool.query(
+            `SELECT setting_value FROM platform_settings WHERE setting_key = 'stripe_release_days' LIMIT 1`
+          );
+          if ((cfg as any[]).length) stripeReleaseDays = Number((cfg as any[])[0].setting_value) || 10;
+        } catch {}
+
         await pool.execute(
           `UPDATE payments 
-           SET can_release = TRUE
+           SET can_release = TRUE,
+               release_status = CASE 
+                 WHEN paid_at IS NOT NULL AND paid_at <= NOW() - INTERVAL ? DAY THEN 'eligible' 
+                 ELSE 'pending' 
+               END
            WHERE appointment_id = ?`,
-          [appointmentId]
+          [stripeReleaseDays, appointmentId]
         );
-        
-        Logger.info(MODULE, '✅ Cita marcada como completada y fondos liberables');
+
+        // Si ya es elegible, mover de pending_balance → balance y marcar release
+        try {
+          const [[p]]: any = await pool.query(
+            `SELECT id, provider_id, provider_amount, paid_at,
+                    (paid_at IS NOT NULL AND paid_at <= NOW() - INTERVAL ? DAY) AS is_eligible
+             FROM payments WHERE appointment_id = ? LIMIT 1`,
+            [stripeReleaseDays, appointmentId]
+          );
+          if (p && Number(p.is_eligible) === 1) {
+            // Asegurar fila de wallet
+            await pool.execute(
+              `INSERT INTO wallet_balance (user_id, balance, pending_balance, total_earned, total_withdrawn, currency)
+               VALUES (?, 0, 0, 0, 0, 'CLP')
+               ON DUPLICATE KEY UPDATE user_id = user_id`,
+              [p.provider_id]
+            );
+            // Mover fondos
+            await pool.execute(
+              'UPDATE wallet_balance SET pending_balance = GREATEST(pending_balance - ?, 0), balance = balance + ?, total_earned = total_earned + ? WHERE user_id = ?',
+              [p.provider_amount, p.provider_amount, p.provider_amount, p.provider_id]
+            );
+            // Marcar payment liberado
+            await pool.execute('UPDATE payments SET release_status = "completed", released_at = NOW() WHERE id = ?', [p.id]);
+            // Registrar transacción
+            await pool.execute(
+              `INSERT INTO transactions (user_id, type, amount, currency, description, payment_id, appointment_id, created_at)
+               VALUES (?, 'payment_received', ?, 'CLP', 'Liberación por verificación', ?, ?, NOW())`,
+              [p.provider_id, p.provider_amount, p.id, appointmentId]
+            );
+            Logger.info(MODULE, '💸 Fondos liberados al balance del proveedor', { paymentId: p.id, appointmentId });
+          } else {
+            Logger.info(MODULE, '⏳ Fondos marcados como liberables pero no elegibles aún por retención');
+          }
+        } catch (fundErr) {
+          Logger.warn(MODULE, 'No se pudo mover fondos al balance (se intentará luego por job/manual)');
+        }
         
         // Emitir socket a proveedor y cliente
         try {

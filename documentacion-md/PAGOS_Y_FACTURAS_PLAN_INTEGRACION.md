@@ -279,3 +279,24 @@ Notas:
 - Mantener idempotencia en refunds (revisar si ya existe `stripe_refund_id`).
 - Toda acción manual de admin debe generar un evento en `payment_event_logs`.
 
+### Criterios nuevos implementados
+
+- Unificación de verificación y liberación:
+  - Al verificar código correcto en `POST /appointments/:id/verify-completion`, se marca `appointments.completed/verified_at`, se setea `payments.can_release = TRUE` y `release_status` según retención.
+  - Si el pago ya es elegible por retención (`paid_at <= NOW() - stripe_release_days`), se mueve de `wallet_balance.pending_balance` a `wallet_balance.balance` y se inserta `transactions (payment_received)` completado.
+- Retención configurable:
+  - `platform_settings.stripe_release_days` (por defecto 10) y `payout_business_days` (por defecto 3) para T+N hábiles.
+- Impuestos:
+  - Nuevos campos `tax_amount` en `appointments` y `payments`. La comisión debe calcularse sobre base neta (pendiente de aplicar en lógica de inserción de `payments`).
+- Datos bancarios (admin):
+  - Campos en `provider_profiles`: `bank_name`, `bank_account`, `account_holder`, `account_rut`, `account_type`.
+  - Endpoint `/admin/payments` devuelve banco/cuenta (UI enmascara la cuenta).
+- Front Admin Pagos:
+  - Filtros por día/semana/mes, columnas de servicio, banco, cuenta enmascarada, fecha estimada de liquidación (T+3 hábiles) y `settlement_status` (pending/eligible/completed/failed).
+
+### Pendiente por completar
+
+- Cálculo de `commission_amount` sobre base neta (precio sin IVA) y almacenamiento de `tax_amount` al crear `appointments/payments`.
+- Exponer en admin totales por rango (bruto, comisión, neto proveedor) y export CSV.
+- Registrar auditoría de emails en `emails_sent` (opcional) y eventos en `payment_event_logs`.
+
