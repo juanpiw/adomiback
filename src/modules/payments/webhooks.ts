@@ -13,6 +13,8 @@ const MODULE = 'PAYMENTS_WEBHOOKS';
 export function setupPaymentsWebhooks(app: any) {
   const stripeSecret = process.env.STRIPE_SECRET_KEY;
   const webhookSecret = process.env.STRIPE_APPOINTMENTS_WEBHOOK_SECRET || process.env.STRIPE_WEBHOOK_SECRET;
+  const usedSecretSource = process.env.STRIPE_APPOINTMENTS_WEBHOOK_SECRET ? 'STRIPE_APPOINTMENTS_WEBHOOK_SECRET' : 'STRIPE_WEBHOOK_SECRET';
+  const secretSuffix = webhookSecret ? String(webhookSecret).slice(-6) : null;
   
   if (!stripeSecret || !webhookSecret) {
     Logger.warn(MODULE, 'Stripe appointments webhook not configured (missing STRIPE_SECRET_KEY or STRIPE_APPOINTMENTS_WEBHOOK_SECRET)');
@@ -20,6 +22,12 @@ export function setupPaymentsWebhooks(app: any) {
   }
   
   const stripe = new Stripe(stripeSecret);
+  Logger.info(MODULE, 'Webhook configured', {
+    usedSecretSource,
+    hasAppointmentsSecret: !!process.env.STRIPE_APPOINTMENTS_WEBHOOK_SECRET,
+    hasWebhookSecret: !!process.env.STRIPE_WEBHOOK_SECRET,
+    secretSuffix
+  });
 
   // Webhook genérico de Stripe (alias para compatibilidad)
   app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (req: any, res: any) => {
@@ -37,7 +45,9 @@ export function setupPaymentsWebhooks(app: any) {
       status: 'ok', 
       timestamp: new Date().toISOString(),
       configured: !!(stripeSecret && webhookSecret),
-      endpoints: ['/webhooks/stripe', '/webhooks/stripe-appointments']
+      endpoints: ['/webhooks/stripe', '/webhooks/stripe-appointments'],
+      usedSecretSource,
+      secretSuffix
     });
   });
   
@@ -80,6 +90,19 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
 
   // Procesar evento de forma asíncrona (después de responder)
   try {
+    // Idempotencia: registrar evento si no existe
+    try {
+      const pool = DatabaseConnection.getPool();
+      const payloadHash = require('crypto').createHash('sha256').update(Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body))).digest('hex');
+      await pool?.execute(
+        `INSERT IGNORE INTO stripe_events (event_id, event_type, payload_hash, status, delivered_at, raw_payload)
+         VALUES (?, ?, ?, 'received', CURRENT_TIMESTAMP(6), JSON_OBJECT('type', ?, 'id', ?, 'receivedAt', NOW(6)))`,
+        [event.id, event.type, payloadHash, event.type, event.id]
+      );
+    } catch (e) {
+      Logger.warn(MODULE, 'Idempotency insert failed/ignored', e as any);
+    }
+
     Logger.info(MODULE, '🔔 [WEBHOOK] Dispatching handler', { type: event.type });
     switch (event.type) {
       case 'checkout.session.completed':
@@ -139,6 +162,15 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
     }
 
     Logger.info(MODULE, '🔔 [WEBHOOK] Processed successfully', { type: event.type, id: event.id });
+    try {
+      const pool = DatabaseConnection.getPool();
+      await pool?.execute(
+        `UPDATE stripe_events SET status = 'processed', processed_at = CURRENT_TIMESTAMP(6) WHERE event_id = ?`,
+        [event.id]
+      );
+    } catch (e) {
+      Logger.warn(MODULE, 'Idempotency update processed failed', e as any);
+    }
   } catch (err) {
     Logger.error(MODULE, 'Webhook handler error', { 
       error: (err as any).message, 
@@ -146,6 +178,15 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
       eventType: event.type,
       eventId: event.id 
     });
+    try {
+      const pool = DatabaseConnection.getPool();
+      await pool?.execute(
+        `UPDATE stripe_events SET status = 'error', error_message = ? WHERE event_id = ?`,
+        [String((err as any).message || 'error'), event.id]
+      );
+    } catch (e) {
+      Logger.warn(MODULE, 'Idempotency update error failed', e as any);
+    }
   }
 }
 

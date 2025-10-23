@@ -70,6 +70,26 @@ export function createApp(): Express {
     }
   });
 
+  // Debug: list recent stripe events (secured via token)
+  app.get('/debug/stripe-events', async (req, res) => {
+    try {
+      const token = String(req.query.token || '');
+      if (!process.env.DEBUG_EMAIL_TOKEN || token !== process.env.DEBUG_EMAIL_TOKEN) {
+        return res.status(403).json({ success: false, error: 'forbidden' });
+      }
+      const limit = Math.min(Number(req.query.limit || 50), 200);
+      const pool = (await import('./shared/database/connection')).default.getPool();
+      const [rows] = await pool.query(
+        `SELECT event_id, event_type, status, delivered_at, processed_at, LEFT(payload_hash, 8) as payload_hash_short
+         FROM stripe_events ORDER BY delivered_at DESC LIMIT ?`,
+        [limit]
+      );
+      return res.json({ success: true, events: rows });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, error: e?.message || 'query error' });
+    }
+  });
+
   // Setup módulos (ahora sí con JSON parseado)
   Logger.info('APP', 'Setting up modules...');
   setupAuthModule(app);
