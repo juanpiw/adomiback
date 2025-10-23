@@ -98,6 +98,9 @@ function buildRouter(): Router {
 }
 
 export function setupReviewsModule(app: Express) {
+  console.log('⭐'.repeat(20));
+  console.log('⭐ MÓDULO DE REVIEWS INICIANDO ⭐');
+  console.log('⭐'.repeat(20));
   console.log('[REVIEWS] 🚀 Inicializando módulo de reviews...');
   console.log('[REVIEWS] 📁 Archivo: backend/src/modules/reviews/index.ts');
   console.log('[REVIEWS] 🎯 Montando rutas en app...');
@@ -109,6 +112,9 @@ export function setupReviewsModule(app: Express) {
   console.log('[REVIEWS]   - POST /reviews');
   console.log('[REVIEWS]   - GET /providers/:id/reviews');
   console.log('[REVIEWS] 📊 Módulo de reviews completamente inicializado');
+  console.log('⭐'.repeat(20));
+  console.log('⭐ MÓDULO DE REVIEWS LISTO ⭐');
+  console.log('⭐'.repeat(20));
   
   Logger.info(MODULE, 'Reviews routes mounted');
 }

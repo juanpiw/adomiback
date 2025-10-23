@@ -6,8 +6,12 @@ import { buildAppointmentCheckoutRoutes } from './modules/payments/routes/appoin
 import { setupReviewsModule } from './modules/reviews/index';
 import { setupFavoritesModule } from './modules/favorites/index';
 
+console.log('='.repeat(80));
+console.log('🚀 ADOMI BACKEND - VERSIÓN CON MÓDULOS DE REVIEWS Y FAVORITES');
+console.log('📅 Fecha de despliegue:', new Date().toISOString());
+console.log('📁 Archivo principal: backend/src/index.ts');
+console.log('='.repeat(80));
 console.log('[SERVER] 🚀 Iniciando servidor Adomi...');
-console.log('[SERVER] 📁 Archivo principal: backend/src/index.ts');
 
 const app = express();
 app.use(cors());
@@ -33,14 +37,17 @@ console.log('[SERVER] ✅ Todos los módulos configurados correctamente');
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-  console.log(`[SERVER] 🌐 Servidor escuchando en puerto ${port}`);
-  console.log(`[SERVER] 🔗 URL: http://localhost:${port}`);
-  console.log(`[SERVER] 📊 Endpoints disponibles:`);
-  console.log(`[SERVER]   - POST /reviews`);
-  console.log(`[SERVER]   - GET /client/favorites`);
-  console.log(`[SERVER]   - GET /provider/appointments/pending-requests`);
-  console.log(`[SERVER]   - GET /provider/appointments/next`);
-  console.log(`[SERVER] ✅ Servidor Adomi completamente iniciado`);
+  console.log('='.repeat(80));
+  console.log('✅ ADOMI BACKEND INICIADO CORRECTAMENTE');
+  console.log(`🌐 Servidor escuchando en puerto ${port}`);
+  console.log(`🔗 URL: http://localhost:${port}`);
+  console.log('📊 ENDPOINTS DISPONIBLES:');
+  console.log('   ✅ POST /reviews - Crear reseñas');
+  console.log('   ✅ GET /client/favorites - Listar favoritos');
+  console.log('   ✅ GET /provider/appointments/pending-requests - Citas pendientes');
+  console.log('   ✅ GET /provider/appointments/next - Próxima cita');
+  console.log('='.repeat(80));
+  console.log(`[SERVER] ✅ Servidor Adomi completamente iniciado - ${new Date().toISOString()}`);
 });
 
 
