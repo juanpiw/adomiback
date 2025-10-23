@@ -15,6 +15,7 @@ import { setupChatModule } from './modules/chat';
 import { setupAppointmentsModule } from './modules/appointments';
 import { setupPaymentsModule } from './modules/payments';
 import { setupNotificationsModule } from './modules/notifications';
+import { setupPromotionsModule } from './modules/promotions';
 import { setupReviewsModule } from './modules/reviews';
 import { setupFavoritesModule } from './modules/favorites';
 
@@ -64,6 +65,7 @@ export function createApp(): Express {
   Logger.info('APP', 'Mounting Reviews and Favorites modules...');
   setupReviewsModule(app);
   setupFavoritesModule(app);
+  setupPromotionsModule(app);
   setupNotificationsModule(app);
   
   Logger.info('APP', 'All modules loaded successfully');
