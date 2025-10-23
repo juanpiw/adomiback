@@ -19,6 +19,7 @@ import { setupPromotionsModule } from './modules/promotions';
 import { setupReviewsModule } from './modules/reviews';
 import { setupFavoritesModule } from './modules/favorites';
 import { EmailService } from './shared/services/email.service';
+import { setupAdminModule } from './modules/admin';
 
 export function createApp(): Express {
   const app = express();
@@ -105,6 +106,7 @@ export function createApp(): Express {
   setupFavoritesModule(app);
   setupPromotionsModule(app);
   setupNotificationsModule(app);
+  setupAdminModule(app);
   
   Logger.info('APP', 'All modules loaded successfully');
 
