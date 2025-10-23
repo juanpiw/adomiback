@@ -5,6 +5,8 @@ import { Logger } from '../../shared/utils/logger.util';
 import { emitToUser } from '../../shared/realtime/socket';
 import { PushService } from '../notifications/services/push.service';
 import { generateVerificationCode } from '../../shared/utils/verification-code.util';
+import { EmailService } from '../../shared/services/email.service';
+import type StripeNamespace from 'stripe';
 
 const MODULE = 'PAYMENTS_WEBHOOKS';
 
@@ -83,6 +85,22 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
         Logger.info(MODULE, '🔔 [WEBHOOK] checkout.session.completed recibido');
         await handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session);
         break;
+      case 'invoice.payment_succeeded':
+        Logger.info(MODULE, '🔔 [WEBHOOK] invoice.payment_succeeded', { invoiceId: (event.data.object as any).id });
+        await handleInvoicePaymentSucceeded(event.data.object as Stripe.Invoice);
+        break;
+      case 'invoice.payment_failed':
+        Logger.info(MODULE, '🔔 [WEBHOOK] invoice.payment_failed', { invoiceId: (event.data.object as any).id });
+        await handleInvoicePaymentFailed(event.data.object as Stripe.Invoice);
+        break;
+      case 'customer.subscription.updated':
+        Logger.info(MODULE, '🔔 [WEBHOOK] customer.subscription.updated', { subscriptionId: (event.data.object as any).id });
+        await handleSubscriptionUpdated(event.data.object as Stripe.Subscription);
+        break;
+      case 'customer.subscription.deleted':
+        Logger.info(MODULE, '🔔 [WEBHOOK] customer.subscription.deleted', { subscriptionId: (event.data.object as any).id });
+        await handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
+        break;
       case 'payment_intent.succeeded':
         Logger.info(MODULE, '🔔 [WEBHOOK] payment_intent.succeeded', { paymentIntentId: (event.data.object as any).id });
         break;
@@ -103,6 +121,10 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
 
 async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) {
   const pool = DatabaseConnection.getPool();
+  if (!pool) {
+    Logger.error(MODULE, 'Database connection not available in handleCheckoutSessionCompleted');
+    return;
+  }
   try {
     Logger.info(MODULE, '🧭 [HANDLE_COMPLETED] Start', { sessionId: session.id, payment_status: (session as any).payment_status, status: session.status });
     const appointmentId = Number(session.metadata?.appointmentId || 0);
@@ -161,6 +183,57 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
     );
 
     Logger.info(MODULE, '💰 [HANDLE_COMPLETED] Payment recorded', { appointmentId, amount, clientId, providerId });
+
+    // === Emails ===
+    try {
+      // Obtener emails de cliente y proveedor
+      const [[clientRow]]: any = await pool.query('SELECT email FROM users WHERE id = ? LIMIT 1', [clientId]);
+      const [[providerRow]]: any = await pool.query('SELECT email FROM users WHERE id = ? LIMIT 1', [providerId]);
+      const clientEmail: string | undefined = clientRow?.email;
+      const providerEmail: string | undefined = providerRow?.email;
+
+      // Intentar enriquecer con URLs de Stripe si hay invoice / recibo
+      let invoicePdfUrl: string | null = null;
+      let receiptUrl: string | null = null;
+      try {
+        const stripePaymentIntentId = paymentIntentId;
+        if (stripePaymentIntentId) {
+          const stripeClient = new Stripe(process.env.STRIPE_SECRET_KEY as string);
+          const pi: any = await stripeClient.paymentIntents.retrieve(stripePaymentIntentId, { expand: ['latest_charge'] });
+          const latestCharge = typeof pi.latest_charge === 'object' ? pi.latest_charge : null;
+          receiptUrl = latestCharge?.receipt_url || null;
+          // Nota: el invoice PDF existe principalmente en flujos de factura; en checkout de cita puede no existir
+        }
+      } catch {}
+
+      if (clientEmail) {
+        await EmailService.sendClientReceipt(clientEmail, {
+          appName: 'Adomi',
+          amount,
+          currency: 'CLP',
+          receiptNumber: null,
+          invoiceNumber: null,
+          invoicePdfUrl,
+          receiptUrl,
+          paymentDateISO: new Date().toISOString(),
+          appointmentId
+        });
+      }
+      if (providerEmail) {
+        await EmailService.sendProviderPaymentSummary(providerEmail, {
+          appName: 'Adomi',
+          appointmentId,
+          amount,
+          commissionAmount,
+          providerAmount,
+          currency: 'CLP',
+          paymentDateISO: new Date().toISOString()
+        });
+      }
+      Logger.info(MODULE, '✉️ Emails de pago enviados');
+    } catch (emailErr) {
+      Logger.error(MODULE, 'Error enviando emails de pago', emailErr as any);
+    }
 
     // 🔐 GENERAR CÓDIGO DE VERIFICACIÓN
     const verificationCode = generateVerificationCode();
@@ -221,6 +294,96 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
     }
   } catch (err) {
     Logger.error(MODULE, 'Error handling checkout.session.completed', err as any);
+  }
+}
+
+// === Handlers portados de subscriptions/webhooks.ts (sin acceso directo al pool) ===
+async function handleInvoicePaymentSucceeded(invoice: StripeNamespace.Invoice) {
+  const pool = DatabaseConnection.getPool();
+  try {
+    const invoiceAny = invoice as any;
+    const subscriptionId = typeof invoiceAny.subscription === 'string' 
+      ? invoiceAny.subscription 
+      : invoiceAny.subscription?.id;
+    if (subscriptionId) {
+      await pool?.execute(
+        `UPDATE subscriptions 
+         SET status = 'active', updated_at = CURRENT_TIMESTAMP 
+         WHERE stripe_subscription_id = ?`,
+        [subscriptionId]
+      );
+      Logger.info(MODULE, 'Subscription reactivated after payment', { subscriptionId });
+    }
+  } catch (error: any) {
+    Logger.error(MODULE, 'Error processing payment success', error);
+  }
+}
+
+async function handleInvoicePaymentFailed(invoice: StripeNamespace.Invoice) {
+  const pool = DatabaseConnection.getPool();
+  try {
+    const invoiceAny = invoice as any;
+    const subscriptionId = typeof invoiceAny.subscription === 'string' 
+      ? invoiceAny.subscription 
+      : invoiceAny.subscription?.id;
+    if (subscriptionId) {
+      await pool?.execute(
+        `UPDATE subscriptions 
+         SET status = 'past_due', updated_at = CURRENT_TIMESTAMP 
+         WHERE stripe_subscription_id = ?`,
+        [subscriptionId]
+      );
+      Logger.info(MODULE, 'Subscription marked as past_due', { subscriptionId });
+    }
+  } catch (error: any) {
+    Logger.error(MODULE, 'Error processing payment failure', error);
+  }
+}
+
+async function handleSubscriptionUpdated(subscription: StripeNamespace.Subscription) {
+  const pool = DatabaseConnection.getPool();
+  try {
+    await pool?.execute(
+      `UPDATE subscriptions 
+       SET status = ?,
+           current_period_start = FROM_UNIXTIME(?),
+           current_period_end = FROM_UNIXTIME(?),
+           cancel_at_period_end = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE stripe_subscription_id = ?`,
+      [
+        subscription.status,
+        (subscription as any).current_period_start,
+        (subscription as any).current_period_end,
+        subscription.cancel_at_period_end || false,
+        subscription.id
+      ]
+    );
+    Logger.info(MODULE, 'Subscription updated in database', { subscriptionId: subscription.id, status: subscription.status });
+  } catch (error: any) {
+    Logger.error(MODULE, 'Error updating subscription', error);
+  }
+}
+
+async function handleSubscriptionDeleted(subscription: StripeNamespace.Subscription) {
+  const pool = DatabaseConnection.getPool();
+  try {
+    await pool?.execute(
+      `UPDATE subscriptions 
+       SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP 
+       WHERE stripe_subscription_id = ?`,
+      [subscription.id]
+    );
+    await pool?.execute(
+      'UPDATE users SET active_plan_id = 1 WHERE stripe_customer_id = ?',
+      [subscription.customer]
+    );
+    Logger.info(MODULE, 'Subscription cancelled and user downgraded', { 
+      subscriptionId: subscription.id, 
+      customerId: subscription.customer 
+    });
+  } catch (error: any) {
+    Logger.error(MODULE, 'Error cancelling subscription', error);
   }
 }
 

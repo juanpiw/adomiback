@@ -26,12 +26,8 @@ export function createApp(): Express {
   app.use(cors());
   app.use(morgan('dev'));
   
-  // ✅ CRÍTICO: Montar SOLO los webhooks de Stripe ANTES de express.json()
-  // Los webhooks necesitan el body raw para verificar la firma
-  // Esto se hace llamando setupSubscriptionsModule con un flag especial
-  setupSubscriptionsModule(app, true); // true = solo webhook
-  
-  // También montar webhook de pagos de citas antes de express.json()
+  // ✅ CRÍTICO: Montar los webhooks de Stripe ANTES de express.json()
+  // Unificamos el webhook en el módulo de payments para respuesta 2xx inmediata
   const { setupPaymentsWebhooks } = require('./modules/payments/webhooks');
   setupPaymentsWebhooks(app);
   
