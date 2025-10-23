@@ -311,6 +311,12 @@ CREATE TABLE provider_profiles (
   last_profile_update TIMESTAMP,
   is_online BOOLEAN DEFAULT FALSE,
   last_seen TIMESTAMP,
+  -- Datos bancarios para pagos a proveedores (backoffice)
+  bank_name VARCHAR(100) NULL,
+  bank_account VARCHAR(50) NULL,
+  account_holder VARCHAR(255) NULL,
+  account_rut VARCHAR(20) NULL,
+  account_type VARCHAR(20) NULL,
   -- Geolocalización (tiempo real, opcional)
   current_lat DECIMAL(10,7) NULL,
   current_lng DECIMAL(10,7) NULL,
