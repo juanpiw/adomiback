@@ -28,6 +28,11 @@ export function setupAdminModule(app: Express) {
         where.push('p.paid_at BETWEEN ? AND ?');
         params.push(start, end);
       }
+      const releaseStatus = req.query.release_status as string | undefined;
+      if (releaseStatus && ['pending','eligible','completed','failed'].includes(releaseStatus)) {
+        where.push('p.release_status = ?');
+        params.push(releaseStatus);
+      }
       const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
       const sql = `
@@ -87,7 +92,10 @@ export function setupAdminModule(app: Express) {
                 COALESCE(SUM(p.amount),0) AS total_gross,
                 COALESCE(SUM(p.tax_amount),0) AS total_tax,
                 COALESCE(SUM(p.commission_amount),0) AS total_commission,
-                COALESCE(SUM(p.provider_amount),0) AS total_provider
+                COALESCE(SUM(p.provider_amount),0) AS total_provider,
+                SUM(CASE WHEN p.release_status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+                SUM(CASE WHEN p.release_status = 'eligible' THEN 1 ELSE 0 END) AS eligible_count,
+                SUM(CASE WHEN p.release_status = 'completed' THEN 1 ELSE 0 END) AS completed_count
          FROM payments p ${whereSql}`,
         params
       );
@@ -132,6 +140,23 @@ export function setupAdminModule(app: Express) {
     } catch (e: any) {
       Logger.error('ADMIN_MODULE', 'Error export csv', e);
       res.status(500).json({ success: false, error: 'export_error' });
+    }
+  });
+
+  // Conteo rápido para badge
+  router.get('/payments/pending-count', adminAuth, async (req, res) => {
+    try {
+      const pool = DatabaseConnection.getPool();
+      const [[row]]: any = await pool.query(
+        `SELECT 
+           SUM(CASE WHEN release_status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+           SUM(CASE WHEN release_status = 'eligible' THEN 1 ELSE 0 END) AS eligible_count
+         FROM payments`
+      );
+      res.json({ success: true, pending: Number(row?.pending_count || 0), eligible: Number(row?.eligible_count || 0) });
+    } catch (e: any) {
+      Logger.error('ADMIN_MODULE', 'Error pending count', e);
+      res.status(500).json({ success: false, error: 'count_error' });
     }
   });
 
