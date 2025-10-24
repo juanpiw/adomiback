@@ -35,6 +35,27 @@ export function buildRefundRoutes(): Router {
         [appointmentId, payment?.id || null, appt.client_id, appt.provider_id, payment?.amount || null, payment?.currency || 'CLP', reason.trim()]
       );
       Logger.info(MODULE, 'Refund request inserted', { requestId: result.insertId, appointmentId, userId: user?.id });
+
+      // Notificar por email al cliente que iniciamos la revisión
+      try {
+        const [[userRow]]: any = await pool.query('SELECT email, name FROM users WHERE id = ? LIMIT 1', [appt.client_id]);
+        const [[svcRow]]: any = await pool.query('SELECT s.name AS service_name FROM appointments a LEFT JOIN provider_services s ON s.id = a.service_id WHERE a.id = ? LIMIT 1', [appointmentId]);
+        const toEmail = userRow?.email;
+        if (toEmail) {
+          const Email = require('../../../shared/services/email.service') as typeof import('../../../shared/services/email.service');
+          await Email.EmailService.sendRefundReceived(toEmail, {
+            appName: process.env.APP_NAME || 'Adomi',
+            clientName: userRow?.name || null,
+            serviceName: svcRow?.service_name || null,
+            appointmentId: appointmentId || null,
+            originalAmount: Number(payment?.amount || 0),
+            currency: payment?.currency || 'CLP',
+            reviewDays: Number(process.env.REFUND_REVIEW_DAYS || 3)
+          } as any);
+        }
+      } catch (e) {
+        // No bloquear por error de email
+      }
       return res.json({ success: true, request_id: result.insertId });
     } catch (e: any) {
       Logger.error(MODULE, 'Error creating refund request', { message: e?.message, code: e?.code, sqlState: e?.sqlState });

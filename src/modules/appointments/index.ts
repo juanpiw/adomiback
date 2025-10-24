@@ -468,6 +468,104 @@ function buildRouter(): Router {
     }
   });
 
+  // POST /appointments/:id/cash/collect - registrar cobro en efectivo
+  router.post('/appointments/:id/cash/collect', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const appointmentId = Number(req.params.id);
+      if (!Number.isFinite(appointmentId)) return res.status(400).json({ success: false, error: 'id inválido' });
+
+      const pool = DatabaseConnection.getPool();
+      // Cargar cita
+      const [[appt]]: any = await pool.query('SELECT * FROM appointments WHERE id = ? LIMIT 1', [appointmentId]);
+      if (!appt) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      // Solo el proveedor dueño puede registrar cobro en efectivo
+      if (Number(appt.provider_id) !== Number(user.id)) {
+        return res.status(403).json({ success: false, error: 'No autorizado' });
+      }
+      if (String(appt.status) !== 'confirmed') {
+        return res.status(400).json({ success: false, error: 'La cita debe estar confirmada para registrar efectivo' });
+      }
+      const amount = Number(appt.price || 0);
+      if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Precio inválido para la cita' });
+
+      // Evitar duplicados si ya existe payment completed
+      const [[existing]]: any = await pool.query(
+        'SELECT id FROM payments WHERE appointment_id = ? AND status = "completed" LIMIT 1',
+        [appointmentId]
+      );
+      if (existing) return res.status(400).json({ success: false, error: 'El pago ya fue registrado' });
+
+      // Obtener tax y comisión desde settings
+      let taxRate = 19.0;
+      let commissionRate = 15.0;
+      try {
+        const [setRows]: any = await pool.query(
+          `SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN ('default_tax_rate','default_commission_rate')`
+        );
+        for (const r of setRows as any[]) {
+          if (r.setting_key === 'default_tax_rate') taxRate = Number(r.setting_value) || taxRate;
+          if (r.setting_key === 'default_commission_rate') commissionRate = Number(r.setting_value) || commissionRate;
+        }
+      } catch {}
+
+      const priceBase = Number((amount / (1 + taxRate / 100)).toFixed(2));
+      const taxAmount = Number((amount - priceBase).toFixed(2));
+      const commissionAmount = Number((priceBase * (commissionRate / 100)).toFixed(2));
+      const providerAmount = Number((priceBase - commissionAmount).toFixed(2));
+
+      // Insertar payment en efectivo
+      const [ins]: any = await pool.execute(
+        `INSERT INTO payments (appointment_id, client_id, provider_id, amount, tax_amount, commission_amount, provider_amount, currency, payment_method, status, paid_at, can_release, release_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'CLP', 'cash', 'completed', NOW(), TRUE, 'eligible')`,
+        [appointmentId, appt.client_id, appt.provider_id, amount, taxAmount, commissionAmount, providerAmount]
+      );
+      const paymentId = ins.insertId;
+
+      // Registrar deuda de comisión del proveedor (si existe la tabla)
+      try {
+        await pool.execute(
+          `INSERT INTO provider_commission_debts (provider_id, appointment_id, payment_id, commission_amount, currency, status, created_at)
+           VALUES (?, ?, ?, ?, 'CLP', 'pending', NOW())`,
+          [appt.provider_id, appointmentId, paymentId, commissionAmount]
+        );
+      } catch (e) {
+        Logger.warn(MODULE, 'No se pudo registrar deuda de comisión (tabla puede no existir aún)');
+      }
+
+      // Actualizar appointment para reflejar método de pago
+      try {
+        const [colRows] = await pool.query(`SHOW COLUMNS FROM appointments LIKE 'payment_method'`);
+        const hasCol = (colRows as any[]).length > 0;
+        if (!hasCol) {
+          await pool.query(`ALTER TABLE appointments ADD COLUMN payment_method ENUM('card','cash') NULL AFTER status`);
+        }
+        await pool.execute(`UPDATE appointments SET payment_method = 'cash', updated_at = NOW() WHERE id = ?`, [appointmentId]);
+      } catch {}
+
+      // Notificar a cliente (push + in-app)
+      try {
+        await PushService.notifyUser(
+          Number(appt.client_id),
+          'Pago en efectivo registrado',
+          'El proveedor registró el cobro de tu cita en efectivo.',
+          { type: 'payment', appointment_id: String(appointmentId), method: 'cash' }
+        );
+      } catch {}
+
+      // Emitir socket a cliente y proveedor
+      try {
+        emitToUser(appt.provider_id, 'payment:created', { appointment_id: appointmentId, payment_id: paymentId, method: 'cash' });
+        emitToUser(appt.client_id, 'payment:created', { appointment_id: appointmentId, payment_id: paymentId, method: 'cash' });
+      } catch {}
+
+      return res.json({ success: true, payment_id: paymentId });
+    } catch (err) {
+      Logger.error(MODULE, 'Error registrando cobro en efectivo', err as any);
+      return res.status(500).json({ success: false, error: 'Error al registrar efectivo' });
+    }
+  });
+
   function addMinutes(hhmm: string, minutes: number): string {
     const [hh, mm] = hhmm.split(':').map(Number);
     const d = new Date(1970, 0, 1, hh, mm);

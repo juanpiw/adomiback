@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 import { Logger } from '../utils/logger.util';
-import { generateClientReceiptEmailHtml, generateProviderPaymentEmailHtml, generatePasswordResetEmailHtml, generateRefundDecisionEmailHtml, ClientReceiptEmailData, ProviderPaymentEmailData, PasswordResetEmailData, RefundDecisionEmailData } from './email-templates';
+import { generateClientReceiptEmailHtml, generateProviderPaymentEmailHtml, generatePasswordResetEmailHtml, generateRefundDecisionEmailHtml, generateRefundReceivedEmailHtml, ClientReceiptEmailData, ProviderPaymentEmailData, PasswordResetEmailData, RefundDecisionEmailData, RefundReceivedEmailData } from './email-templates';
 
 const MODULE = 'EMAIL_SERVICE';
 
@@ -76,6 +76,13 @@ export class EmailService {
     const subject = data.decision === 'approved'
       ? `${data.appName} – Devolución aprobada`
       : `${data.appName} – Devolución denegada`;
+    return this.sendRaw(to, subject, html);
+  }
+
+  static async sendRefundReceived(to: string, data: RefundReceivedEmailData) {
+    Logger.info(MODULE, 'sendRefundReceived called', { to, amount: data.originalAmount });
+    const html = generateRefundReceivedEmailHtml(data);
+    const subject = `${data.appName} – Recibimos tu solicitud de devolución`;
     return this.sendRaw(to, subject, html);
   }
 }

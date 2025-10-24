@@ -213,6 +213,74 @@ export class ClientRoutes {
         return res.status(500).json({ success: false, error: 'Error al guardar perfil', details: error.message });
       }
     });
+
+    // GET /client/payment-preference
+    this.router.get('/client/payment-preference', authenticateToken, async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user as AuthUser;
+        if (user.role !== 'client') {
+          return res.status(403).json({ success: false, error: 'Solo clientes pueden acceder a este endpoint' });
+        }
+
+        const pool = DatabaseConnection.getPool();
+        // Verificar si existe la columna
+        const [colRows] = await pool.query(`SHOW COLUMNS FROM client_profiles LIKE 'payment_method_pref'`);
+        const hasCol = (colRows as any[]).length > 0;
+        if (!hasCol) return res.status(200).json({ success: true, preference: null });
+
+        const [[row]]: any = await pool.query(
+          `SELECT payment_method_pref FROM client_profiles WHERE client_id = ? LIMIT 1`,
+          [user.id]
+        );
+        return res.status(200).json({ success: true, preference: row?.payment_method_pref || null });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Error al obtener preferencia de pago', details: error.message });
+      }
+    });
+
+    // PUT /client/payment-preference
+    this.router.put('/client/payment-preference', authenticateToken, async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user as AuthUser;
+        if (user.role !== 'client') {
+          return res.status(403).json({ success: false, error: 'Solo clientes pueden acceder a este endpoint' });
+        }
+
+        const pref = String((req.body || {}).payment_method_pref || '').trim();
+        if (!['card', 'cash'].includes(pref)) {
+          return res.status(400).json({ success: false, error: 'payment_method_pref inválido (card|cash)' });
+        }
+
+        const pool = DatabaseConnection.getPool();
+        // Asegurar existencia de la columna; si no existe, intentar crearla de forma segura
+        try {
+          const [colRows] = await pool.query(`SHOW COLUMNS FROM client_profiles LIKE 'payment_method_pref'`);
+          const hasCol = (colRows as any[]).length > 0;
+          if (!hasCol) {
+            await pool.query(`ALTER TABLE client_profiles ADD COLUMN payment_method_pref ENUM('card','cash') NULL AFTER preferred_language`);
+          }
+        } catch {}
+
+        // Asegurar fila en client_profiles
+        const [existsRows]: any = await pool.query('SELECT client_id FROM client_profiles WHERE client_id = ? LIMIT 1', [user.id]);
+        if (existsRows.length === 0) {
+          await pool.query(
+            `INSERT INTO client_profiles (client_id, full_name, phone, address, commune, region, preferred_language, payment_method_pref)
+             VALUES (?, '', '', '', '', '', 'es', ?)`,
+            [user.id, pref]
+          );
+        } else {
+          await pool.query(
+            `UPDATE client_profiles SET payment_method_pref = ? , updated_at = CURRENT_TIMESTAMP WHERE client_id = ?`,
+            [pref, user.id]
+          );
+        }
+
+        return res.status(200).json({ success: true, preference: pref });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Error al guardar preferencia de pago', details: error.message });
+      }
+    });
   }
 }
 

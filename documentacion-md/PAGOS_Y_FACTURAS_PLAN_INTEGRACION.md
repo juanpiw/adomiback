@@ -294,9 +294,158 @@ Notas:
 - Front Admin Pagos:
   - Filtros por día/semana/mes, columnas de servicio, banco, cuenta enmascarada, fecha estimada de liquidación (T+3 hábiles) y `settlement_status` (pending/eligible/completed/failed).
 
+## Devoluciones (refund_requests)
+
+Objetivo: permitir al cliente solicitar una devolución desde “Mis Reservas”, y al equipo admin gestionar (aprobar/denegar) y pagar manualmente con comprobante, manteniendo trazabilidad y notificaciones por correo.
+
+### Esquema de datos
+
+- Nueva tabla `refund_requests`:
+  - `id`, `appointment_id`, `payment_id`, `client_id`, `provider_id`
+  - `amount` (monto original pagado), `currency`
+  - `reason` (motivo del cliente)
+  - `status` ENUM('requested','in_review','approved','denied','cancelled','refunded')
+  - `requested_at`, `decided_at`, `decided_by_admin_email`, `decision_notes` (JSON con `voucher`, `reference`, etc.)
+  - `stripe_refund_id` (si se procesa vía Stripe a futuro)
+
+### Endpoints implementados
+
+- Cliente:
+  - `POST /payments/appointments/:id/refund-request` → crea solicitud (motivo ≥ 10 chars), envía email “Solicitud de devolución recibida”.
+
+- Admin (protegidos por `adminAuth` + `x-admin-secret`):
+  - `GET /admin/refunds` → listar con: fecha, servicio, email cliente/proveedor, teléfono cliente, método de pago, `original_amount`, `refund_proposed_amount` (65%), estado y motivo.
+  - `POST /admin/refunds/:id/decision` → aprobar/denegar; envía email al cliente:
+    - Aprobada: “Devolución aprobada” con monto a devolver (65%) y plazo de 3 días hábiles.
+    - Denegada: “Devolución denegada” con motivo (opcional).
+  - `POST /admin/refunds/:id/upload-voucher` → subir comprobante (PDF/JPG/PNG, máx 5MB) a `/uploads/admin/refunds/`, guarda URL en `decision_notes.voucher`.
+  - `POST /admin/refunds/:id/mark-paid` → marca pagada la devolución (actualiza `status = 'refunded'`, persiste `reference/notes`).
+
+### Emails
+
+- `Refund Received` (al crear la solicitud): confirma recepción y plazo de respuesta (configurable con `REFUND_REVIEW_DAYS`, default 3).
+- `Refund Decision` (al decidir):
+  - Aprobada: muestra monto a devolver (65% del pagado) y plazo de 3 días para pago.
+  - Denegada: muestra motivo de denegación (si se ingresa).
+
+### UI Admin
+
+- “Administración de Pagos” ahora incluye dos tablas:
+  - Pagos (arriba): como antes.
+  - Devoluciones (abajo): columnas ID, Fecha, Servicio, Cliente, Teléfono, Proveedor, Método, Monto pagado, Monto a devolver (65%), Estado, Motivo, Acciones.
+  - Acciones:
+    - Aprobar / Denegar (sin prompts intrusivos).
+    - Pagar (cuando está aprobado): abre panel para Referencia + subir Voucher; al confirmar, sube archivo y marca pagada.
+
+### Almacenamiento de comprobantes
+
+- Pagos (proveedores): `/uploads/admin/vouchers/`
+- Devoluciones (clientes): `/uploads/admin/refunds/`
+- Servir estático: `app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')))`
+
+### Formatos permitidos
+
+- PDF, JPG/JPEG, PNG (máx 5MB). Evitar HEIC/HEIF.
+
+### Configuración
+
+- `REFUND_REVIEW_DAYS` (opcional) → plazo en días hábiles para revisar solicitudes (default 3).
+
+### Flujo resumido
+
+1. Cliente paga la cita → si hay problema, desde “Mis Reservas” pulsa “Pedir devolución”, escribe motivo ≥ 10 chars.
+2. Backend crea `refund_requests`, envía email de recepción y muestra “Solicitud en proceso” en la tarjeta de la cita.
+3. Admin revisa en `/dash/admin-pagos` → Devoluciones; decide Aprobar/Denegar.
+4. Aprobada → se envía email con monto a devolver (65%). Admin pulsa “Pagar”, adjunta voucher y referencia → `status = 'refunded'`.
+
+### Pendiente (opcional)
+
+- Integrar reembolso automático vía Stripe (`stripe_refunds`) cuando el método sea tarjeta y la cuenta lo permita; persistir `stripe_refund_id` y conciliar.
+
 ### Pendiente por completar
 
 - Cálculo de `commission_amount` sobre base neta (precio sin IVA) y almacenamiento de `tax_amount` al crear `appointments/payments`.
 - Exponer en admin totales por rango (bruto, comisión, neto proveedor) y export CSV.
 - Registrar auditoría de emails en `emails_sent` (opcional) y eventos en `payment_event_logs`.
+
+### Progreso (devoluciones)
+
+- [x] Tabla `refund_requests` documentada e implementada
+- [x] Endpoint cliente para crear solicitud con email de recepción
+- [x] Endpoints admin para listar, decidir (emails), subir voucher y marcar pagada
+- [x] UI Admin: tabla “Devoluciones” + panel de pago con referencia/voucher
+- [x] Servir y almacenar comprobantes en `/uploads/admin/refunds/`
+
+## Pagos en efectivo (cash) – Estrategia de implementación
+
+Objetivo: permitir que el cliente pague en efectivo al proveedor sin romper el ecosistema de pagos/conciliaciones. El sistema registra la venta y crea una "deuda de comisión" del proveedor hacia la plataforma, que debe ser saldada dentro de un plazo (T+N).
+
+### Modelo de datos
+
+- `payments` existente: usar `payment_method='cash'`, almacenar `amount`, `tax_amount`, `commission_amount`, `provider_amount`, `paid_at`.
+- Nueva `provider_commission_debts`:
+  - `id BIGINT PK`, `provider_id INT`, `appointment_id INT`, `payment_id INT NULL`,
+  - `commission_amount DECIMAL(10,2)`, `currency VARCHAR(3) DEFAULT 'CLP'`,
+  - `due_date DATETIME`, `status ENUM('pending','paid','overdue','cancelled') DEFAULT 'pending'`,
+  - `settled_at DATETIME NULL`, `settlement_reference VARCHAR(255) NULL`,
+  - `notes TEXT NULL`, `voucher_url VARCHAR(500) NULL`,
+  - índices por (`provider_id`, `status`, `due_date`).
+- `platform_settings`:
+  - `cash_commission_due_days` (p.ej. 3), `cash_commission_reminder_days` (p.ej. 1), `default_tax_rate`, `default_commission_rate`.
+- Opcional: `payment_event_logs` para auditoría de acciones (create/mark paid/overdue/email/cron).
+
+### Flujo operativo
+
+1) Reserva: el cliente elige "Tarjeta" o "Efectivo".
+2) Si "Efectivo": la cita se confirma sin Checkout.
+3) Al finalizar el servicio, el proveedor pulsa "Cobrar en efectivo" (Agenda):
+   - Backend crea `payments (cash)` con desglose de impuestos/comisión (comisión sobre base neta),
+   - Crea `provider_commission_debts` con `due_date = NOW() + cash_commission_due_days`.
+4) Recordatorios automáticos previos al vencimiento; si vence → `overdue` y alertas admin.
+5) El proveedor paga la comisión:
+   - Opción A: transferencia → admin sube voucher y referencia, marca `paid`.
+   - Opción B: Payment Link de Stripe (recomendado) → webhook marca `paid` idempotentemente.
+
+### Endpoints (backend)
+
+- Proveedor/Cliente:
+  - `POST /appointments/:id/cash/collect` (auth) → confirma cobro efectivo; crea `payments (cash)` y `provider_commission_debts`.
+
+- Admin (protección `adminAuth` + `x-admin-secret`):
+  - `GET /admin/cash-commissions` (filtros: rango, status, provider).
+  - `POST /admin/cash-commissions/:id/upload-voucher` (PDF/JPG/PNG ≤5MB) → guarda en `/uploads/admin/cash/` y persiste URL.
+  - `POST /admin/cash-commissions/:id/mark-paid` ({ reference, notes }) → `pending|overdue`→`paid`.
+  - `POST /admin/cash-commissions/:id/cancel` (si corresponde).
+
+- Webhooks (opción Payment Link):
+  - Al cobrar la comisión por Stripe, localizar la deuda por `metadata.debt_id` y marcar `paid`; persistir `stripe_payment_intent_id` en `decision/notes`.
+
+### Frontend
+
+- Reserva/checkout: selector método de pago (Tarjeta/Efectivo). Si efectivo, no se abre Checkout.
+- Agenda proveedor: botón "Cobrar en efectivo" con modal de confirmación (monto final opcional). Tras confirmar, muestra "Comisión pendiente $X, vence DD/MM".
+- Admin Pagos: nueva sección "Comisiones Cash" con tabla (proveedor, cita, comisión, due_date, estado, acciones: subir voucher/mark paid, export CSV) y KPIs (pendiente, vencida, cobrada).
+
+### Emails y notificaciones
+
+- Al crear deuda: email al proveedor con monto y fecha límite.
+- Recordatorios: a `cash_commission_reminder_days` del vencimiento y al vencer.
+- Confirmación de pago de comisión: email de recibo de comisión.
+
+### Seguridad/antifraude
+
+- Límite de deudas por proveedor; bloqueo de nuevas reservas si `overdue` > N días.
+- Auditoría de acciones admin en `payment_event_logs`.
+- Idempotencia al marcar pagado (evitar doble registro).
+
+### Cron/operación
+
+- Tarea diaria: marcar `overdue`, enviar recordatorios, generar KPIs.
+
+### Fases de entrega
+
+1) Esquema + endpoints core (collect cash + crear deuda; admin listar/mark paid/upload voucher).
+2) UI (selector método de pago, botón "Cobrar en efectivo", sección Admin "Comisiones Cash").
+3) Recordatorios automáticos y Payment Links Stripe (opcional).
+4) Políticas de bloqueo y panel de KPIs.
 

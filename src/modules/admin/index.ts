@@ -178,6 +178,70 @@ export function setupAdminModule(app: Express) {
     }
   });
 
+  // Marcar devolución como pagada (transferencia realizada)
+  router.post('/refunds/:id/mark-paid', adminAuth, async (req: any, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { reference, notes } = (req.body || {}) as { reference?: string; notes?: string };
+      if (!Number.isFinite(id)) return res.status(400).json({ success: false, error: 'id invalido' });
+      const pool = DatabaseConnection.getPool();
+      const [[row]]: any = await pool.query('SELECT status, decision_notes FROM refund_requests WHERE id = ? LIMIT 1', [id]);
+      if (!row) return res.status(404).json({ success: false, error: 'refund_not_found' });
+      // Solo permitir marcar pagado si está aprobado
+      if (row.status !== 'approved') {
+        return res.status(400).json({ success: false, error: 'refund_not_approved' });
+      }
+      const mergedNotes: any = {};
+      try { if (row.decision_notes) Object.assign(mergedNotes, JSON.parse(row.decision_notes)); } catch {}
+      mergedNotes.reference = reference || mergedNotes.reference || null;
+      mergedNotes.notes = notes || mergedNotes.notes || null;
+      await pool.execute(
+        `UPDATE refund_requests SET status = 'refunded', decision_notes = ?, updated_at = NOW() WHERE id = ?`,
+        [JSON.stringify(mergedNotes), id]
+      );
+      return res.json({ success: true });
+    } catch (e) {
+      Logger.error('ADMIN_MODULE', 'Error mark refund paid', e as any);
+      return res.status(500).json({ success: false, error: 'mark_refund_paid_error' });
+    }
+  });
+
+  // Subir voucher de devolución
+  const refundVoucherStorage = multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      const dir = path.join('uploads', 'admin', 'refunds');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname);
+      cb(null, `refund-${req.params.id}-${Date.now()}-${Math.round(Math.random()*1e9)}${ext}`);
+    }
+  });
+  const uploadRefundVoucher = multer({ storage: refundVoucherStorage, limits: { fileSize: 5 * 1024 * 1024 } });
+
+  router.post('/refunds/:id/upload-voucher', adminAuth, uploadRefundVoucher.single('voucher'), async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const file = (req as any).file as Express.Multer.File | undefined;
+      if (!Number.isFinite(id)) return res.status(400).json({ success: false, error: 'id invalido' });
+      if (!file) return res.status(400).json({ success: false, error: 'Archivo requerido' });
+
+      const pool = DatabaseConnection.getPool();
+      const [[row]]: any = await pool.query('SELECT decision_notes FROM refund_requests WHERE id = ? LIMIT 1', [id]);
+      if (!row) return res.status(404).json({ success: false, error: 'refund_not_found' });
+      const url = `/uploads/admin/refunds/${file.filename}`;
+      let notes: any = {};
+      try { if (row.decision_notes) notes = JSON.parse(row.decision_notes); } catch {}
+      notes.voucher = url;
+      await pool.execute('UPDATE refund_requests SET decision_notes = ? WHERE id = ?', [JSON.stringify(notes), id]);
+      res.json({ success: true, url });
+    } catch (e) {
+      Logger.error('ADMIN_MODULE', 'Error upload refund voucher', e as any);
+      res.status(500).json({ success: false, error: 'upload_refund_voucher_error' });
+    }
+  });
+
   // Totales por rango
   router.get('/payments/summary', adminAuth, async (req, res) => {
     try {

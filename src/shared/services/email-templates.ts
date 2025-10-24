@@ -45,6 +45,18 @@ export interface RefundDecisionEmailData {
   brandLogoUrl?: string;
 }
 
+export interface RefundReceivedEmailData {
+  appName: string;
+  clientName?: string | null;
+  serviceName?: string | null;
+  appointmentId?: number | null;
+  originalAmount: number;
+  currency: string;
+  reviewDays?: number;
+  brandColorHex?: string;
+  brandLogoUrl?: string;
+}
+
 export function generateClientReceiptEmailHtml(data: ClientReceiptEmailData): string {
   const date = data.paymentDateISO ? new Date(data.paymentDateISO).toLocaleString() : '';
   const amountFormatted = `${data.currency.toUpperCase()} ${data.amount.toFixed(2)}`;
@@ -238,6 +250,52 @@ export function generateRefundDecisionEmailHtml(data: RefundDecisionEmailData): 
                   <td style="padding:8px 24px 24px">
                     <div style="border:1px solid #e5e7eb;border-radius:10px;padding:16px;color:#111;font-size:14px">
                       ${data.decision === 'approved' ? bodyApproved : bodyDenied}
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:16px 0;color:#a3a3a3;font-size:12px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif">${data.appName}</td>
+          </tr>
+        </table>
+      </td></tr>
+    </table>
+  </div>`;
+}
+
+export function generateRefundReceivedEmailHtml(data: RefundReceivedEmailData): string {
+  const brand = data.brandColorHex || '#635bff';
+  const logo = data.brandLogoUrl ? `<img src="${data.brandLogoUrl}" alt="${data.appName}" style="height:24px;display:block;margin:0 auto 16px" />` : '';
+  const amountFmt = `${data.currency.toUpperCase()} ${Number(data.originalAmount || 0).toFixed(2)}`;
+  const days = Number(data.reviewDays || 3);
+  return `
+  <div style="margin:0;padding:0;background:#0b0b0c">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#0b0b0c;padding:24px 12px">
+      <tr><td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="max-width:600px;width:100%">
+          <tr>
+            <td align="center" style="padding:16px 0;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;font-size:14px">
+              ${logo}
+              <div style="opacity:.9">${data.appName}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#fff;border-radius:12px;overflow:hidden">
+                <tr>
+                  <td style="padding:24px 24px 8px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;color:#111">
+                    <div style="font-size:18px;font-weight:600;margin:0 0 8px">Solicitud de devolución recibida</div>
+                    ${data.serviceName ? `<div style=\"color:#6b7280;font-size:12px\">Servicio: ${data.serviceName}${data.appointmentId ? ` – Cita #${data.appointmentId}` : ''}</div>` : ''}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 24px 24px">
+                    <div style="border:1px solid #e5e7eb;border-radius:10px;padding:16px;color:#111;font-size:14px">
+                      <p style="margin:0 0 12px;color:#374151">Estamos revisando tu caso. El monto pagado fue <strong>${amountFmt}</strong>.</p>
+                      <p style="margin:0 0 12px;color:#374151">Te enviaremos una respuesta dentro de <strong>${days} días hábiles</strong>.</p>
+                      <p style="margin:0;color:#6b7280;font-size:12px">Gracias por tu paciencia.</p>
                     </div>
                   </td>
                 </tr>
