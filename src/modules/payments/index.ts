@@ -6,6 +6,7 @@ import { Express } from 'express';
 import { buildAppointmentCheckoutRoutes } from './routes/appointment-checkout.routes';
 import { buildProviderFinancesRoutes } from './routes/provider-finances.routes';
 import { buildRefundRoutes } from './routes/refunds.routes';
+import { buildClientPaymentMethodsRoutes } from './routes/client-payment-methods.routes';
 import { setupPaymentsWebhooks } from './webhooks';
 
 export function setupPaymentsModule(app: Express) {
@@ -14,5 +15,6 @@ export function setupPaymentsModule(app: Express) {
   app.use('/', buildAppointmentCheckoutRoutes());
   app.use('/', buildProviderFinancesRoutes());
   app.use('/', buildRefundRoutes());
+  app.use('/', buildClientPaymentMethodsRoutes());
 }
 

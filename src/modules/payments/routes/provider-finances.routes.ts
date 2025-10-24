@@ -85,6 +85,66 @@ export function buildProviderFinancesRoutes(): Router {
     }
   });
 
+  // GET /provider/cash/summary
+  router.get('/provider/cash/summary', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const providerId = Number(user.id);
+      if (!providerId) return res.status(401).json({ success: false, error: 'No autorizado' });
+
+      const pool = DatabaseConnection.getPool();
+      const [[sum]]: any = await pool.query(
+        `SELECT 
+           COALESCE(SUM(CASE WHEN status IN ('pending','overdue') THEN commission_amount ELSE 0 END), 0) AS total_due,
+           COALESCE(SUM(CASE WHEN status = 'overdue' THEN commission_amount ELSE 0 END), 0) AS overdue_due
+         FROM provider_commission_debts
+         WHERE provider_id = ?
+           AND status IN ('pending','overdue')`,
+        [providerId]
+      );
+      return res.json({ success: true, summary: { total_due: Number(sum?.total_due || 0), overdue_due: Number(sum?.overdue_due || 0) } });
+    } catch (err) {
+      Logger.error(MODULE, 'Error getting cash summary', err as any);
+      return res.status(500).json({ success: false, error: 'Error al obtener resumen de efectivo' });
+    }
+  });
+
+  // GET /provider/cash/commissions?status=pending|overdue|paid&limit=100&offset=0
+  router.get('/provider/cash/commissions', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const providerId = Number(user.id);
+      if (!providerId) return res.status(401).json({ success: false, error: 'No autorizado' });
+      const status = String(req.query.status || '').trim();
+      const limit = Math.min(Number(req.query.limit || 100), 500);
+      const offset = Math.max(Number(req.query.offset || 0), 0);
+
+      const pool = DatabaseConnection.getPool();
+      const params: any[] = [providerId];
+      const where: string[] = ['d.provider_id = ?'];
+      if (status && ['pending','overdue','paid','cancelled'].includes(status)) {
+        where.push('d.status = ?'); params.push(status);
+      }
+      const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+      const [rows] = await pool.query(
+        `SELECT d.id, d.commission_amount, d.currency, d.status, d.due_date, d.settlement_reference, d.voucher_url,
+                a.id AS appointment_id, a.date, a.start_time, a.end_time,
+                (SELECT name FROM users WHERE id = a.client_id) AS client_name
+         FROM provider_commission_debts d
+         LEFT JOIN appointments a ON a.id = d.appointment_id
+         ${whereSql}
+         ORDER BY d.due_date ASC, d.id DESC
+         LIMIT ? OFFSET ?`,
+        [...params, limit, offset]
+      );
+      return res.json({ success: true, data: rows });
+    } catch (err) {
+      Logger.error(MODULE, 'Error listing cash commissions', err as any);
+      return res.status(500).json({ success: false, error: 'Error al listar comisiones cash' });
+    }
+  });
+
   return router;
 }
 
