@@ -108,11 +108,17 @@ export function setupAdminModule(app: Express) {
                rr.decided_by_admin_email, rr.decision_notes,
                a.date AS appointment_date, a.start_time, a.end_time,
                uc.email AS client_email, up.email AS provider_email,
-               s.name AS service_name
+               cp.phone AS client_phone,
+               s.name AS service_name,
+               p.payment_method, p.stripe_payment_intent_id,
+               COALESCE(rr.amount, p.amount) AS original_amount,
+               ROUND(COALESCE(rr.amount, p.amount) * 0.65, 2) AS refund_proposed_amount
         FROM refund_requests rr
         LEFT JOIN appointments a ON a.id = rr.appointment_id
         LEFT JOIN users uc ON uc.id = rr.client_id
         LEFT JOIN users up ON up.id = rr.provider_id
+        LEFT JOIN client_profiles cp ON cp.client_id = rr.client_id
+        LEFT JOIN payments p ON p.id = rr.payment_id
         LEFT JOIN provider_services s ON s.id = a.service_id
         ORDER BY rr.requested_at DESC, rr.id DESC
       `);
@@ -136,6 +142,35 @@ export function setupAdminModule(app: Express) {
         `UPDATE refund_requests SET status = ?, decided_at = NOW(), decided_by_admin_email = ?, decision_notes = ? WHERE id = ?`,
         [decision, req.user?.email || null, notes || null, id]
       );
+      // Enviar email al cliente
+      const [[row]]: any = await pool.query(
+        `SELECT rr.*, uc.email AS client_email, cp.full_name AS client_name, s.name AS service_name
+         FROM refund_requests rr
+         LEFT JOIN users uc ON uc.id = rr.client_id
+         LEFT JOIN client_profiles cp ON cp.client_id = rr.client_id
+         LEFT JOIN appointments a ON a.id = rr.appointment_id
+         LEFT JOIN provider_services s ON s.id = a.service_id
+         WHERE rr.id = ? LIMIT 1`,
+        [id]
+      );
+      if (row?.client_email) {
+        const refundAmount = decision === 'approved' ? Number((row.amount || 0) * 0.65) : undefined;
+        try {
+          await (require('../../shared/services/email.service') as typeof import('../../shared/services/email.service')).EmailService.sendRefundDecision(row.client_email, {
+            appName: process.env.APP_NAME || 'Adomi',
+            clientName: row.client_name || null,
+            serviceName: row.service_name || null,
+            appointmentId: row.appointment_id || null,
+            originalAmount: Number(row.amount || 0),
+            refundAmount,
+            currency: row.currency || 'CLP',
+            decision: decision === 'approved' ? 'approved' : 'denied',
+            decisionNotes: notes || null
+          } as any);
+        } catch (e) {
+          // No bloquear por error de email
+        }
+      }
       res.json({ success: true });
     } catch (e: any) {
       Logger.error('ADMIN_MODULE', 'Error deciding refund', e);

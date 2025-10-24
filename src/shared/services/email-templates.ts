@@ -31,6 +31,20 @@ export interface PasswordResetEmailData {
   brandLogoUrl?: string;
 }
 
+export interface RefundDecisionEmailData {
+  appName: string;
+  clientName?: string | null;
+  serviceName?: string | null;
+  appointmentId?: number | null;
+  originalAmount: number;
+  refundAmount?: number;
+  currency: string;
+  decision: 'approved' | 'denied';
+  decisionNotes?: string | null;
+  brandColorHex?: string;
+  brandLogoUrl?: string;
+}
+
 export function generateClientReceiptEmailHtml(data: ClientReceiptEmailData): string {
   const date = data.paymentDateISO ? new Date(data.paymentDateISO).toLocaleString() : '';
   const amountFormatted = `${data.currency.toUpperCase()} ${data.amount.toFixed(2)}`;
@@ -179,6 +193,62 @@ export function generatePasswordResetEmailHtml(data: PasswordResetEmailData): st
           </table>
         </td>
       </tr>
+    </table>
+  </div>`;
+}
+
+export function generateRefundDecisionEmailHtml(data: RefundDecisionEmailData): string {
+  const brand = data.brandColorHex || '#635bff';
+  const logo = data.brandLogoUrl ? `<img src="${data.brandLogoUrl}" alt="${data.appName}" style="height:24px;display:block;margin:0 auto 16px" />` : '';
+  const amountFmt = (n: number | undefined) => `${data.currency.toUpperCase()} ${(Number(n || 0)).toFixed(2)}`;
+  const title = data.decision === 'approved' ? 'Solicitud de devolución aprobada' : 'Solicitud de devolución denegada';
+  const bodyApproved = `
+    <p style="margin:0 0 12px;color:#374151">Hemos aprobado tu solicitud de devolución${data.appointmentId ? ` para la cita #${data.appointmentId}` : ''}.</p>
+    <p style="margin:0 0 12px;color:#374151">Monto pagado: <strong>${amountFmt(data.originalAmount)}</strong><br/>
+    Monto a devolver (según política): <strong>${amountFmt(data.refundAmount)}</strong></p>
+    <p style="margin:0 0 12px;color:#374151">Procesaremos el reembolso en un plazo de 3 días hábiles.</p>
+  `;
+  const bodyDenied = `
+    <p style="margin:0 0 12px;color:#374151">No podemos aprobar tu solicitud de devolución${data.appointmentId ? ` para la cita #${data.appointmentId}` : ''}.</p>
+    ${data.decisionNotes ? `<p style=\"margin:0 0 12px;color:#374151\">Motivo: ${data.decisionNotes}</p>` : ''}
+    <p style="margin:0;color:#374151">Si necesitas más información, contáctanos respondiendo este correo.</p>
+  `;
+
+  return `
+  <div style="margin:0;padding:0;background:#0b0b0c">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#0b0b0c;padding:24px 12px">
+      <tr><td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="max-width:600px;width:100%">
+          <tr>
+            <td align="center" style="padding:16px 0;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;font-size:14px">
+              ${logo}
+              <div style="opacity:.9">${data.appName}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#fff;border-radius:12px;overflow:hidden">
+                <tr>
+                  <td style="padding:24px 24px 8px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;color:#111">
+                    <div style="font-size:18px;font-weight:600;margin:0 0 8px">${title}</div>
+                    ${data.serviceName ? `<div style=\"color:#6b7280;font-size:12px\">Servicio: ${data.serviceName}</div>` : ''}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 24px 24px">
+                    <div style="border:1px solid #e5e7eb;border-radius:10px;padding:16px;color:#111;font-size:14px">
+                      ${data.decision === 'approved' ? bodyApproved : bodyDenied}
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:16px 0;color:#a3a3a3;font-size:12px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif">${data.appName}</td>
+          </tr>
+        </table>
+      </td></tr>
     </table>
   </div>`;
 }
