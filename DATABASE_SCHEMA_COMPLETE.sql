@@ -667,6 +667,7 @@ CREATE TABLE appointments (
   end_time TIME NOT NULL,
   status ENUM('pending', 'confirmed', 'rejected', 'cancelled', 'completed', 'no_show', 'in_progress') DEFAULT 'pending',
   price DECIMAL(10,2) NOT NULL,
+  tax_amount DECIMAL(10,2) NULL,
   commission_rate DECIMAL(5,2) DEFAULT 15.00,
   commission_amount DECIMAL(10,2),
   notes TEXT,
@@ -782,6 +783,7 @@ CREATE TABLE payments (
   client_id INT NOT NULL,
   provider_id INT NOT NULL,
   amount DECIMAL(10,2) NOT NULL,
+  tax_amount DECIMAL(10,2) NULL,
   commission_amount DECIMAL(10,2) NOT NULL,
   provider_amount DECIMAL(10,2) NOT NULL,
   currency VARCHAR(3) DEFAULT 'CLP',
@@ -790,6 +792,11 @@ CREATE TABLE payments (
   status ENUM('pending', 'completed', 'failed', 'refunded') DEFAULT 'pending',
   paid_at TIMESTAMP NULL,
   refunded_at TIMESTAMP NULL,
+  can_release BOOLEAN DEFAULT FALSE,
+  released_at TIMESTAMP NULL,
+  release_status ENUM('pending','eligible','completed','failed') DEFAULT 'pending',
+  release_transaction_id INT NULL,
+  release_notes TEXT NULL,
   refund_reason TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   
@@ -1314,6 +1321,9 @@ ON DUPLICATE KEY UPDATE name=VALUES(name);
 -- Configuración de la plataforma
 INSERT INTO platform_settings (setting_key, setting_value, setting_type, description) VALUES 
 ('default_commission_rate', '15.00', 'number', 'Tasa de comisión por defecto (%)'),
+('default_tax_rate', '19', 'number', 'IVA por defecto (%) para desglosar bruto/neto'),
+('payout_business_days', '3', 'number', 'Días hábiles para programar la liquidación (T+N)'),
+('stripe_release_days', '10', 'number', 'Días de retención antes de poder liberar fondos (Stripe)'),
 ('cancellation_hours', '24', 'number', 'Horas mínimas para cancelar sin penalización'),
 ('max_portfolio_items', '10', 'number', 'Máximo de items en el portafolio'),
 ('verification_review_time', '3', 'number', 'Días estimados para revisar verificación'),
@@ -1954,6 +1964,33 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
   KEY idx_password_reset_expires (expires_at),
   KEY idx_password_reset_used (used),
   CONSTRAINT fk_password_reset_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 1.2) Solicitudes de devolución (refunds)
+CREATE TABLE IF NOT EXISTS refund_requests (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  appointment_id INT NOT NULL,
+  payment_id INT NULL,
+  client_id INT NOT NULL,
+  provider_id INT NOT NULL,
+  amount DECIMAL(10,2) NULL,
+  currency VARCHAR(3) DEFAULT 'CLP',
+  reason TEXT NOT NULL,
+  status ENUM('requested','in_review','approved','denied','cancelled','refunded') NOT NULL DEFAULT 'requested',
+  requested_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  decided_at DATETIME(6) NULL,
+  decided_by_admin_email VARCHAR(191) NULL,
+  decision_notes TEXT NULL,
+  stripe_refund_id VARCHAR(255) NULL,
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  CONSTRAINT fk_refund_requests_appointment FOREIGN KEY (appointment_id) REFERENCES appointments(id) ON DELETE CASCADE,
+  CONSTRAINT fk_refund_requests_payment FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE SET NULL,
+  CONSTRAINT fk_refund_requests_client FOREIGN KEY (client_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_refund_requests_provider FOREIGN KEY (provider_id) REFERENCES users(id) ON DELETE CASCADE,
+  KEY idx_refund_requests_status (status),
+  KEY idx_refund_requests_requested_at (requested_at),
+  KEY idx_refund_requests_appointment (appointment_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 2) Auditoría de intentos de verificación de código (citas)

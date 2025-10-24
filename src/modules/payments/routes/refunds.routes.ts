@@ -40,7 +40,7 @@ export function buildRefundRoutes(): Router {
     }
   });
 
-  export default router;
+  return router;
 }
 
 
