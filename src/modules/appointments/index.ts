@@ -9,7 +9,8 @@ import { authenticateToken } from '../../shared/middleware/auth.middleware';
 import { Logger } from '../../shared/utils/logger.util';
 import { emitToUser } from '../../shared/realtime/socket';
 import { PushService } from '../notifications/services/push.service';
-import { validateCodeFormat, compareVerificationCodes, sanitizeCode } from '../../shared/utils/verification-code.util';
+import { validateCodeFormat, compareVerificationCodes, sanitizeCode, generateVerificationCode } from '../../shared/utils/verification-code.util';
+import { cashClosureGate } from '../../shared/middleware/cash-closure-gate';
 
 const MODULE = 'APPOINTMENTS';
 
@@ -469,7 +470,7 @@ function buildRouter(): Router {
   });
 
   // POST /appointments/:id/cash/collect - registrar cobro en efectivo
-  router.post('/appointments/:id/cash/collect', authenticateToken, async (req: Request, res: Response) => {
+  router.post('/appointments/:id/cash/collect', authenticateToken, cashClosureGate, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user || {};
       const appointmentId = Number(req.params.id);
@@ -488,6 +489,15 @@ function buildRouter(): Router {
       }
       const amount = Number(appt.price || 0);
       if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Precio inválido para la cita' });
+
+      // Tope de efectivo (cash_max_amount)
+      try {
+        const [[cap]]: any = await pool.query(`SELECT setting_value FROM platform_settings WHERE setting_key = 'cash_max_amount' LIMIT 1`);
+        const cashCap = cap ? Number(cap.setting_value) || 150000 : 150000;
+        if (amount > cashCap) {
+          return res.status(400).json({ success: false, error: `El pago en efectivo excede el tope permitido (${cashCap} CLP)` });
+        }
+      } catch {}
 
       // Evitar duplicados si ya existe payment completed
       const [[existing]]: any = await pool.query(
@@ -570,6 +580,294 @@ function buildRouter(): Router {
     } catch (err) {
       Logger.error(MODULE, 'Error registrando cobro en efectivo', err as any);
       return res.status(500).json({ success: false, error: 'Error al registrar efectivo' });
+    }
+  });
+
+  // POST /appointments/:id/cash/select - seleccionar efectivo y generar código
+  router.post('/appointments/:id/cash/select', authenticateToken, cashClosureGate, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const appointmentId = Number(req.params.id);
+      if (!Number.isFinite(appointmentId)) return res.status(400).json({ success: false, error: 'id inválido' });
+
+      const pool = DatabaseConnection.getPool();
+      const [[appt]]: any = await pool.query('SELECT * FROM appointments WHERE id = ? LIMIT 1', [appointmentId]);
+      if (!appt) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      if (Number(appt.client_id) !== Number(user.id) && Number(appt.provider_id) !== Number(user.id)) {
+        return res.status(403).json({ success: false, error: 'No autorizado' });
+      }
+
+      const amount = Number(appt.price || 0);
+      if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Precio inválido para la cita' });
+      // Tope cash
+      try {
+        const [[cap]]: any = await pool.query(`SELECT setting_value FROM platform_settings WHERE setting_key = 'cash_max_amount' LIMIT 1`);
+        const cashCap = cap ? Number(cap.setting_value) || 150000 : 150000;
+        if (amount > cashCap) {
+          return res.status(400).json({ success: false, error: `El pago en efectivo excede el tope permitido (${cashCap} CLP)` });
+        }
+      } catch {}
+
+      // Generar/asegurar código de verificación
+      let verificationCode = String(appt.verification_code || '').trim();
+      if (!verificationCode) {
+        verificationCode = generateVerificationCode();
+        try {
+          await pool.execute(
+            `UPDATE appointments SET verification_code = ?, code_generated_at = NOW(), payment_method = 'cash', updated_at = NOW() WHERE id = ?`,
+            [verificationCode, appointmentId]
+          );
+        } catch {}
+      } else {
+        // Asegurar payment_method
+        try { await pool.execute(`UPDATE appointments SET payment_method = 'cash', updated_at = NOW() WHERE id = ?`, [appointmentId]); } catch {}
+      }
+
+      return res.json({ success: true, code: verificationCode });
+    } catch (err) {
+      Logger.error(MODULE, 'Error en cash/select', err as any);
+      return res.status(500).json({ success: false, error: 'Error al seleccionar efectivo' });
+    }
+  });
+
+  // POST /appointments/:id/cash/verify-code - validar código para cierre/pago cash
+  router.post('/appointments/:id/cash/verify-code', authenticateToken, cashClosureGate, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const appointmentId = Number(req.params.id);
+      const { code } = req.body || {};
+      if (!Number.isFinite(appointmentId)) return res.status(400).json({ success: false, error: 'id inválido' });
+      if (!validateCodeFormat(String(code || ''))) return res.status(400).json({ success: false, error: 'Código inválido' });
+
+      const pool = DatabaseConnection.getPool();
+      const [[appt]]: any = await pool.query('SELECT * FROM appointments WHERE id = ? LIMIT 1', [appointmentId]);
+      if (!appt) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+
+      // Solo proveedor puede validar para registrar cobro
+      if (Number(appt.provider_id) !== Number(user.id)) {
+        return res.status(403).json({ success: false, error: 'Solo el proveedor puede validar el código' });
+      }
+
+      // Ventana de validación: desde inicio hasta fin + 90min (configurable posteriormente)
+      // Nota: aquí solo aplicamos verificación de código y tope cash
+      const stored = String(appt.verification_code || '').trim();
+      if (!stored || !compareVerificationCodes(String(code), stored)) {
+        return res.status(400).json({ success: false, error: 'Código incorrecto' });
+      }
+
+      // Tope cash
+      const amount = Number(appt.price || 0);
+      try {
+        const [[cap]]: any = await pool.query(`SELECT setting_value FROM platform_settings WHERE setting_key = 'cash_max_amount' LIMIT 1`);
+        const cashCap = cap ? Number(cap.setting_value) || 150000 : 150000;
+        if (amount > cashCap) {
+          return res.status(400).json({ success: false, error: `El pago en efectivo excede el tope permitido (${cashCap} CLP)` });
+        }
+      } catch {}
+
+      // Evitar duplicados si ya existe payment completed
+      const [[existing]]: any = await pool.query(
+        'SELECT id FROM payments WHERE appointment_id = ? AND status = "completed" LIMIT 1',
+        [appointmentId]
+      );
+      if (existing) return res.status(400).json({ success: false, error: 'El pago ya fue registrado' });
+
+      // Calcular impuestos/comisión
+      let taxRate = 19.0;
+      let commissionRate = 15.0;
+      let dueDays = 3;
+      try {
+        const [setRows]: any = await pool.query(
+          `SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN ('default_tax_rate','default_commission_rate','cash_commission_due_days')`
+        );
+        for (const r of setRows as any[]) {
+          if (r.setting_key === 'default_tax_rate') taxRate = Number(r.setting_value) || taxRate;
+          if (r.setting_key === 'default_commission_rate') commissionRate = Number(r.setting_value) || commissionRate;
+          if (r.setting_key === 'cash_commission_due_days') dueDays = Number(r.setting_value) || dueDays;
+        }
+      } catch {}
+
+      const priceBase = Number((amount / (1 + taxRate / 100)).toFixed(2));
+      const taxAmount = Number((amount - priceBase).toFixed(2));
+      const commissionAmount = Number((priceBase * (commissionRate / 100)).toFixed(2));
+      const providerAmount = Number((priceBase - commissionAmount).toFixed(2));
+
+      // Insert payment cash
+      const [ins]: any = await pool.execute(
+        `INSERT INTO payments (appointment_id, client_id, provider_id, amount, tax_amount, commission_amount, provider_amount, currency, payment_method, status, paid_at, can_release, release_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'CLP', 'cash', 'completed', NOW(), TRUE, 'eligible')`,
+        [appointmentId, appt.client_id, appt.provider_id, amount, taxAmount, commissionAmount, providerAmount]
+      );
+      const paymentId = ins.insertId;
+
+      // Deuda de comisión
+      try {
+        await pool.execute(
+          `INSERT INTO provider_commission_debts (provider_id, appointment_id, payment_id, commission_amount, currency, status, due_date, created_at)
+           VALUES (?, ?, ?, ?, 'CLP', 'pending', DATE_ADD(NOW(), INTERVAL ? DAY), NOW())`,
+          [appt.provider_id, appointmentId, paymentId, commissionAmount, dueDays]
+        );
+      } catch {}
+
+      // Marcar cash_verified_at y preparar cierre
+      try {
+        await pool.execute(
+          `UPDATE appointments SET cash_verified_at = NOW(), payment_method = 'cash', updated_at = NOW() WHERE id = ?`,
+          [appointmentId]
+        );
+      } catch {}
+
+      // Notificar
+      try {
+        await PushService.notifyUser(
+          Number(appt.client_id),
+          'Pago en efectivo verificado',
+          'El proveedor validó el código de tu cita y registró el pago en efectivo.',
+          { type: 'payment', appointment_id: String(appointmentId), method: 'cash' }
+        );
+      } catch {}
+
+      return res.json({ success: true, payment_id: paymentId });
+    } catch (err) {
+      Logger.error(MODULE, 'Error en cash/verify-code', err as any);
+      return res.status(500).json({ success: false, error: 'Error al verificar código de efectivo' });
+    }
+  });
+
+  // Helper: resolver cierre mutuo si hay suficiente información
+  async function resolveClosureIfPossible(appointmentId: number) {
+    const pool = DatabaseConnection.getPool();
+    const [[appt]]: any = await pool.query('SELECT * FROM appointments WHERE id = ? LIMIT 1', [appointmentId]);
+    if (!appt) return { resolved: false };
+
+    const providerAction = String(appt.closure_provider_action || 'none');
+    const clientAction = String(appt.closure_client_action || 'none');
+
+    // Si ya existe un payment completed, resolver
+    const [[existingPay]]: any = await pool.query('SELECT id FROM payments WHERE appointment_id = ? AND status = "completed" LIMIT 1', [appointmentId]);
+    if (existingPay) {
+      await pool.execute(`UPDATE appointments SET closure_state = 'resolved', updated_at = NOW() WHERE id = ?`, [appointmentId]);
+      return { resolved: true };
+    }
+
+    // Matriz parcial
+    if (providerAction === 'no_show' && clientAction === 'no_show') {
+      await pool.execute(`UPDATE appointments SET closure_state = 'resolved', updated_at = NOW() WHERE id = ?`, [appointmentId]);
+      return { resolved: true };
+    }
+
+    // Si el cliente dijo OK o no hay acciones pero queremos forzar comisión por defecto, crear payment+debt
+    if (clientAction === 'ok' || providerAction === 'code_entered') {
+      const amount = Number(appt.price || 0);
+      let taxRate = 19.0; let commissionRate = 15.0; let dueDays = 3;
+      try {
+        const [setRows]: any = await pool.query(
+          `SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN ('default_tax_rate','default_commission_rate','cash_commission_due_days','cash_max_amount')`
+        );
+        let cashCap = 150000;
+        for (const r of setRows as any[]) {
+          if (r.setting_key === 'default_tax_rate') taxRate = Number(r.setting_value) || taxRate;
+          if (r.setting_key === 'default_commission_rate') commissionRate = Number(r.setting_value) || commissionRate;
+          if (r.setting_key === 'cash_commission_due_days') dueDays = Number(r.setting_value) || dueDays;
+          if (r.setting_key === 'cash_max_amount') cashCap = Number(r.setting_value) || cashCap;
+        }
+        if (amount > cashCap) return { resolved: false };
+      } catch {}
+
+      const priceBase = Number((amount / (1 + taxRate / 100)).toFixed(2));
+      const taxAmount = Number((amount - priceBase).toFixed(2));
+      const commissionAmount = Number((priceBase * (commissionRate / 100)).toFixed(2));
+      const providerAmount = Number((priceBase - commissionAmount).toFixed(2));
+
+      const [ins]: any = await pool.execute(
+        `INSERT INTO payments (appointment_id, client_id, provider_id, amount, tax_amount, commission_amount, provider_amount, currency, payment_method, status, paid_at, can_release, release_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'CLP', 'cash', 'completed', NOW(), TRUE, 'eligible')`,
+        [appointmentId, appt.client_id, appt.provider_id, amount, taxAmount, commissionAmount, providerAmount]
+      );
+      const paymentId = ins.insertId;
+      try {
+        await pool.execute(
+          `INSERT INTO provider_commission_debts (provider_id, appointment_id, payment_id, commission_amount, currency, status, due_date, created_at)
+           VALUES (?, ?, ?, ?, 'CLP', 'pending', DATE_ADD(NOW(), INTERVAL ? DAY), NOW())`,
+          [appt.provider_id, appointmentId, paymentId, commissionAmount, dueDays]
+        );
+      } catch {}
+      await pool.execute(`UPDATE appointments SET closure_state = 'resolved', payment_method = 'cash', updated_at = NOW() WHERE id = ?`, [appointmentId]);
+      return { resolved: true, payment_id: paymentId };
+    }
+
+    return { resolved: false };
+  }
+
+  // POST /appointments/:id/closure/provider-action
+  router.post('/appointments/:id/closure/provider-action', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const appointmentId = Number(req.params.id);
+      const { action, notes } = req.body || {};
+      if (!Number.isFinite(appointmentId)) return res.status(400).json({ success: false, error: 'id inválido' });
+      if (!['no_show','issue','code_entered'].includes(String(action))) return res.status(400).json({ success: false, error: 'acción inválida' });
+
+      const pool = DatabaseConnection.getPool();
+      const [[appt]]: any = await pool.query('SELECT id, provider_id FROM appointments WHERE id = ? LIMIT 1', [appointmentId]);
+      if (!appt) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      if (Number(appt.provider_id) !== Number(user.id)) return res.status(403).json({ success: false, error: 'No autorizado' });
+
+      await pool.execute(
+        `UPDATE appointments SET closure_provider_action = ?, closure_notes = JSON_SET(COALESCE(closure_notes, JSON_OBJECT()), '$.provider_notes', ?) , updated_at = NOW() WHERE id = ?`,
+        [String(action), notes || null, appointmentId]
+      );
+
+      const result = await resolveClosureIfPossible(appointmentId);
+      return res.json({ success: true, resolved: result.resolved, payment_id: (result as any).payment_id || null });
+    } catch (err) {
+      Logger.error(MODULE, 'Error provider-action', err as any);
+      return res.status(500).json({ success: false, error: 'Error en provider-action' });
+    }
+  });
+
+  // POST /appointments/:id/closure/client-action
+  router.post('/appointments/:id/closure/client-action', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const appointmentId = Number(req.params.id);
+      const { action, notes } = req.body || {};
+      if (!Number.isFinite(appointmentId)) return res.status(400).json({ success: false, error: 'id inválido' });
+      if (!['ok','no_show','issue'].includes(String(action))) return res.status(400).json({ success: false, error: 'acción inválida' });
+
+      const pool = DatabaseConnection.getPool();
+      const [[appt]]: any = await pool.query('SELECT id, client_id FROM appointments WHERE id = ? LIMIT 1', [appointmentId]);
+      if (!appt) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      if (Number(appt.client_id) !== Number(user.id)) return res.status(403).json({ success: false, error: 'No autorizado' });
+
+      await pool.execute(
+        `UPDATE appointments SET closure_client_action = ?, closure_notes = JSON_SET(COALESCE(closure_notes, JSON_OBJECT()), '$.client_notes', ?) , updated_at = NOW() WHERE id = ?`,
+        [String(action), notes || null, appointmentId]
+      );
+
+      const result = await resolveClosureIfPossible(appointmentId);
+      return res.json({ success: true, resolved: result.resolved, payment_id: (result as any).payment_id || null });
+    } catch (err) {
+      Logger.error(MODULE, 'Error client-action', err as any);
+      return res.status(500).json({ success: false, error: 'Error en client-action' });
+    }
+  });
+
+  // GET /appointments/:id/closure - estado de cierre
+  router.get('/appointments/:id/closure', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const appointmentId = Number(req.params.id);
+      if (!Number.isFinite(appointmentId)) return res.status(400).json({ success: false, error: 'id inválido' });
+      const pool = DatabaseConnection.getPool();
+      const [[row]]: any = await pool.query(
+        `SELECT id, closure_state, closure_due_at, closure_provider_action, closure_client_action FROM appointments WHERE id = ? LIMIT 1`,
+        [appointmentId]
+      );
+      if (!row) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      return res.json({ success: true, closure: row });
+    } catch (err) {
+      Logger.error(MODULE, 'Error get closure', err as any);
+      return res.status(500).json({ success: false, error: 'Error al consultar cierre' });
     }
   });
 

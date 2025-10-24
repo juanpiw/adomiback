@@ -391,7 +391,7 @@ Objetivo: permitir que el cliente pague en efectivo al proveedor sin romper el e
   - `notes TEXT NULL`, `voucher_url VARCHAR(500) NULL`,
   - índices por (`provider_id`, `status`, `due_date`).
 - `platform_settings`:
-  - `cash_commission_due_days` (p.ej. 3), `cash_commission_reminder_days` (p.ej. 1), `default_tax_rate`, `default_commission_rate`.
+  - `cash_commission_due_days` (p.ej. 3), `cash_commission_reminder_days` (p.ej. 1), `default_tax_rate`, `default_commission_rate`, `cash_max_amount` (CLP; default 150000).
 - Opcional: `payment_event_logs` para auditoría de acciones (create/mark paid/overdue/email/cron).
 
 ### Flujo operativo
@@ -399,6 +399,7 @@ Objetivo: permitir que el cliente pague en efectivo al proveedor sin romper el e
 1) Reserva: el cliente elige "Tarjeta" o "Efectivo".
 2) Si "Efectivo": la cita se confirma sin Checkout.
 3) Al finalizar el servicio, el proveedor pulsa "Cobrar en efectivo" (Agenda):
+   - Validar tope: si `amount > cash_max_amount` (150.000 CLP por cita), rechazar flujo cash y sugerir tarjeta.
    - Backend crea `payments (cash)` con desglose de impuestos/comisión (comisión sobre base neta),
    - Crea `provider_commission_debts` con `due_date = NOW() + cash_commission_due_days`.
 4) Recordatorios automáticos previos al vencimiento; si vence → `overdue` y alertas admin.
@@ -409,7 +410,7 @@ Objetivo: permitir que el cliente pague en efectivo al proveedor sin romper el e
 ### Endpoints (backend)
 
 - Proveedor/Cliente:
-  - `POST /appointments/:id/cash/collect` (auth) → confirma cobro efectivo; crea `payments (cash)` y `provider_commission_debts`.
+  - `POST /appointments/:id/cash/collect` (auth) → confirma cobro efectivo; crea `payments (cash)` y `provider_commission_debts` (rechaza si `amount > cash_max_amount`).
 
 - Admin (protección `adminAuth` + `x-admin-secret`):
   - `GET /admin/cash-commissions` (filtros: rango, status, provider).
@@ -435,6 +436,7 @@ Objetivo: permitir que el cliente pague en efectivo al proveedor sin romper el e
 ### Seguridad/antifraude
 
 - Límite de deudas por proveedor; bloqueo de nuevas reservas si `overdue` > N días.
+- Tope de pago en efectivo: **CLP 150.000 por cita**. Montos superiores deben procesarse con tarjeta.
 - Auditoría de acciones admin en `payment_event_logs`.
 - Idempotencia al marcar pagado (evitar doble registro).
 
@@ -449,3 +451,89 @@ Objetivo: permitir que el cliente pague en efectivo al proveedor sin romper el e
 3) Recordatorios automáticos y Payment Links Stripe (opcional).
 4) Políticas de bloqueo y panel de KPIs.
 
+
+## Cierre Mutuo (anti-fraude) – Pagos en efectivo
+
+Objetivo: asegurar una “prueba de servicio” de baja fricción cuando el pago es en efectivo, reduciendo el riesgo de colusión o evasión de comisión. El “Cierre Mutuo” se activa automáticamente 1 hora después de finalizar la cita y requiere una acción del proveedor y del cliente; en su defecto, se aplica una resolución por defecto que favorece la integridad del sistema.
+
+### Estados y tiempos
+
+- Activación: t+1h desde fin de la cita → `closure_state = 'pending_close'` y `closure_due_at = end_time + 25h` (1h para activar + 24h para responder).
+- Desbloqueo: al resolverse, `closure_state = 'resolved'`.
+- Bloqueos de cash durante `pending_close` vencido:
+  - Proveedor: no puede aceptar nuevas reservas en efectivo si posee citas con `pending_close` vencidas.
+  - Cliente: no puede crear nuevas reservas en efectivo si posee citas con `pending_close` vencidas.
+
+### Campos (DB)
+
+Agregar a `appointments`:
+- `closure_state` ENUM('none','pending_close','resolved','in_review') DEFAULT 'none'
+- `closure_due_at` DATETIME NULL
+- `closure_provider_action` ENUM('none','code_entered','no_show','issue') DEFAULT 'none'
+- `closure_client_action` ENUM('none','ok','no_show','issue') DEFAULT 'none'
+- `closure_notes` JSON NULL
+- (opcional) `cash_verified_at` DATETIME NULL, cuando hay código válido
+
+Nota: mantener índices por (`closure_state`, `closure_due_at`).
+
+### Acciones y resultados (matriz)
+
+- Proveedor puede elegir: `code_entered` (ingresar código), `no_show`, `issue` (problema).
+- Cliente puede elegir: `ok` (todo bien), `no_show`, `issue`.
+
+Resolución automática tras 24h (o inmediata si hay código):
+- `code_entered` + (cualquiera): Registrar `payments (cash)` y `provider_commission_debts` (si no existen), marcar resuelto y desbloquear.
+- `no_show` (prov) + `no_show` (cli): No se cobra comisión; marcar resuelto y desbloquear.
+- `no_show` (prov) + `ok` (cli): Marcar comisión adeudada (fraude proveedor); registrar señal de riesgo y desbloquear.
+- (ninguna acción) + `ok` (cli): Marcar comisión adeudada por defecto; desbloquear.
+- (ninguna) + (ninguna) al vencer: Marcar comisión adeudada por defecto; desbloquear por “gatillo automático”.
+- Cualquier `issue`: mover a `in_review`, notificar admin; mantener bloqueo solo al actor que no respondió hasta resolución.
+
+Ventanas y límites:
+- Ventana de validación del código: desde `start_time` hasta `end_time + Xmin` (configurable) para reducir fraude de post-fechado.
+- Reintentos limitados y auditoría de intentos.
+
+### Endpoints (backend)
+
+- `POST /appointments/:id/cash/select` (auth) → marca método cash y genera/retorna código de verificación (si no existe).
+- `POST /appointments/:id/cash/verify-code` (auth) → valida código; si válido, crea `payments (cash)`, crea `provider_commission_debts (pending, due_date = NOW()+N)`, setea `cash_verified_at` y resuelve cierre. Rechaza si `amount > cash_max_amount`.
+- `POST /appointments/:id/closure/provider-action` (auth) { action: 'code_entered'|'no_show'|'issue', notes? }
+- `POST /appointments/:id/closure/client-action` (auth) { action: 'ok'|'no_show'|'issue', notes? }
+- `GET  /appointments/:id/closure` (auth) → estado de cierre (para UI).
+
+Middlewares de gateo (cash):
+- En crear/aceptar reservas con `payment_method='cash'` → bloquear si el usuario (cliente/proveedor) tiene `pending_close` vencidas.
+
+### Cron/operación
+
+- Job horario:
+  - Marca `pending_close` a citas cash 1h después del fin.
+  - Envía notificaciones (push/email) al activarse y 24h después como recordatorio.
+  - Aplica la resolución por defecto al exceder `closure_due_at` (gatillo automático), registra eventos y desbloquea.
+
+### Notificaciones
+
+- Activación (t+1h): “Tu cita quedó Pendiente de Cierre”. Acciones claras (Sí/No; Ingresar código / No-show / Problema).
+- Recordatorio (t+24h) y resultado (al resolver o por gatillo automático).
+
+### UI (resumen)
+
+- ProviderAgenda: badge “Pendiente de Cierre” + acciones: “Ingresar código”, “No-show”, “Problema”. Mostrar si hay bloqueo por cierres vencidos.
+- ClientReservas: banner “¿Se completó?” con botones “Sí, todo ok” / “No, tuve un problema” (+ opciones). Mostrar si hay bloqueo por cierres vencidos.
+
+### Seguridad/antifraude y auditoría
+
+- Contadores por usuario: “no_show desmentido”, “autocierre por inacción”, “issue frecuente”.
+- Tope de pago en efectivo: **CLP 150.000 por cita** (enforced en endpoints `cash/select`, `cash/verify-code`, `cash/collect` y validado en UI).
+- Registro de auditoría de acciones y reintentos de código.
+- Señales para panel admin y posibles sanciones graduales.
+
+### Checklist (Cierre Mutuo)
+
+- [ ] Migración: campos `closure_*` en `appointments` (+ índices)
+- [ ] Endpoints provider/client de cierre y `cash/select`/`cash/verify-code`
+- [ ] Gateo: bloquear cash si hay `pending_close` vencidas
+- [ ] Cron: activar cierre, recordatorios, gatillo automático
+- [ ] Notificaciones push/email (activación, recordatorio, resultado)
+- [ ] UI proveedor/cliente (badges, banners, botones de acción)
+- [ ] Señales de riesgo y vista en admin

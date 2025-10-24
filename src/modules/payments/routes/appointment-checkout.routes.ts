@@ -6,6 +6,7 @@ import Stripe from 'stripe';
 import { emitToUser } from '../../../shared/realtime/socket';
 import { PushService } from '../../notifications/services/push.service';
 import { generateVerificationCode } from '../../../shared/utils/verification-code.util';
+import { cashClosureGate } from '../../../shared/middleware/cash-closure-gate';
 
 const MODULE = 'PAYMENTS_APPOINTMENTS';
 
@@ -76,6 +77,11 @@ export function buildAppointmentCheckoutRoutes(): Router {
       Logger.error(MODULE, '🔴 [CHECKOUT] Error creating checkout session', err as any);
       return res.status(500).json({ success: false, error: 'Error al crear checkout' });
     }
+  });
+
+  // Gate para operaciones cash (ejemplo: seleccionar efectivo desde checkout si se usa)
+  router.post('/payments/appointments/:id/cash/select', authenticateToken, cashClosureGate, async (req: Request, res: Response) => {
+    return res.status(501).json({ success: false, error: 'use /appointments/:id/cash/select' });
   });
 
   // GET /payments/appointments/:id/status
