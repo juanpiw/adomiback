@@ -522,12 +522,19 @@ function buildRouter(): Router {
       );
       const paymentId = ins.insertId;
 
-      // Registrar deuda de comisión del proveedor (si existe la tabla)
+      // Registrar deuda de comisión del proveedor (si existe la tabla) con due_date (T + cash_commission_due_days)
       try {
+        let dueDays = 3;
+        try {
+          const [[cfg]]: any = await pool.query(
+            `SELECT setting_value FROM platform_settings WHERE setting_key = 'cash_commission_due_days' LIMIT 1`
+          );
+          if (cfg) dueDays = Number(cfg.setting_value) || dueDays;
+        } catch {}
         await pool.execute(
-          `INSERT INTO provider_commission_debts (provider_id, appointment_id, payment_id, commission_amount, currency, status, created_at)
-           VALUES (?, ?, ?, ?, 'CLP', 'pending', NOW())`,
-          [appt.provider_id, appointmentId, paymentId, commissionAmount]
+          `INSERT INTO provider_commission_debts (provider_id, appointment_id, payment_id, commission_amount, currency, status, due_date, created_at)
+           VALUES (?, ?, ?, ?, 'CLP', 'pending', DATE_ADD(NOW(), INTERVAL ? DAY), NOW())`,
+          [appt.provider_id, appointmentId, paymentId, commissionAmount, dueDays]
         );
       } catch (e) {
         Logger.warn(MODULE, 'No se pudo registrar deuda de comisión (tabla puede no existir aún)');
