@@ -23,11 +23,20 @@ export function buildClientPaymentMethodsRoutes(): Router {
          ORDER BY is_default DESC, id DESC`,
         [clientId]
       );
-      const [[prefRow]]: any = await pool.query(
-        `SELECT payment_method_pref FROM client_profiles WHERE client_id = ? LIMIT 1`,
-        [clientId]
-      );
-      return res.json({ success: true, data: { cards: rows, preference: prefRow?.payment_method_pref || null } });
+      // Guardar preferencia si la columna existe; si no, devolver null
+      let preference: string | null = null;
+      try {
+        const [colRows]: any = await pool.query(`SHOW COLUMNS FROM client_profiles LIKE 'payment_method_pref'`);
+        const hasCol = (colRows as any[]).length > 0;
+        if (hasCol) {
+          const [[prefRow]]: any = await pool.query(
+            `SELECT payment_method_pref FROM client_profiles WHERE client_id = ? LIMIT 1`,
+            [clientId]
+          );
+          preference = prefRow?.payment_method_pref || null;
+        }
+      } catch {}
+      return res.json({ success: true, data: { cards: rows, preference } });
     } catch (err) {
       Logger.error(MODULE, 'Error listing client payment methods', err as any);
       return res.status(500).json({ success: false, error: 'Error al listar métodos de pago' });
@@ -49,14 +58,28 @@ export function buildClientPaymentMethodsRoutes(): Router {
         const [upd]: any = await pool.execute(`UPDATE payment_methods SET is_default = TRUE WHERE id = ? AND client_id = ?`, [id, clientId]);
         if (upd.affectedRows === 0) return res.status(404).json({ success: false, error: 'card_not_found' });
         // Preferencia global: card
-        await pool.execute(`UPDATE client_profiles SET payment_method_pref = 'card', updated_at = CURRENT_TIMESTAMP WHERE client_id = ?`, [clientId]);
+        try {
+          const [colRows]: any = await pool.query(`SHOW COLUMNS FROM client_profiles LIKE 'payment_method_pref'`);
+          const hasCol = (colRows as any[]).length > 0;
+          if (!hasCol) {
+            await pool.query(`ALTER TABLE client_profiles ADD COLUMN payment_method_pref ENUM('card','cash') NULL AFTER preferred_language`);
+          }
+          await pool.execute(`UPDATE client_profiles SET payment_method_pref = 'card', updated_at = CURRENT_TIMESTAMP WHERE client_id = ?`, [clientId]);
+        } catch {}
         return res.json({ success: true });
       } else {
         // Sin id => preferir efectivo
-        await pool.execute(
-          `UPDATE client_profiles SET payment_method_pref = 'cash', updated_at = CURRENT_TIMESTAMP WHERE client_id = ?`,
-          [clientId]
-        );
+        try {
+          const [colRows]: any = await pool.query(`SHOW COLUMNS FROM client_profiles LIKE 'payment_method_pref'`);
+          const hasCol = (colRows as any[]).length > 0;
+          if (!hasCol) {
+            await pool.query(`ALTER TABLE client_profiles ADD COLUMN payment_method_pref ENUM('card','cash') NULL AFTER preferred_language`);
+          }
+          await pool.execute(
+            `UPDATE client_profiles SET payment_method_pref = 'cash', updated_at = CURRENT_TIMESTAMP WHERE client_id = ?`,
+            [clientId]
+          );
+        } catch {}
         return res.json({ success: true });
       }
     } catch (err) {
