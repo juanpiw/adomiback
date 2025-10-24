@@ -110,6 +110,48 @@ export function buildClientPaymentMethodsRoutes(): Router {
     }
   });
 
+  // POST /client/payment-methods  -> Alta simple (placeholder sin Stripe)
+  router.post('/client/payment-methods', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const clientId = Number(user.id);
+      if (!clientId) return res.status(401).json({ success: false, error: 'No autorizado' });
+
+      const { cardNumber, expiryDate } = req.body || {};
+      if (!cardNumber || !expiryDate) {
+        return res.status(400).json({ success: false, error: 'cardNumber y expiryDate requeridos' });
+      }
+
+      const sanitized = String(cardNumber).replace(/\s+/g, '');
+      const last4 = sanitized.slice(-4) || '0000';
+      const brand = detectBrand(sanitized);
+      const expMonth = Number((String(expiryDate).split('/')[0] || '').padStart(2, '0')) || null;
+      const expYear = Number((String(expiryDate).split('/')[1] || '')) || null;
+      const pmId = `pm_local_${Date.now()}`;
+
+      const pool = DatabaseConnection.getPool();
+      const [ins]: any = await pool.execute(
+        `INSERT INTO payment_methods (client_id, stripe_payment_method_id, card_brand, card_last4, card_exp_month, card_exp_year, is_default, is_active, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, FALSE, TRUE, CURRENT_TIMESTAMP)`,
+        [clientId, pmId, brand, last4, expMonth, expYear]
+      );
+      Logger.info(MODULE, 'Card saved (placeholder)', { clientId, id: ins.insertId, brand, last4 });
+      return res.json({ success: true, id: ins.insertId });
+    } catch (err) {
+      Logger.error(MODULE, 'Error adding client payment method', err as any);
+      return res.status(500).json({ success: false, error: 'Error al guardar método de pago' });
+    }
+  });
+
+  function detectBrand(num: string): string {
+    try {
+      if (/^4\d{12,18}$/.test(num)) return 'visa';
+      if (/^(5[1-5]|2(2[2-9]|[3-6]\d|7[01]|720))\d{12,15}$/.test(num)) return 'mastercard';
+      if (/^3[47]\d{13}$/.test(num)) return 'amex';
+      return 'card';
+    } catch { return 'card'; }
+  }
+
   return router;
 }
 
