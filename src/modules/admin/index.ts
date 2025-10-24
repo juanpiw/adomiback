@@ -96,6 +96,51 @@ export function setupAdminModule(app: Express) {
     }
   });
 
+  // Listar solicitudes de devolución
+  router.get('/refunds', adminAuth, async (_req, res) => {
+    try {
+      const pool = DatabaseConnection.getPool();
+      const [rows] = await pool.query(`
+        SELECT rr.id, rr.appointment_id, rr.payment_id, rr.client_id, rr.provider_id,
+               rr.amount, rr.currency, rr.reason, rr.status, rr.requested_at, rr.decided_at,
+               rr.decided_by_admin_email, rr.decision_notes,
+               a.date AS appointment_date, a.start_time, a.end_time,
+               uc.email AS client_email, up.email AS provider_email,
+               s.name AS service_name
+        FROM refund_requests rr
+        LEFT JOIN appointments a ON a.id = rr.appointment_id
+        LEFT JOIN users uc ON uc.id = rr.client_id
+        LEFT JOIN users up ON up.id = rr.provider_id
+        LEFT JOIN provider_services s ON s.id = a.service_id
+        ORDER BY rr.requested_at DESC, rr.id DESC
+      `);
+      res.json({ success: true, data: rows });
+    } catch (e: any) {
+      Logger.error('ADMIN_MODULE', 'Error fetching refunds', e);
+      res.status(500).json({ success: false, error: 'refunds_query_error' });
+    }
+  });
+
+  // Resolver solicitud de devolución
+  router.post('/refunds/:id/decision', adminAuth, async (req: any, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { decision, notes } = (req.body || {}) as { decision?: 'approved'|'denied'|'cancelled'; notes?: string };
+      if (!Number.isFinite(id) || !decision || !['approved','denied','cancelled'].includes(decision)) {
+        return res.status(400).json({ success: false, error: 'parámetros inválidos' });
+      }
+      const pool = DatabaseConnection.getPool();
+      await pool.execute(
+        `UPDATE refund_requests SET status = ?, decided_at = NOW(), decided_by_admin_email = ?, decision_notes = ? WHERE id = ?`,
+        [decision, req.user?.email || null, notes || null, id]
+      );
+      res.json({ success: true });
+    } catch (e: any) {
+      Logger.error('ADMIN_MODULE', 'Error deciding refund', e);
+      res.status(500).json({ success: false, error: 'refund_decision_error' });
+    }
+  });
+
   // Totales por rango
   router.get('/payments/summary', adminAuth, async (req, res) => {
     try {

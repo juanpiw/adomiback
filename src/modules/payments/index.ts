@@ -5,6 +5,7 @@
 import { Express } from 'express';
 import { buildAppointmentCheckoutRoutes } from './routes/appointment-checkout.routes';
 import { buildProviderFinancesRoutes } from './routes/provider-finances.routes';
+import { buildRefundRoutes } from './routes/refunds.routes';
 import { setupPaymentsWebhooks } from './webhooks';
 
 export function setupPaymentsModule(app: Express) {
@@ -12,5 +13,6 @@ export function setupPaymentsModule(app: Express) {
   // Solo montar las rutas normales aquí
   app.use('/', buildAppointmentCheckoutRoutes());
   app.use('/', buildProviderFinancesRoutes());
+  app.use('/', buildRefundRoutes());
 }
 
