@@ -610,6 +610,27 @@ function buildRouter(): Router {
         }
       } catch {}
 
+      // Asegurar columnas requeridas (producción puede estar desfasada)
+      try {
+        const [cols]: any = await pool.query(
+          `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'appointments'
+             AND COLUMN_NAME IN ('verification_code','code_generated_at','payment_method')`
+        );
+        const have = new Set((cols as any[]).map((r: any) => String(r.COLUMN_NAME)));
+        if (!have.has('verification_code')) {
+          await pool.query(`ALTER TABLE appointments ADD COLUMN verification_code VARCHAR(8) NULL AFTER status`);
+        }
+        if (!have.has('code_generated_at')) {
+          await pool.query(`ALTER TABLE appointments ADD COLUMN code_generated_at DATETIME(6) NULL AFTER verification_code`);
+        }
+        if (!have.has('payment_method')) {
+          await pool.query(`ALTER TABLE appointments ADD COLUMN payment_method ENUM('card','cash') NULL AFTER status`);
+        }
+      } catch (e) {
+        Logger.warn(MODULE, 'No se pudieron asegurar columnas de verificación (puede existir ya)', e as any);
+      }
+
       // Generar/asegurar código de verificación
       let verificationCode = String(appt.verification_code || '').trim();
       if (!verificationCode) {
@@ -619,7 +640,10 @@ function buildRouter(): Router {
             `UPDATE appointments SET verification_code = ?, code_generated_at = NOW(), payment_method = 'cash', updated_at = NOW() WHERE id = ?`,
             [verificationCode, appointmentId]
           );
-        } catch {}
+        } catch (e) {
+          Logger.error(MODULE, 'Fallo al persistir verification_code', e as any);
+          return res.status(500).json({ success: false, error: 'No se pudo guardar el código de verificación. Intenta nuevamente.' });
+        }
       } else {
         // Asegurar payment_method
         try { await pool.execute(`UPDATE appointments SET payment_method = 'cash', updated_at = NOW() WHERE id = ?`, [appointmentId]); } catch {}
@@ -1251,7 +1275,28 @@ function buildRouter(): Router {
           AND pc.id IS NULL
         ORDER BY a.\`date\` ASC, a.\`start_time\` ASC`;
 
+      Logger.info(MODULE, '[PAID_AWAITING] Query flags', {
+        providerId: user.id,
+        hasVerificationCode,
+        hasPaymentMethodCol,
+        hasCashVerifiedAt,
+        verifFilter,
+        cashNotVerifiedFilter
+      });
+      Logger.info(MODULE, '[PAID_AWAITING] SQL', sql);
+
       const [rows] = await pool.query(sql, [user.id]);
+      try {
+        const sample = (rows as any[]).slice(0, 3).map(r => ({
+          id: r.id,
+          date: r.date,
+          start_time: r.start_time,
+          verification_code: r.verification_code,
+          payment_method: r.payment_method,
+          cash_verified_at: r.cash_verified_at
+        }));
+        Logger.info(MODULE, '[PAID_AWAITING] Result', { count: (rows as any[]).length, sample });
+      } catch {}
       
       Logger.info(MODULE, `✅ ${(rows as any[]).length} citas pagadas encontradas`);
       
