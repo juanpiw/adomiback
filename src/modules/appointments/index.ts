@@ -1204,6 +1204,7 @@ function buildRouter(): Router {
       // Verificar existencia de columnas para compatibilidad con DB antigua
       let hasVerificationCode = true;
       let hasPaymentMethodCol = true;
+      let hasCashVerifiedAt = true;
       try {
         const [col]: any = await pool.query(
           `SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'appointments' AND COLUMN_NAME = 'verification_code' LIMIT 1`
@@ -1216,26 +1217,38 @@ function buildRouter(): Router {
         );
         hasPaymentMethodCol = Array.isArray(col2) ? col2.length > 0 : !!col2;
       } catch {}
+      try {
+        const [col3]: any = await pool.query(
+          `SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'appointments' AND COLUMN_NAME = 'cash_verified_at' LIMIT 1`
+        );
+        hasCashVerifiedAt = Array.isArray(col3) ? col3.length > 0 : !!col3;
+      } catch {}
 
-      const verifFilter = hasVerificationCode ? 'AND a.verification_code IS NOT NULL' : (hasPaymentMethodCol ? `AND a.payment_method = 'cash'` : '');
+      // Citas candidatas: (tienen código no vacío) OR (marcadas como cash)
+      const verifParts: string[] = [];
+      if (hasVerificationCode) verifParts.push(`(a.verification_code IS NOT NULL AND a.verification_code <> '')`);
+      if (hasPaymentMethodCol) verifParts.push(`a.payment_method = 'cash'`);
+      const verifFilter = verifParts.length ? `AND (${verifParts.join(' OR ')})` : '';
+      const cashNotVerifiedFilter = hasCashVerifiedAt ? `AND a.cash_verified_at IS NULL` : '';
 
       const sql = `SELECT a.*, 
               (SELECT name FROM users WHERE id = a.client_id) AS client_name,
               (SELECT email FROM users WHERE id = a.client_id) AS client_email,
               (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
               'cash' AS payment_method,
-              p.id AS payment_id,
-              p.amount,
-              p.status AS payment_status,
-              p.paid_at,
-              p.can_release,
-              p.released_at
+              pc.id AS payment_id,
+              pc.amount,
+              pc.status AS payment_status,
+              pc.paid_at,
+              pc.can_release,
+              pc.released_at
         FROM appointments a
-        LEFT JOIN payments p ON p.appointment_id = a.id AND p.status = 'completed'
+        LEFT JOIN payments pc ON pc.appointment_id = a.id AND pc.status = 'completed'
         WHERE a.provider_id = ?
           AND a.status IN ('confirmed', 'scheduled', 'in_progress')
           ${verifFilter}
-          AND p.id IS NULL
+          ${cashNotVerifiedFilter}
+          AND pc.id IS NULL
         ORDER BY a.\`date\` ASC, a.\`start_time\` ASC`;
 
       const [rows] = await pool.query(sql, [user.id]);
