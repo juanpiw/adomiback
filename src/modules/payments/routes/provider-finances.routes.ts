@@ -34,7 +34,36 @@ export function buildProviderFinancesRoutes(): Router {
         params
       );
       const sum = (rows as any[])[0] || { gross_amount: 0, commission_amount: 0, provider_net: 0 };
-      return res.json({ success: true, summary: sum });
+
+      // Métrica adicional: citas pagadas en efectivo últimos 7 días
+      let cashPaidCount = 0;
+      try {
+        const [[cnt]]: any = await pool.query(
+          `SELECT COUNT(1) AS c
+           FROM payments
+           WHERE provider_id = ?
+             AND status IN ('completed','succeeded')
+             AND payment_method = 'cash'
+             AND paid_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)`,
+          [providerId]
+        );
+        cashPaidCount = Number(cnt?.c || 0);
+      } catch {}
+
+      // Métrica adicional: deuda de comisiones cash pendiente
+      let cashCommissionDebt = 0;
+      try {
+        const [[d]]: any = await pool.query(
+          `SELECT COALESCE(SUM(commission_amount),0) AS due
+           FROM provider_commission_debts
+           WHERE provider_id = ? AND status IN ('pending','overdue')`,
+          [providerId]
+        );
+        cashCommissionDebt = Number(d?.due || 0);
+      } catch {}
+
+      res.set('Cache-Control', 'no-store');
+      return res.json({ success: true, summary: { ...sum, cashPaidCount, cashCommissionDebt } });
     } catch (err) {
       Logger.error(MODULE, 'Error getting finances summary', err as any);
       return res.status(500).json({ success: false, error: 'Error al obtener resumen' });
