@@ -1201,16 +1201,23 @@ function buildRouter(): Router {
       
       const pool = DatabaseConnection.getPool();
       
-      // Verificar existencia de columna verification_code para compatibilidad con DB antigua
+      // Verificar existencia de columnas para compatibilidad con DB antigua
       let hasVerificationCode = true;
+      let hasPaymentMethodCol = true;
       try {
         const [col]: any = await pool.query(
           `SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'appointments' AND COLUMN_NAME = 'verification_code' LIMIT 1`
         );
         hasVerificationCode = Array.isArray(col) ? col.length > 0 : !!col;
       } catch {}
+      try {
+        const [col2]: any = await pool.query(
+          `SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'appointments' AND COLUMN_NAME = 'payment_method' LIMIT 1`
+        );
+        hasPaymentMethodCol = Array.isArray(col2) ? col2.length > 0 : !!col2;
+      } catch {}
 
-      const verifFilter = hasVerificationCode ? 'AND a.verification_code IS NOT NULL' : '';
+      const verifFilter = hasVerificationCode ? 'AND a.verification_code IS NOT NULL' : (hasPaymentMethodCol ? `AND a.payment_method = 'cash'` : '');
 
       const sql = `SELECT a.*, 
               (SELECT name FROM users WHERE id = a.client_id) AS client_name,
@@ -1226,7 +1233,7 @@ function buildRouter(): Router {
         FROM appointments a
         LEFT JOIN payments p ON p.appointment_id = a.id AND p.status = 'completed'
         WHERE a.provider_id = ?
-          AND a.status IN ('confirmed', 'scheduled')
+          AND a.status IN ('confirmed', 'scheduled', 'in_progress')
           ${verifFilter}
           AND p.id IS NULL
         ORDER BY a.\`date\` ASC, a.\`start_time\` ASC`;
