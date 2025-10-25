@@ -1269,7 +1269,7 @@ function buildRouter(): Router {
         FROM appointments a
         LEFT JOIN payments pc ON pc.appointment_id = a.id AND pc.status = 'completed'
         WHERE a.provider_id = ?
-          AND a.status IN ('confirmed', 'scheduled', 'in_progress')
+          AND a.status IN ('confirmed', 'scheduled', 'in_progress', 'completed')
           ${verifFilter}
           ${cashNotVerifiedFilter}
           AND pc.id IS NULL
