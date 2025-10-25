@@ -1271,6 +1271,7 @@ function buildRouter(): Router {
               pc.id AS payment_id,
               pc.amount,
               pc.status AS payment_status,
+              pc.payment_method AS payment_src_method,
               pc.paid_at,
               pc.can_release,
               pc.released_at
@@ -1281,7 +1282,14 @@ function buildRouter(): Router {
           ${verifFilter}
           ${cashNotVerifiedFilter}
           ${codeNotVerifiedFilter}
-          AND pc.id IS NULL
+          AND (
+            pc.id IS NULL
+            OR (
+              pc.payment_method = 'card'
+              AND (pc.release_status IS NULL OR pc.release_status <> 'released')
+              AND a.verified_at IS NULL
+            )
+          )
         ORDER BY a.\`date\` ASC, a.\`start_time\` ASC`;
 
       Logger.info(MODULE, '[PAID_AWAITING] Query flags', {
@@ -1304,6 +1312,7 @@ function buildRouter(): Router {
           start_time: r.start_time,
           verification_code: r.verification_code,
           payment_method: r.payment_method,
+          payment_src_method: (r as any).payment_src_method,
           cash_verified_at: r.cash_verified_at
         }));
         Logger.info(MODULE, '[PAID_AWAITING] Result', { count: (rows as any[]).length, sample });
