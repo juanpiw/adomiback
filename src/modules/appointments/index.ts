@@ -375,6 +375,7 @@ function buildRouter(): Router {
         `SELECT a.*, 
                 (SELECT name FROM users WHERE id = a.provider_id) AS provider_name,
                 (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
+                a.price,
                 (SELECT p.status FROM payments p WHERE p.appointment_id = a.id ORDER BY p.id DESC LIMIT 1) AS payment_status
          FROM appointments a
          WHERE a.client_id = ?
@@ -495,7 +496,7 @@ function buildRouter(): Router {
         const [[cap]]: any = await pool.query(`SELECT setting_value FROM platform_settings WHERE setting_key = 'cash_max_amount' LIMIT 1`);
         const cashCap = cap ? Number(cap.setting_value) || 150000 : 150000;
         if (amount > cashCap) {
-          return res.status(400).json({ success: false, error: `El pago en efectivo excede el tope permitido (${cashCap} CLP)` });
+          return res.status(400).json({ success: false, error: `Por el momento no podemos procesar pagos en efectivo de $${cashCap.toLocaleString('es-CL')} o más. Por favor, selecciona pago con tarjeta.` });
         }
       } catch {}
 
@@ -604,7 +605,7 @@ function buildRouter(): Router {
         const [[cap]]: any = await pool.query(`SELECT setting_value FROM platform_settings WHERE setting_key = 'cash_max_amount' LIMIT 1`);
         const cashCap = cap ? Number(cap.setting_value) || 150000 : 150000;
         if (amount > cashCap) {
-          return res.status(400).json({ success: false, error: `El pago en efectivo excede el tope permitido (${cashCap} CLP)` });
+          return res.status(400).json({ success: false, error: `Por el momento no podemos procesar pagos en efectivo de $${cashCap.toLocaleString('es-CL')} o más. Por favor, selecciona pago con tarjeta.` });
         }
       } catch {}
 
@@ -661,7 +662,7 @@ function buildRouter(): Router {
         const [[cap]]: any = await pool.query(`SELECT setting_value FROM platform_settings WHERE setting_key = 'cash_max_amount' LIMIT 1`);
         const cashCap = cap ? Number(cap.setting_value) || 150000 : 150000;
         if (amount > cashCap) {
-          return res.status(400).json({ success: false, error: `El pago en efectivo excede el tope permitido (${cashCap} CLP)` });
+          return res.status(400).json({ success: false, error: `Por el momento no podemos procesar pagos en efectivo de $${cashCap.toLocaleString('es-CL')} o más. Por favor, selecciona pago con tarjeta.` });
         }
       } catch {}
 
