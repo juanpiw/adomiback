@@ -1206,7 +1206,7 @@ function buildRouter(): Router {
                 (SELECT name FROM users WHERE id = a.client_id) AS client_name,
                 (SELECT email FROM users WHERE id = a.client_id) AS client_email,
                 (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
-                a.payment_method,
+                'cash' AS payment_method,
                 p.id AS payment_id,
                 p.amount, 
                 p.status AS payment_status, 
@@ -1214,11 +1214,11 @@ function buildRouter(): Router {
                 p.can_release,
                 p.released_at
          FROM appointments a
-         INNER JOIN payments p ON p.appointment_id = a.id
+         LEFT JOIN payments p ON p.appointment_id = a.id AND p.status = 'completed'
          WHERE a.provider_id = ? 
-           AND p.status = 'completed'
            AND a.status IN ('confirmed', 'scheduled', 'in_progress')
            AND a.verification_code IS NOT NULL
+           AND p.id IS NULL
          ORDER BY a.date ASC, a.start_time ASC`,
         [user.id]
       );
