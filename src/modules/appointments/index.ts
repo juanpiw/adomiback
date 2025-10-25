@@ -1201,27 +1201,37 @@ function buildRouter(): Router {
       
       const pool = DatabaseConnection.getPool();
       
-      const [rows] = await pool.query(
-        `SELECT a.*, 
-                (SELECT name FROM users WHERE id = a.client_id) AS client_name,
-                (SELECT email FROM users WHERE id = a.client_id) AS client_email,
-                (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
-                'cash' AS payment_method,
-                p.id AS payment_id,
-                p.amount, 
-                p.status AS payment_status, 
-                p.paid_at, 
-                p.can_release,
-                p.released_at
-         FROM appointments a
-         LEFT JOIN payments p ON p.appointment_id = a.id AND p.status = 'completed'
-         WHERE a.provider_id = ? 
-           AND a.status IN ('confirmed', 'scheduled', 'in_progress')
-           AND a.verification_code IS NOT NULL
-           AND p.id IS NULL
-         ORDER BY a.date ASC, a.start_time ASC`,
-        [user.id]
-      );
+      // Verificar existencia de columna verification_code para compatibilidad con DB antigua
+      let hasVerificationCode = true;
+      try {
+        const [col]: any = await pool.query(
+          `SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'appointments' AND COLUMN_NAME = 'verification_code' LIMIT 1`
+        );
+        hasVerificationCode = Array.isArray(col) ? col.length > 0 : !!col;
+      } catch {}
+
+      const verifFilter = hasVerificationCode ? 'AND a.verification_code IS NOT NULL' : '';
+
+      const sql = `SELECT a.*, 
+              (SELECT name FROM users WHERE id = a.client_id) AS client_name,
+              (SELECT email FROM users WHERE id = a.client_id) AS client_email,
+              (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
+              'cash' AS payment_method,
+              p.id AS payment_id,
+              p.amount,
+              p.status AS payment_status,
+              p.paid_at,
+              p.can_release,
+              p.released_at
+        FROM appointments a
+        LEFT JOIN payments p ON p.appointment_id = a.id AND p.status = 'completed'
+        WHERE a.provider_id = ?
+          AND a.status IN ('confirmed', 'scheduled')
+          ${verifFilter}
+          AND p.id IS NULL
+        ORDER BY a.\`date\` ASC, a.\`start_time\` ASC`;
+
+      const [rows] = await pool.query(sql, [user.id]);
       
       Logger.info(MODULE, `✅ ${(rows as any[]).length} citas pagadas encontradas`);
       
