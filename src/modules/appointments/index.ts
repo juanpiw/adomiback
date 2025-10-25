@@ -1229,6 +1229,7 @@ function buildRouter(): Router {
       let hasVerificationCode = true;
       let hasPaymentMethodCol = true;
       let hasCashVerifiedAt = true;
+      let hasVerifiedAt = true;
       try {
         const [col]: any = await pool.query(
           `SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'appointments' AND COLUMN_NAME = 'verification_code' LIMIT 1`
@@ -1247,6 +1248,12 @@ function buildRouter(): Router {
         );
         hasCashVerifiedAt = Array.isArray(col3) ? col3.length > 0 : !!col3;
       } catch {}
+      try {
+        const [col4]: any = await pool.query(
+          `SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'appointments' AND COLUMN_NAME = 'verified_at' LIMIT 1`
+        );
+        hasVerifiedAt = Array.isArray(col4) ? col4.length > 0 : !!col4;
+      } catch {}
 
       // Citas candidatas: (tienen código no vacío) OR (marcadas como cash)
       const verifParts: string[] = [];
@@ -1254,6 +1261,7 @@ function buildRouter(): Router {
       if (hasPaymentMethodCol) verifParts.push(`a.payment_method = 'cash'`);
       const verifFilter = verifParts.length ? `AND (${verifParts.join(' OR ')})` : '';
       const cashNotVerifiedFilter = hasCashVerifiedAt ? `AND a.cash_verified_at IS NULL` : '';
+      const codeNotVerifiedFilter = hasVerifiedAt ? `AND a.verified_at IS NULL` : '';
 
       const sql = `SELECT a.*, 
               (SELECT name FROM users WHERE id = a.client_id) AS client_name,
@@ -1272,6 +1280,7 @@ function buildRouter(): Router {
           AND a.status IN ('confirmed', 'scheduled', 'in_progress', 'completed')
           ${verifFilter}
           ${cashNotVerifiedFilter}
+          ${codeNotVerifiedFilter}
           AND pc.id IS NULL
         ORDER BY a.\`date\` ASC, a.\`start_time\` ASC`;
 
@@ -1280,8 +1289,10 @@ function buildRouter(): Router {
         hasVerificationCode,
         hasPaymentMethodCol,
         hasCashVerifiedAt,
+        hasVerifiedAt,
         verifFilter,
-        cashNotVerifiedFilter
+        cashNotVerifiedFilter,
+        codeNotVerifiedFilter
       });
       Logger.info(MODULE, '[PAID_AWAITING] SQL', sql);
 
