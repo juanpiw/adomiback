@@ -1267,9 +1267,7 @@ function buildRouter(): Router {
               (SELECT name FROM users WHERE id = a.client_id) AS client_name,
               (SELECT email FROM users WHERE id = a.client_id) AS client_email,
               (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
-              COALESCE(pc.payment_method, a.payment_method,
-                       CASE WHEN ${hasVerificationCode ? "(a.verification_code IS NOT NULL AND a.verification_code <> '')" : '0'} THEN 'cash' ELSE NULL END
-              ) AS payment_method,
+              COALESCE(pc.payment_method, a.payment_method) AS payment_method,
               pc.id AS payment_id,
               pc.amount,
               pc.status AS payment_status,
