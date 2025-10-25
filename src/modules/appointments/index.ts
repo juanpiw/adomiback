@@ -383,6 +383,7 @@ function buildRouter(): Router {
         [clientId]
       );
       Logger.info(MODULE, `Client appointments loaded: ${(rows as any[]).length} appointments`, { sample: (rows as any[])[0] });
+      console.log('[BACKEND] Sample appointment data:', (rows as any[])[0] ? { id: (rows as any[])[0].id, price: (rows as any[])[0].price, service_name: (rows as any[])[0].service_name } : 'No appointments');
       return res.json({ success: true, appointments: rows });
     } catch (err) {
       Logger.error(MODULE, 'Error listing client appointments', err as any);
@@ -1205,6 +1206,7 @@ function buildRouter(): Router {
                 (SELECT name FROM users WHERE id = a.client_id) AS client_name,
                 (SELECT email FROM users WHERE id = a.client_id) AS client_email,
                 (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
+                a.payment_method,
                 p.id AS payment_id,
                 p.amount, 
                 p.status AS payment_status, 
