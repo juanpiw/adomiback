@@ -16,26 +16,30 @@ export async function cashClosureGate(req: Request, res: Response, next: NextFun
     const pool = DatabaseConnection.getPool();
 
     // Verificar existencia de columnas para tolerar entornos desfasados
+    let hasClosureState = true;
+    let hasPaymentMethod = true;
     try {
-      const [cols]: any = await pool.query(`SHOW COLUMNS FROM appointments LIKE 'closure_state'`);
-      if ((cols as any[]).length === 0) {
-        Logger.warn(MODULE, 'closure_state column not found; skipping gate');
-        return next();
-      }
-    } catch (e) {
-      Logger.warn(MODULE, 'Error checking columns; skipping gate', e as any);
+      const [c1]: any = await pool.query(`SHOW COLUMNS FROM appointments LIKE 'closure_state'`);
+      hasClosureState = (c1 as any[]).length > 0;
+    } catch { hasClosureState = false; }
+    try {
+      const [c2]: any = await pool.query(`SHOW COLUMNS FROM appointments LIKE 'payment_method'`);
+      hasPaymentMethod = (c2 as any[]).length > 0;
+    } catch { hasPaymentMethod = false; }
+    if (!hasClosureState || !hasPaymentMethod) {
+      Logger.warn(MODULE, `Skipping gate (missing columns) closure_state=${hasClosureState} payment_method=${hasPaymentMethod}`);
       return next();
     }
 
     const [[row]]: any = await pool.query(
       `SELECT COUNT(1) AS cnt
-       FROM appointments
-       WHERE payment_method = 'cash'
-         AND closure_state = 'pending_close'
-         AND closure_due_at IS NOT NULL
-         AND closure_due_at < NOW()
-         AND (provider_id = ? OR client_id = ?)
-       LIMIT 1`,
+         FROM appointments
+        WHERE payment_method = 'cash'
+          AND closure_state = 'pending_close'
+          AND closure_due_at IS NOT NULL
+          AND closure_due_at < NOW()
+          AND (provider_id = ? OR client_id = ?)
+        LIMIT 1`,
       [user.id, user.id]
     );
 
