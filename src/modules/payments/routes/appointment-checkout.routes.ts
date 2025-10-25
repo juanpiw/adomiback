@@ -79,9 +79,50 @@ export function buildAppointmentCheckoutRoutes(): Router {
     }
   });
 
-  // Gate para operaciones cash (ejemplo: seleccionar efectivo desde checkout si se usa)
+  // Alias: seleccionar efectivo (para compatibilidad)
   router.post('/payments/appointments/:id/cash/select', authenticateToken, cashClosureGate, async (req: Request, res: Response) => {
-    return res.status(501).json({ success: false, error: 'use /appointments/:id/cash/select' });
+    try {
+      const user = (req as any).user || {};
+      const appointmentId = Number(req.params.id);
+      if (!Number.isFinite(appointmentId)) return res.status(400).json({ success: false, error: 'id inválido' });
+
+      const pool = DatabaseConnection.getPool();
+      const [[appt]]: any = await pool.query('SELECT * FROM appointments WHERE id = ? LIMIT 1', [appointmentId]);
+      if (!appt) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      if (Number(appt.client_id) !== Number(user.id) && Number(appt.provider_id) !== Number(user.id)) {
+        return res.status(403).json({ success: false, error: 'No autorizado' });
+      }
+
+      const amount = Number(appt.price || 0);
+      if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Precio inválido para la cita' });
+      // Tope cash
+      try {
+        const [[cap]]: any = await pool.query(`SELECT setting_value FROM platform_settings WHERE setting_key = 'cash_max_amount' LIMIT 1`);
+        const cashCap = cap ? Number(cap.setting_value) || 150000 : 150000;
+        if (amount > cashCap) {
+          return res.status(400).json({ success: false, error: `El pago en efectivo excede el tope permitido (${cashCap} CLP)` });
+        }
+      } catch {}
+
+      // Generar/asegurar código de verificación y marcar método cash
+      let verificationCode = String(appt.verification_code || '').trim();
+      if (!verificationCode) {
+        verificationCode = generateVerificationCode();
+        try {
+          await pool.execute(
+            `UPDATE appointments SET verification_code = ?, code_generated_at = NOW(), payment_method = 'cash', updated_at = NOW() WHERE id = ?`,
+            [verificationCode, appointmentId]
+          );
+        } catch {}
+      } else {
+        try { await pool.execute(`UPDATE appointments SET payment_method = 'cash', updated_at = NOW() WHERE id = ?`, [appointmentId]); } catch {}
+      }
+
+      return res.json({ success: true, code: verificationCode });
+    } catch (e: any) {
+      Logger.error(MODULE, 'cash/select alias error', e);
+      return res.status(500).json({ success: false, error: 'Error al seleccionar efectivo' });
+    }
   });
 
   // GET /payments/appointments/:id/status
