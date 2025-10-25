@@ -452,6 +452,163 @@ Objetivo: permitir que el cliente pague en efectivo al proveedor sin romper el e
 4) Políticas de bloqueo y panel de KPIs.
 
 
+## Guía SQL (producción): verificación y aplicación incremental
+
+Objetivo: ejecutar cambios de BD de forma segura e incremental en producción. Los bloques son idempotentes si se usan las consultas de verificación previas. Ejecutar de a poco (copiar/pegar por bloque) y avanzar solo si la verificación retorna vacío.
+
+### A) Appointments – columnas de verificación
+
+- Verificar campos actuales:
+
+```sql
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='appointments' AND COLUMN_NAME='payment_method';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='appointments' AND COLUMN_NAME='verification_code';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='appointments' AND COLUMN_NAME='code_generated_at';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='appointments' AND COLUMN_NAME='verification_attempts';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='appointments' AND COLUMN_NAME='verified_at';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='appointments' AND COLUMN_NAME='verified_by_provider_id';
+```
+
+- Agregar los que falten (ejecutar solo el/los que no existan):
+
+```sql
+ALTER TABLE appointments ADD COLUMN payment_method ENUM('card','cash') NULL AFTER status;
+ALTER TABLE appointments ADD COLUMN verification_code VARCHAR(10) NULL AFTER payment_method;
+ALTER TABLE appointments ADD COLUMN code_generated_at DATETIME(6) NULL AFTER verification_code;
+ALTER TABLE appointments ADD COLUMN verification_attempts INT NOT NULL DEFAULT 0 AFTER code_generated_at;
+ALTER TABLE appointments ADD COLUMN verified_at DATETIME(6) NULL AFTER verification_attempts;
+ALTER TABLE appointments ADD COLUMN verified_by_provider_id INT NULL AFTER verified_at;
+```
+
+### B) Appointments – Cierre Mutuo
+
+- Verificar campos actuales:
+
+```sql
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='appointments' AND COLUMN_NAME='closure_state';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='appointments' AND COLUMN_NAME='closure_due_at';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='appointments' AND COLUMN_NAME='closure_provider_action';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='appointments' AND COLUMN_NAME='closure_client_action';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='appointments' AND COLUMN_NAME='closure_notes';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='appointments' AND COLUMN_NAME='cash_verified_at';
+```
+
+- Agregar los que falten:
+
+```sql
+ALTER TABLE appointments ADD COLUMN closure_state ENUM('none','pending_close','resolved','in_review') NOT NULL DEFAULT 'none' AFTER status;
+ALTER TABLE appointments ADD COLUMN closure_due_at DATETIME(6) NULL AFTER closure_state;
+ALTER TABLE appointments ADD COLUMN closure_provider_action ENUM('none','code_entered','no_show','issue') NOT NULL DEFAULT 'none' AFTER closure_due_at;
+ALTER TABLE appointments ADD COLUMN closure_client_action ENUM('none','ok','no_show','issue') NOT NULL DEFAULT 'none' AFTER closure_provider_action;
+ALTER TABLE appointments ADD COLUMN closure_notes JSON NULL AFTER closure_client_action;
+ALTER TABLE appointments ADD COLUMN cash_verified_at DATETIME(6) NULL AFTER closure_notes;
+```
+
+### C) Appointments – índices de cierre
+
+- Verificar:
+
+```sql
+SHOW INDEX FROM appointments WHERE Key_name='idx_appointments_closure_state';
+SHOW INDEX FROM appointments WHERE Key_name='idx_appointments_closure_due_at';
+```
+
+- Crear si faltan:
+
+```sql
+ALTER TABLE appointments ADD INDEX idx_appointments_closure_state (closure_state);
+ALTER TABLE appointments ADD INDEX idx_appointments_closure_due_at (closure_due_at);
+```
+
+Nota: algunos servidores no soportan `CREATE INDEX IF NOT EXISTS`; por eso usamos `SHOW INDEX` + `ALTER TABLE` manual.
+
+### D) provider_commission_debts – asegurar tabla/columnas
+
+- Verificar existencia:
+
+```sql
+SHOW TABLES LIKE 'provider_commission_debts';
+```
+
+- Crear si no existe (warning 1050 si ya existe = OK ignorar):
+
+```sql
+CREATE TABLE IF NOT EXISTS provider_commission_debts (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  provider_id INT NOT NULL,
+  appointment_id INT NOT NULL,
+  payment_id INT NULL,
+  commission_amount DECIMAL(10,2) NOT NULL,
+  currency VARCHAR(3) NOT NULL DEFAULT 'CLP',
+  status ENUM('pending','paid','overdue','cancelled') NOT NULL DEFAULT 'pending',
+  due_date DATETIME(6) NOT NULL,
+  settled_at DATETIME(6) NULL,
+  settlement_reference VARCHAR(255) NULL,
+  voucher_url VARCHAR(500) NULL,
+  notes TEXT NULL,
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  KEY idx_pcd_provider_status (provider_id, status),
+  KEY idx_pcd_due_date (due_date),
+  CONSTRAINT fk_pcd_provider FOREIGN KEY (provider_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_pcd_appointment FOREIGN KEY (appointment_id) REFERENCES appointments(id) ON DELETE CASCADE,
+  CONSTRAINT fk_pcd_payment FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+- Asegurar columnas nuevas si la tabla era antigua:
+
+```sql
+SHOW COLUMNS FROM provider_commission_debts LIKE 'due_date';
+SHOW COLUMNS FROM provider_commission_debts LIKE 'voucher_url';
+
+-- Si falta alguna, añadir:
+ALTER TABLE provider_commission_debts ADD COLUMN due_date DATETIME(6) NOT NULL AFTER status;
+ALTER TABLE provider_commission_debts ADD COLUMN voucher_url VARCHAR(500) NULL AFTER settlement_reference;
+```
+
+### E) platform_settings – semillas requeridas (incluye tope efectivo 150.000 CLP)
+
+- Verificar:
+
+```sql
+SELECT setting_key, setting_value FROM platform_settings
+WHERE setting_key IN (
+  'default_tax_rate','default_commission_rate','cash_commission_due_days','cash_commission_reminder_days','cash_max_amount'
+);
+```
+
+- Insertar faltantes (solo los que no existan):
+
+```sql
+INSERT INTO platform_settings (setting_key, setting_value, setting_type, description)
+VALUES ('default_tax_rate','19','number','IVA por defecto (%)');
+
+INSERT INTO platform_settings (setting_key, setting_value, setting_type, description)
+VALUES ('default_commission_rate','15','number','Comisión plataforma sobre precio neto (%)');
+
+INSERT INTO platform_settings (setting_key, setting_value, setting_type, description)
+VALUES ('cash_commission_due_days','3','number','Días para pagar comisión por cobro en efectivo');
+
+INSERT INTO platform_settings (setting_key, setting_value, setting_type, description)
+VALUES ('cash_commission_reminder_days','1','number','Recordatorio antes del vencimiento de comisión cash');
+
+INSERT INTO platform_settings (setting_key, setting_value, setting_type, description)
+VALUES ('cash_max_amount','150000','number','Tope máximo por cita para pagos en efectivo (CLP)');
+```
+
 ## Cierre Mutuo (anti-fraude) – Pagos en efectivo
 
 Objetivo: asegurar una “prueba de servicio” de baja fricción cuando el pago es en efectivo, reduciendo el riesgo de colusión o evasión de comisión. El “Cierre Mutuo” se activa automáticamente 1 hora después de finalizar la cita y requiere una acción del proveedor y del cliente; en su defecto, se aplica una resolución por defecto que favorece la integridad del sistema.

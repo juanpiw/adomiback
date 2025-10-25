@@ -107,6 +107,13 @@ export function createApp(): Express {
   setupPromotionsModule(app);
   setupNotificationsModule(app);
   setupAdminModule(app);
+  // Cron de Cierre Mutuo (cash)
+  try {
+    const { setupClosureCron } = require('./modules/appointments/closure-cron');
+    setupClosureCron();
+  } catch (e) {
+    Logger.warn('APP', 'Closure cron not started', e as any);
+  }
   
   Logger.info('APP', 'All modules loaded successfully');
 
