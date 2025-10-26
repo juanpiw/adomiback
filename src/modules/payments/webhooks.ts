@@ -160,6 +160,7 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
         break;
       case 'payment_intent.succeeded':
         Logger.info(MODULE, '🔔 [WEBHOOK] payment_intent.succeeded', { paymentIntentId: (event.data.object as any).id });
+        await handleProviderDebtChargeSucceeded(event.data.object as any as Stripe.PaymentIntent);
         break;
       default:
         Logger.info(MODULE, `🔔 [WEBHOOK] Unhandled event type: ${event.type}`);
@@ -425,6 +426,38 @@ async function handleAccountUpdated(account: StripeNamespace.Account) {
     Logger.info(MODULE, 'Account updated synced to users', { acctId, payoutsEnabled });
   } catch (err) {
     Logger.error(MODULE, 'Error syncing account.updated', err as any);
+  }
+}
+
+async function handleProviderDebtChargeSucceeded(pi: Stripe.PaymentIntent) {
+  const pool = DatabaseConnection.getPool();
+  try {
+    const meta: any = (pi as any).metadata || {};
+    if (meta.type !== 'commission_debt' || !meta.debt_id) return;
+    const debtId = Number(meta.debt_id);
+    const amount = Number(pi.amount_received || pi.amount || 0);
+    // Obtener charge id de forma segura (expandir si es necesario)
+    let chargeId: string | null = null;
+    try {
+      const stripeClient = new Stripe(process.env.STRIPE_SECRET_KEY as string);
+      const piFull: any = await stripeClient.paymentIntents.retrieve(pi.id, { expand: ['latest_charge', 'charges.data'] } as any);
+      if (typeof piFull.latest_charge === 'string') chargeId = piFull.latest_charge;
+      else if (piFull.latest_charge?.id) chargeId = String(piFull.latest_charge.id);
+      else if (piFull.charges?.data?.[0]?.id) chargeId = String(piFull.charges.data[0].id);
+    } catch {}
+    // Insert settlement and update debt
+    await pool.execute(
+      `INSERT INTO provider_commission_settlements (debt_id, provider_id, settled_amount, method, stripe_payment_intent_id, stripe_charge_id)
+       VALUES (?, ?, ?, 'card', ?, ?)`,
+      [debtId, Number(meta.provider_id || 0), amount, pi.id, chargeId]
+    );
+    await pool.execute(
+      `UPDATE provider_commission_debts SET settled_amount = LEAST(commission_amount, settled_amount + ?), status = CASE WHEN settled_amount + ? >= commission_amount THEN 'paid' ELSE status END, last_attempt_at = NOW(), attempt_count = attempt_count + 1
+       WHERE id = ?`,
+      [amount, amount, debtId]
+    );
+  } catch (err) {
+    Logger.error(MODULE, 'Error handling provider debt charge succeeded', err as any);
   }
 }
 

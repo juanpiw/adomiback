@@ -34,20 +34,9 @@ export function setupAdminModule(app: Express) {
   // Ejecutar ciclo de cobro de comisiones cash (card fallback)
   router.post('/cash-commissions/run-collection', adminAuth, async (_req, res) => {
     try {
-      const pool = DatabaseConnection.getPool();
-      // Seleccionar deudas pendientes/atrasadas y perfiles de billing
-      const [debts]: any = await pool.query(
-        `SELECT d.id, d.provider_id, d.commission_amount, d.settled_amount, d.currency,
-                pbp.stripe_customer_id, pbp.default_payment_method_id
-         FROM provider_commission_debts d
-         LEFT JOIN provider_billing_profiles pbp ON pbp.provider_id = d.provider_id
-         WHERE d.status IN ('pending','overdue')`);
-      let queued = 0;
-      for (const d of debts as any[]) {
-        // Placeholder: aquí solo reportamos elegibles; la ejecución del cobro se implementará en el servicio de pagos
-        if (Number(d.commission_amount) > Number(d.settled_amount || 0)) queued += 1;
-      }
-      return res.json({ success: true, queued });
+      const { runCommissionCollectionCycle } = require('../payments/services/commission-collection.service');
+      const result = await runCommissionCollectionCycle();
+      return res.json({ success: true, result });
     } catch (e: any) {
       Logger.error('ADMIN_MODULE', 'Error running cash commission collection', e);
       return res.status(500).json({ success: false, error: 'run_collection_error' });
