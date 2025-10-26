@@ -10,6 +10,8 @@ import providerPortfolioRoutes from './routes/provider-portfolio.routes';
 import providerLocationsRoutes from './routes/provider-locations.routes';
 import providerAvailabilityRoutes from './routes/provider-availability.routes';
 import providerUploadRoutes from './routes/provider-upload.routes';
+import providerStripeConnectRoutes from './routes/provider-stripe-connect.routes';
+import providerBillingRoutes from './routes/provider-billing.routes';
 
 /**
  * Setup function to mount provider routes
@@ -40,5 +42,21 @@ export function setupProviderModule(app: Express) {
   // Rutas de upload de archivos
   app.use('/', providerUploadRoutes);
   console.log('[PROVIDER MODULE] Provider upload routes mounted');
+
+  // Rutas de Stripe Connect (onboarding, dashboard)
+  try {
+    app.use('/', providerStripeConnectRoutes);
+    console.log('[PROVIDER MODULE] Provider Stripe Connect routes mounted');
+  } catch (e) {
+    console.warn('[PROVIDER MODULE] Stripe Connect routes not mounted', e);
+  }
+
+  // Rutas de billing del proveedor (setup intent, deudas)
+  try {
+    app.use('/', providerBillingRoutes);
+    console.log('[PROVIDER MODULE] Provider billing routes mounted');
+  } catch (e) {
+    console.warn('[PROVIDER MODULE] Provider billing routes not mounted', e);
+  }
 }
 

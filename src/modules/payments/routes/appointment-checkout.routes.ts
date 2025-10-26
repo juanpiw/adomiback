@@ -43,6 +43,28 @@ export function buildAppointmentCheckoutRoutes(): Router {
       const unitAmount = ZERO_DECIMAL.has(currency) ? Math.round(checkoutAmount) : Math.round(checkoutAmount * 100);
 
       Logger.info(MODULE, `🧭 [CHECKOUT] Creando sesión Stripe... amount=${amount}, currency=${currency}, client_id=${appt.client_id}, provider_id=${appt.provider_id}`);
+
+      // Feature flag Connect + verificación de proveedor
+      let useConnect = false;
+      let providerAcct: string | null = null;
+      let commissionRate = 15.0;
+      try {
+        const [[u]]: any = await pool.query('SELECT stripe_account_id, stripe_payouts_enabled FROM users WHERE id = ? LIMIT 1', [appt.provider_id]);
+        if (u && u.stripe_account_id && (u.stripe_payouts_enabled === 1 || u.stripe_payouts_enabled === true)) {
+          providerAcct = String(u.stripe_account_id);
+        }
+        const [[cfg]]: any = await pool.query('SELECT setting_value FROM platform_settings WHERE setting_key = "stripe_connect_enabled" LIMIT 1');
+        const globalEnabled = (process.env.STRIPE_CONNECT_ENABLED || '').toLowerCase() === 'true' || (cfg ? String(cfg.setting_value).toLowerCase() === 'true' : false);
+        useConnect = !!(globalEnabled && providerAcct);
+      } catch {}
+      try {
+        const [[rate]]: any = await pool.query('SELECT setting_value FROM platform_settings WHERE setting_key = "stripe_connect_fee_percent" LIMIT 1');
+        if (rate) commissionRate = Number(rate.setting_value) || commissionRate;
+      } catch {}
+
+      // Calcular comisión base (CLP entero)
+      const applicationFeeAmount = useConnect ? Math.max(0, Math.round(checkoutAmount * (commissionRate / 100))) : 0;
+
       const session = await stripe.checkout.sessions.create({
         mode: 'payment',
         line_items: [{
@@ -61,9 +83,16 @@ export function buildAppointmentCheckoutRoutes(): Router {
         metadata: {
           appointmentId: String(appt.id),
           clientId: String(appt.client_id),
-          providerId: String(appt.provider_id)
-        }
-      });
+          providerId: String(appt.provider_id),
+          marketplace_model: useConnect ? 'connect' : 'mor'
+        },
+        ...(useConnect && providerAcct ? {
+          payment_intent_data: {
+            application_fee_amount: applicationFeeAmount,
+            transfer_data: { destination: providerAcct }
+          } as any
+        } : {})
+      } as any);
 
       Logger.info(MODULE, `🧭 [CHECKOUT] Sesión creada OK: id=${session.id}`);
       await pool.execute(

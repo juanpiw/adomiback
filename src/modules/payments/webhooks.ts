@@ -105,6 +105,10 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
 
     Logger.info(MODULE, '🔔 [WEBHOOK] Dispatching handler', { type: event.type });
     switch (event.type) {
+      case 'account.updated':
+        Logger.info(MODULE, '🔔 [WEBHOOK] account.updated', { accountId: (event.data.object as any).id });
+        await handleAccountUpdated(event.data.object as any as Stripe.Account);
+        break;
       case 'checkout.session.completed':
         Logger.info(MODULE, '🔔 [WEBHOOK] checkout.session.completed recibido');
         await handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session);
@@ -238,6 +242,22 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
       return;
     }
 
+    // Detect model from metadata (connect vs mor)
+    const marketplaceModel = String((session.metadata as any)?.marketplace_model || 'mor');
+    let destinationAccountId: string | null = null;
+    let applicationFeeId: string | null = null;
+    let transferId: string | null = null;
+    let chargeId: string | null = null;
+    try {
+      const pi: any = paymentIntentId ? await (new Stripe(process.env.STRIPE_SECRET_KEY as string)).paymentIntents.retrieve(paymentIntentId, { expand: ['latest_charge', 'transfer_data.destination', 'charges.data.balance_transaction'] }) : null;
+      chargeId = typeof pi?.latest_charge === 'object' ? pi.latest_charge?.id || null : null;
+      // Nota: application_fee_id y transfer pueden requerir expand diferente segun modo
+      applicationFeeId = (pi?.application_fee_amount && pi?.charges?.data?.[0]?.application_fee) ? String(pi.charges.data[0].application_fee) : null;
+      // destination account: en checkout con transfer_data, se refleja en transfer o en pi.transfer_data.destination
+      destinationAccountId = pi?.transfer_data?.destination || null;
+      transferId = typeof pi?.transfer === 'string' ? pi.transfer : null;
+    } catch {}
+
     // Commission over net base (amount without VAT if configured)
     let commissionRate = 15.0;
     let vatPercent = 0.0;
@@ -255,9 +275,9 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
     const providerAmount = Number((amount - commissionAmount).toFixed(2));
 
     await pool.execute(
-      `INSERT INTO payments (appointment_id, client_id, provider_id, amount, tax_amount, commission_amount, provider_amount, currency, payment_method, stripe_payment_intent_id, status, paid_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'CLP', 'card', ?, 'completed', CURRENT_TIMESTAMP)`,
-      [appointmentId, clientId, providerId, amount, taxAmount, commissionAmount, providerAmount, paymentIntentId || null]
+      `INSERT INTO payments (appointment_id, client_id, provider_id, amount, tax_amount, commission_amount, provider_amount, currency, payment_method, stripe_payment_intent_id, status, paid_at, marketplace_model, stripe_destination_account_id, stripe_application_fee_id, stripe_transfer_id, stripe_charge_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'CLP', 'card', ?, 'completed', CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)`,
+      [appointmentId, clientId, providerId, amount, taxAmount, commissionAmount, providerAmount, paymentIntentId || null, marketplaceModel, destinationAccountId, applicationFeeId, transferId, chargeId]
     );
 
     Logger.info(MODULE, '💰 [HANDLE_COMPLETED] Payment recorded', { appointmentId, amount, clientId, providerId });
@@ -384,6 +404,27 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
     }
   } catch (err) {
     Logger.error(MODULE, 'Error handling checkout.session.completed', err as any);
+  }
+}
+
+async function handleAccountUpdated(account: StripeNamespace.Account) {
+  const pool = DatabaseConnection.getPool();
+  try {
+    const acctId = account.id;
+    const payoutsEnabled = !!account.payouts_enabled;
+    const requirements = (account as any).requirements || null;
+    // Encontrar usuario por stripe_account_id
+    await pool.execute(
+      `UPDATE users 
+       SET stripe_payouts_enabled = ?, 
+           stripe_onboarding_status = ?, 
+           stripe_requirements = JSON_OBJECT('currently_due', JSON_ARRAY(), 'event_time', NOW())
+       WHERE stripe_account_id = ?`,
+      [payoutsEnabled ? 1 : 0, payoutsEnabled ? 'completed' : 'requirements_due', acctId]
+    );
+    Logger.info(MODULE, 'Account updated synced to users', { acctId, payoutsEnabled });
+  } catch (err) {
+    Logger.error(MODULE, 'Error syncing account.updated', err as any);
   }
 }
 

@@ -452,6 +452,183 @@ Objetivo: permitir que el cliente pague en efectivo al proveedor sin romper el e
 4) Políticas de bloqueo y panel de KPIs.
 
 
+## Cambio de modelo a Intermediario (Stripe Connect) – Análisis y Plan de Migración
+## Cambio de modelo a Intermediario (Stripe Connect) – Análisis y Plan de Migración
+## Cambio de modelo a Intermediario (Stripe Connect) – Análisis y Plan de Migración
+## Cambio de modelo a Intermediario (Stripe Connect) – Análisis y Plan de Migración
+## Cambio de modelo a Intermediario (Stripe Connect) – Análisis y Plan de Migración
+
+Objetivo: migrar de un modelo Merchant of Record (MoR) –donde Adomi cobra el total al cliente y luego liquida al proveedor– a un modelo de plataforma de intermediación (Marketplace) usando Stripe Connect, donde Stripe divide el pago en el cobro, acreditando el neto al proveedor y la comisión a Adomi.
+
+### Resumen conceptual y efectos legales/contables (Chile)
+
+- **Quién vende al cliente**: el Proveedor. Debe emitir boleta/factura al Cliente por el servicio prestado.
+- **Qué vende Adomi**: un servicio de intermediación/comisión al Proveedor. Adomi emite factura por la comisión (con IVA 19%).
+- **Base imponible**: el IVA de Adomi aplica solo sobre la comisión de la plataforma, no sobre el total del servicio.
+- **Conciliación**: la comisión se recibe como `application_fee` en la cuenta de Adomi; el neto del servicio va a la cuenta conectada del Proveedor.
+- **Efectivo (cash)**: no cambia; sigue siendo una venta directa proveedor↔cliente y la comisión se cobra a posteriori (deuda de comisión). No usa Connect.
+
+Referencias: Ley 21.210 (IVA a servicios digitales); validar con contador local detalle de emisión de documentos tributarios (boleta del proveedor vs boleta por el total).
+
+### Arquitectura técnica (Stripe Connect)
+
+- **Tipo de cuenta Connect**: recomendado `Express` para mejor UX (Stripe gestiona KYC, payouts, dashboard básico). Alternativas: `Standard` (más autonomía del proveedor) o `Custom` (más control, más compliance).
+- **Flujo de cobro**: usar Checkout Session con `payment_intent_data.application_fee_amount` y `payment_intent_data.transfer_data.destination = <acct_xxx del proveedor>` (destination charges). CLP es moneda de cero decimales.
+- **Onboarding**: crear cuentas conectadas al registrarse como proveedor y generar `Account Links` para completar KYC; almacenar `stripe_account_id` y el estado/capabilities.
+- **Webhooks**: además de webhooks de plataforma, escuchar eventos Connect (p.ej., `account.updated`, `charge.succeeded`/`payment_intent.succeeded` en cuentas conectadas, `payout.paid/failed`).
+- **Reembolsos/disputas**: al reembolsar, Stripe puede revertir automáticamente la transferencia al proveedor (transfer reversal) y ajustar la comisión (`refund_application_fee`).
+
+### Cambios de modelo de datos (DB)
+
+- `users`/`provider_profiles`:
+  - `stripe_account_id VARCHAR(255)`
+  - `stripe_account_type ENUM('standard','express','custom') DEFAULT 'express'`
+  - `stripe_onboarding_status ENUM('none','pending','requirements_due','completed','restricted')`
+  - `stripe_payouts_enabled BOOLEAN`
+  - `stripe_requirements JSON` (snapshot opcional de requirements)
+- `payments` (extender):
+  - `stripe_destination_account_id VARCHAR(255)` (acct del proveedor)
+  - `stripe_application_fee_id VARCHAR(255)`
+  - `stripe_transfer_id VARCHAR(255)`
+  - `stripe_charge_id VARCHAR(255)`
+  - `marketplace_model ENUM('mor','connect') DEFAULT 'mor'`
+- `provider_payouts`/`wallet_balance`:
+  - Mantener para reportes históricos; en Connect, los payouts los hace Stripe al proveedor.
+
+### Cambios backend (APIs/servicios)
+
+- **Onboarding de proveedores**
+  - POST `/providers/:id/stripe/connect/create` → crea cuenta (Express), guarda `stripe_account_id`.
+  - POST `/providers/:id/stripe/connect/onboarding-link` → retorna `account_link.url` (refresh/return URLs).
+  - GET `/providers/:id/stripe/connect/dashboard` → genera login link a dashboard Stripe Express.
+  - Webhook `account.updated` → actualizar `payouts_enabled`, `requirements`.
+
+- **Checkout de citas (Connect)**
+  - POST `/payments/appointments/:id/checkout-session`:
+    - Si `CONNECT_ENABLED && provider.stripe_account_id` → crear Checkout con:
+      - `payment_intent_data: { application_fee_amount, transfer_data: { destination: acct_xxx } }`.
+      - `metadata` igual que hoy.
+    - Si no, fallback al flujo actual (MoR) para compatibilidad.
+  - Webhook `checkout.session.completed` (Connect):
+    - Registrar `payments` con `marketplace_model='connect'`, guardar `stripe_destination_account_id`, `application_fee_id`, `transfer_id`, `charge_id` (expandir `payment_intent.latest_charge` si es posible).
+
+- **Reembolsos**
+  - POST `/admin/payments/:id/refund`:
+    - Si `marketplace_model='connect'` usar Refund sobre `payment_intent/charge` con `reverse_transfer=true` y `refund_application_fee=true` según política.
+
+- **Webhooks adicionales**
+  - `payout.paid/failed` (cuentas conectadas) para mostrar estado de pagos a proveedores en UI.
+  - `charge.dispute.*` en Connect para alertas.
+
+### Cambios frontend
+
+- **Onboarding proveedor**: wizard para conectar cuenta (botón “Configurar cobros” → abre `account_link.url`), mostrar estado `payouts_enabled`, alertas de requirements.
+- **Checkout cliente**: sin cambios visibles; sigue redirección a Stripe Checkout. Tras éxito, confirmar como hoy.
+- **Dashboard proveedor**: sustituir “wallet interno” por “payouts de Stripe”; mostrar enlaces a dashboard de Stripe Express y estado de pagos.
+
+### Operación y contabilidad
+
+- **Documentos tributarios**:
+  - Proveedor → boleta/factura al cliente por el servicio.
+  - Adomi → factura al proveedor por la comisión (+ IVA).
+- **Conciliación**:
+  - Ingreso de Adomi = suma de `application_fee` netos.
+  - Reportes: pagos por Connect (comisión) + cash (deudas de comisión) en un tablero unificado.
+- **Políticas de reembolso**: definir si la comisión se devuelve o no; configurar `refund_application_fee` acorde.
+
+### Pagos en efectivo (cash) en modelo Intermediario
+
+- Se mantienen exactamente como hoy: registro `payments (cash)` y `provider_commission_debts`.
+- No usan Connect. La comisión se cobra aparte (transferencia o Payment Link). Integrar estado de deudas en reportes unificados.
+
+### Plan de migración por fases
+
+1) Preparación (Compliance/KYC)
+   - Validar con contador el esquema documental (boleta proveedor, factura comisión).
+   - Activar Stripe Connect en el Dashboard; configurar `Express` y URLs (return/refresh).
+   - Añadir variables de entorno: `STRIPE_CONNECT_ENABLED`, `STRIPE_CONNECT_FEE_PERCENT`, `STRIPE_CONNECT_ONBOARD_RETURN_URL`, `STRIPE_CONNECT_ONBOARD_REFRESH_URL`.
+
+2) Esquema de datos y webhooks
+   - Migraciones: campos en `users/provider_profiles` y `payments` descritos arriba.
+   - Endpoints de onboarding y dashboard Link.
+   - Webhook `account.updated` y ajustar handler de `checkout.session.completed` para Connect.
+
+3) Onboarding piloto (proveedores seleccionados)
+   - UI para conectar cuenta (Express) y mostrar estado.
+   - Feature flag: en Checkout, si el proveedor tiene `stripe_account_id` y `payouts_enabled`, usar Connect; si no, usar MoR.
+
+4) Doble operación controlada
+   - Monitorear pagos Connect vs MoR, conciliación de `application_fee` vs reportes.
+   - Ajustar emails: incluir leyendas de facturación (quién emite cuál documento).
+
+5) Cutover por defecto a Connect
+   - Nuevos proveedores: obligatorio Connect.
+   - Existentes: campaña para completar onboarding; fecha límite para migración.
+
+6) Desacople de wallet interno
+   - Para pagos Connect, marcar `release_status` como no aplicable; no mover saldos internos.
+   - Mantener wallet para histórico MoR y para cash únicamente.
+
+7) Reembolsos y disputas
+   - Implementar refund con `reverse_transfer` y política de comisión.
+   - Manejar `charge.dispute.*` en Connect y alertas.
+
+8) Contabilidad y documentos
+   - Flujos de emisión: proveedor→cliente; Adomi→proveedor.
+   - Exportaciones y asientos contables basados en `application_fee` y `provider_commission_debts`.
+
+### Cambios SQL sugeridos (idempotentes)
+
+```sql
+-- users / provider_profiles
+ALTER TABLE users ADD COLUMN stripe_account_id VARCHAR(255) NULL;
+ALTER TABLE users ADD COLUMN stripe_account_type ENUM('standard','express','custom') NULL DEFAULT 'express';
+ALTER TABLE users ADD COLUMN stripe_onboarding_status ENUM('none','pending','requirements_due','completed','restricted') NULL DEFAULT 'none';
+ALTER TABLE users ADD COLUMN stripe_payouts_enabled TINYINT(1) NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN stripe_requirements JSON NULL;
+
+-- payments
+ALTER TABLE payments ADD COLUMN stripe_destination_account_id VARCHAR(255) NULL AFTER stripe_payment_intent_id;
+ALTER TABLE payments ADD COLUMN stripe_application_fee_id VARCHAR(255) NULL AFTER stripe_destination_account_id;
+ALTER TABLE payments ADD COLUMN stripe_transfer_id VARCHAR(255) NULL AFTER stripe_application_fee_id;
+ALTER TABLE payments ADD COLUMN stripe_charge_id VARCHAR(255) NULL AFTER stripe_transfer_id;
+ALTER TABLE payments ADD COLUMN marketplace_model ENUM('mor','connect') NOT NULL DEFAULT 'mor' AFTER payment_method;
+
+-- índices útiles
+CREATE INDEX idx_payments_destination ON payments (stripe_destination_account_id);
+CREATE INDEX idx_payments_marketplace_model ON payments (marketplace_model);
+```
+
+### Variables de entorno nuevas
+
+- `STRIPE_CONNECT_ENABLED=true`
+- `STRIPE_CONNECT_FEE_PERCENT=15`
+- `STRIPE_CONNECT_ONBOARD_RETURN_URL=https://app.adomiapp.cl/dash/ingresos`
+- `STRIPE_CONNECT_ONBOARD_REFRESH_URL=https://app.adomiapp.cl/dash/ingresos/onboarding-retry`
+- `STRIPE_WEBHOOK_SECRET_CONNECT` (si se separa endpoint específico para Connect)
+
+### Riesgos y mitigaciones
+
+- **Disponibilidad de Connect/payouts para CLP/Chile**: validar con Stripe cobertura actual de payouts al país de los proveedores. Mitigación: pagar en USD u otra moneda soportada, o `Standard` con cuentas ya existentes soportadas.
+- **Onboarding fricción**: proveedores que no completan KYC. Mitigación: guías, recordatorios, soporte.
+- **Reembolsos y disputas**: definir política de comisión en reembolsos; aplicar `refund_application_fee` acorde.
+- **Convivencia con cash**: mantener limitaciones y controles antifraude de efectivo; reportes unificados.
+- **Corte progresivo**: feature flags y rollback a MoR por proveedor si hay incidencias.
+
+### Checklist de implementación (Connect)
+
+- [ ] Migraciones DB (users/payments)
+- [ ] Endpoints: crear cuenta, onboarding link, dashboard link
+- [ ] Modificar Checkout para `application_fee_amount` + `transfer_data.destination`
+- [ ] Webhooks: `account.updated`, `checkout.session.completed` (Connect), `payout.*`, `charge.dispute.*`
+- [ ] Refunds Connect con `reverse_transfer` según política
+- [ ] UI proveedor: estado de Connect, botón de onboarding y acceso a dashboard
+- [ ] Reportes: comisiones (application_fee) y cash unificados
+- [ ] Documentos tributarios: plantillas/flujo para boleta proveedor y factura comisión
+- [ ] Feature flag y plan de cutover
+
+
+
 ## Guía SQL (producción): verificación y aplicación incremental
 
 Objetivo: ejecutar cambios de BD de forma segura e incremental en producción. Los bloques son idempotentes si se usan las consultas de verificación previas. Ejecutar de a poco (copiar/pegar por bloque) y avanzar solo si la verificación retorna vacío.
