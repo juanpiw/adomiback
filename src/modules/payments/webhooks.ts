@@ -117,6 +117,17 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
             const [[u]]: any = await pool.query('SELECT id, role, pending_role FROM users WHERE stripe_customer_id = ? LIMIT 1', [customer]);
             if (u && String(u.pending_role) === 'provider') {
               await pool.execute("UPDATE users SET role = 'provider', pending_role = NULL, pending_plan_id = NULL, pending_started_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [u.id]);
+              // Crear provider_profiles si no existe y copiar avatar de client_profiles si está disponible
+              try {
+                const [[cp]]: any = await pool.query('SELECT profile_photo_url FROM client_profiles WHERE client_id = ? LIMIT 1', [u.id]);
+                const avatar = cp?.profile_photo_url || null;
+                await pool.execute(
+                  `INSERT INTO provider_profiles (provider_id, full_name, profile_completion, profile_photo_url)
+                   VALUES (?, (SELECT name FROM users WHERE id = ?), 0, ?)
+                   ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP`,
+                  [u.id, u.id, avatar]
+                );
+              } catch {}
               Logger.info(MODULE, '✅ Promoted user to provider after invoice.payment_succeeded', { userId: u.id });
             }
           }

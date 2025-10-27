@@ -5,7 +5,7 @@
 
 import { Router, Request, Response } from 'express';
 import DatabaseConnection from '../../../shared/database/connection';
-import { authenticateToken, AuthUser } from '../../../shared/middleware/auth.middleware';
+import { authenticateToken, AuthUser, requireRole } from '../../../shared/middleware/auth.middleware';
 import { Logger } from '../../../shared/utils/logger.util';
 
 const MODULE = 'ProviderLocationsRoutes';
@@ -20,7 +20,7 @@ export class ProviderLocationsRoutes {
 
   private initializeRoutes() {
     // GET /provider/coverage-zones - Listar zonas de cobertura
-    this.router.get('/provider/coverage-zones', authenticateToken, async (req: Request, res: Response) => {
+    this.router.get('/provider/coverage-zones', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         Logger.info(MODULE, 'GET /provider/coverage-zones', { userId: user.id });
@@ -46,7 +46,7 @@ export class ProviderLocationsRoutes {
     });
 
     // POST /provider/coverage-zones - Agregar zona de cobertura
-    this.router.post('/provider/coverage-zones', authenticateToken, async (req: Request, res: Response) => {
+    this.router.post('/provider/coverage-zones', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         Logger.info(MODULE, 'POST /provider/coverage-zones', { userId: user.id, body: req.body });
@@ -114,7 +114,7 @@ export class ProviderLocationsRoutes {
     });
 
     // DELETE /provider/coverage-zones/:id - Eliminar zona de cobertura
-    this.router.delete('/provider/coverage-zones/:id', authenticateToken, async (req: Request, res: Response) => {
+    this.router.delete('/provider/coverage-zones/:id', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         const zoneId = req.params.id;
@@ -151,7 +151,7 @@ export class ProviderLocationsRoutes {
     });
 
     // PUT /provider/coverage-zones/:id/location - Establecer coordenadas (lat/lng) de una zona
-    this.router.put('/provider/coverage-zones/:id/location', authenticateToken, async (req: Request, res: Response) => {
+    this.router.put('/provider/coverage-zones/:id/location', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         const zoneId = Number(req.params.id);
@@ -209,7 +209,7 @@ export class ProviderLocationsRoutes {
     });
 
     // PUT /provider/coverage-zones/:id/primary - Marcar una zona como principal
-    this.router.put('/provider/coverage-zones/:id/primary', authenticateToken, async (req: Request, res: Response) => {
+    this.router.put('/provider/coverage-zones/:id/primary', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         const zoneId = Number(req.params.id);
@@ -262,7 +262,7 @@ export class ProviderLocationsRoutes {
     });
 
     // PUT /provider/availability - Actualizar disponibilidad (online y compartir ubicación)
-    this.router.put('/provider/availability', authenticateToken, async (req: Request, res: Response) => {
+    this.router.put('/provider/availability', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         Logger.info(MODULE, 'PUT /provider/availability', { userId: user.id, body: req.body });
@@ -302,7 +302,7 @@ export class ProviderLocationsRoutes {
     });
 
     // PUT /provider/current-location - Actualizar ubicación en tiempo real (lat/lng)
-    this.router.put('/provider/current-location', authenticateToken, async (req: Request, res: Response) => {
+    this.router.put('/provider/current-location', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         Logger.info(MODULE, 'PUT /provider/current-location', { userId: user.id, body: req.body });

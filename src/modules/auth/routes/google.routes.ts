@@ -338,11 +338,15 @@ export class GoogleAuthRoutes {
         const base = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com');
         console.log('🟣 [BACKEND] Frontend base URL:', base);
         
-        const userData = { 
-          id: user!.id, 
-          email: user!.email, 
-          name: user!.name, 
-          role: user!.role 
+        const userData = {
+          id: user!.id,
+          email: user!.email,
+          name: user!.name,
+          role: user!.role,
+          // Añadir contexto para el flujo de registro con rol pendiente
+          pending_role: (user as any)?.pending_role ?? null,
+          intendedRole: (typeof parsedState?.role !== 'undefined' ? parsedState.role : null),
+          mode: (typeof parsedState?.mode !== 'undefined' ? parsedState.mode : null)
         };
         console.log('🟣 [BACKEND] User data a enviar:', userData);
         
