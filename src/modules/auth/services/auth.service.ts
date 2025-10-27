@@ -152,11 +152,19 @@ export class AuthService {
       throw new Error('Refresh token inválido o expirado');
     }
 
+    // Marca de versión para verificar despliegue y compatibilidad JTI
+    Logger.info(MODULE, '[REFRESH_V2] Handler activo (payload-jti + legacy-fallback)', {
+      jti: payload.jti
+    });
+
     // Verificar en base de datos (primero por jti correcto; fallback por firma histórica)
     let tokenData = await this.refreshTokensRepo.findByJti(payload.jti);
     if (!tokenData) {
       const legacySig = (refreshToken || '').split('.')[2] || '';
       if (legacySig) {
+        Logger.info(MODULE, '[REFRESH_V2] Intentando fallback por firma legada', {
+          legacySigPrefix: legacySig.substring(0, 8)
+        });
         tokenData = await this.refreshTokensRepo.findByJti(legacySig);
       }
     }
@@ -181,6 +189,8 @@ export class AuthService {
     const decodedNew = JWTUtil.verifyRefreshToken(tokens.refreshToken);
     const jti = decodedNew?.jti || tokens.refreshToken.split('.')[2];
     await this.refreshTokensRepo.create(user.id, jti, refreshTokenExpiry);
+
+    Logger.info(MODULE, '[REFRESH_V2] Nuevos tokens emitidos', { userId: user.id });
 
     return {
       user: {
