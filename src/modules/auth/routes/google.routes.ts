@@ -226,7 +226,19 @@ export class GoogleAuthRoutes {
           });
           // Si el state pedía provider, marcar pending_role para promover solo tras pago Stripe
           if (parsedState.role === 'provider') {
-            try { await this.usersRepo.setPendingRole(newId as number, 'provider', null); } catch {}
+            try {
+              console.log('[BACKEND][CALLBACK] Intentando setPendingRole(provider) para usuario:', newId);
+              await this.usersRepo.setPendingRole(newId as number, 'provider', null);
+              const after = await this.usersRepo.findById(newId as number);
+              console.log('[BACKEND][CALLBACK] Resultado setPendingRole ->', {
+                userId: newId,
+                pending_role: (after as any)?.pending_role,
+                pending_plan_id: (after as any)?.pending_plan_id
+              });
+            } catch (e: any) {
+              console.error('[BACKEND][CALLBACK] ❌ Error al setPendingRole(provider):', e?.message || e);
+              console.error('[BACKEND][CALLBACK] Posible falta de columnas pending_* en tabla users');
+            }
           }
           
         } else if (!user.google_id) {
