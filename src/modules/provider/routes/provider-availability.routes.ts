@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import DatabaseConnection from '../../../shared/database/connection';
-import { authenticateToken, AuthUser } from '../../../shared/middleware/auth.middleware';
+import { authenticateToken, AuthUser, requireRole } from '../../../shared/middleware/auth.middleware';
 import { Logger } from '../../../shared/utils/logger.util';
 
 const MODULE = 'ProviderAvailabilityRoutes';
@@ -15,7 +15,7 @@ export class ProviderAvailabilityRoutes {
 
   private initializeRoutes() {
     // GET /provider/availability/weekly - Lista de bloques semanales
-    this.router.get('/provider/availability/weekly', authenticateToken, async (req: Request, res: Response) => {
+    this.router.get('/provider/availability/weekly', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         if (user.role !== 'provider') return res.status(403).json({ success: false, error: 'Solo providers' });
@@ -33,7 +33,7 @@ export class ProviderAvailabilityRoutes {
     });
 
     // POST /provider/availability/weekly - Crear bloque
-    this.router.post('/provider/availability/weekly', authenticateToken, async (req: Request, res: Response) => {
+    this.router.post('/provider/availability/weekly', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         if (user.role !== 'provider') return res.status(403).json({ success: false, error: 'Solo providers' });
@@ -57,7 +57,7 @@ export class ProviderAvailabilityRoutes {
     });
 
     // PUT /provider/availability/weekly/:id - Actualizar bloque
-    this.router.put('/provider/availability/weekly/:id', authenticateToken, async (req: Request, res: Response) => {
+    this.router.put('/provider/availability/weekly/:id', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         if (user.role !== 'provider') return res.status(403).json({ success: false, error: 'Solo providers' });
@@ -84,7 +84,7 @@ export class ProviderAvailabilityRoutes {
     });
 
     // DELETE /provider/availability/weekly/:id - Eliminar bloque
-    this.router.delete('/provider/availability/weekly/:id', authenticateToken, async (req: Request, res: Response) => {
+    this.router.delete('/provider/availability/weekly/:id', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         if (user.role !== 'provider') return res.status(403).json({ success: false, error: 'Solo providers' });
@@ -102,7 +102,7 @@ export class ProviderAvailabilityRoutes {
 
     // Exceptions
     // GET /provider/availability/exceptions
-    this.router.get('/provider/availability/exceptions', authenticateToken, async (req: Request, res: Response) => {
+    this.router.get('/provider/availability/exceptions', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         if (user.role !== 'provider') return res.status(403).json({ success: false, error: 'Solo providers' });
@@ -120,7 +120,7 @@ export class ProviderAvailabilityRoutes {
     });
 
     // POST /provider/availability/exceptions
-    this.router.post('/provider/availability/exceptions', authenticateToken, async (req: Request, res: Response) => {
+    this.router.post('/provider/availability/exceptions', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         if (user.role !== 'provider') return res.status(403).json({ success: false, error: 'Solo providers' });
@@ -142,7 +142,7 @@ export class ProviderAvailabilityRoutes {
     });
 
     // DELETE /provider/availability/exceptions/:id
-    this.router.delete('/provider/availability/exceptions/:id', authenticateToken, async (req: Request, res: Response) => {
+    this.router.delete('/provider/availability/exceptions/:id', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         if (user.role !== 'provider') return res.status(403).json({ success: false, error: 'Solo providers' });
