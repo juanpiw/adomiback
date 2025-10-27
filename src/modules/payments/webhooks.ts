@@ -141,7 +141,15 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
         break;
       case 'checkout.session.completed':
         Logger.info(MODULE, '🔔 [WEBHOOK] checkout.session.completed recibido');
-        await handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session);
+        {
+          const s = event.data.object as Stripe.Checkout.Session;
+          // Si es suscripción, vincular el customer al usuario por client_reference_id
+          if ((s as any).mode === 'subscription') {
+            await handleSubscriptionCheckoutCompleted(s);
+          } else {
+            await handleCheckoutSessionCompleted(s);
+          }
+        }
         break;
       case 'invoice.payment_succeeded':
         Logger.info(MODULE, '🔔 [WEBHOOK] invoice.payment_succeeded', { invoiceId: (event.data.object as any).id });
@@ -435,6 +443,34 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
     }
   } catch (err) {
     Logger.error(MODULE, 'Error handling checkout.session.completed', err as any);
+  }
+}
+
+async function handleSubscriptionCheckoutCompleted(session: Stripe.Checkout.Session) {
+  const pool = DatabaseConnection.getPool();
+  if (!pool) return;
+  try {
+    Logger.info(MODULE, '🧭 [SUB_CHECKOUT_COMPLETED] Start', {
+      sessionId: session.id,
+      mode: (session as any).mode,
+      client_reference_id: (session as any).client_reference_id
+    });
+    const customerId = typeof session.customer === 'string' ? session.customer : (session.customer as any)?.id;
+    const clientReferenceId = (session as any).client_reference_id;
+    if (customerId && clientReferenceId) {
+      const userId = Number(clientReferenceId);
+      if (Number.isFinite(userId)) {
+        await pool.execute(
+          'UPDATE users SET stripe_customer_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND (stripe_customer_id IS NULL OR stripe_customer_id = \'\')',
+          [customerId, userId]
+        );
+        Logger.info(MODULE, '🧭 [SUB_CHECKOUT_COMPLETED] Linked stripe_customer_id to user', { userId, customerId });
+      }
+    } else {
+      Logger.warn(MODULE, '🧭 [SUB_CHECKOUT_COMPLETED] Missing customer or client_reference_id', { sessionId: session.id });
+    }
+  } catch (err) {
+    Logger.error(MODULE, 'Error in handleSubscriptionCheckoutCompleted', err as any);
   }
 }
 
