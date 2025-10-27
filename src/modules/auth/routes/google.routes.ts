@@ -189,12 +189,27 @@ export class GoogleAuthRoutes {
           const existingUser = await this.usersRepo.findByEmail(payload.email);
           
           if (existingUser) {
-            console.log('🔴 [BACKEND] ❌ Email ya existe con rol:', existingUser.role);
-            console.log('🔴 [BACKEND] Intentando crear con rol:', parsedState.role);
-            const errorUrl = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com') + 
-              `/auth/register?error=email_already_exists&existing_role=${existingUser.role}&attempted_role=${parsedState.role}&email=${encodeURIComponent(payload.email)}`;
-            console.log('🔴 [BACKEND] Redirigiendo a:', errorUrl);
-            return res.redirect(302, errorUrl);
+            console.log('🟠 [BACKEND] Email ya existe con rol:', existingUser.role, '| flujo intentado:', parsedState.role, parsedState.mode);
+            // Si intenta registrarse como provider y ya existe (como client), promovemos el flujo a pending y continuamos
+            if (parsedState.role === 'provider') {
+              try {
+                if (!existingUser.google_id) {
+                  console.log('🟠 [BACKEND] Vinculando google_id a cuenta existente');
+                  await this.usersRepo.linkGoogleAccount(existingUser.id, payload.sub);
+                }
+                console.log('🟠 [BACKEND] Marcando pending_role=provider para user:', existingUser.id);
+                await this.usersRepo.setPendingRole(existingUser.id, 'provider', null);
+              } catch (e: any) {
+                console.warn('⚠️ [BACKEND] No se pudo marcar pending_role o vincular google_id:', e?.message || e);
+              }
+              user = await this.usersRepo.findById(existingUser.id);
+              console.log('🟠 [BACKEND] Continuando con usuario existente tras upgrade a pending provider:', { id: user?.id, role: user?.role, pending_role: (user as any)?.pending_role });
+            } else {
+              const errorUrl = getEnv('FRONTEND_BASE_URL', 'https://adomiapp.com') + 
+                `/auth/register?error=email_already_exists&existing_role=${existingUser.role}&attempted_role=${parsedState.role}&email=${encodeURIComponent(payload.email)}`;
+              console.log('🔴 [BACKEND] Redirigiendo a:', errorUrl);
+              return res.redirect(302, errorUrl);
+            }
           }
           
           // crear usuario en modo registro
