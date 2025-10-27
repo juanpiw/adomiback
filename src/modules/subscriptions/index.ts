@@ -147,8 +147,9 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
   // POST /stripe/create-checkout-session - Crea sesión de checkout de Stripe (modo suscripción)
   router.post('/stripe/create-checkout-session', async (req: Request, res: Response) => {
     try {
-      const stripeSecret = process.env.STRIPE_SECRET_KEY;
-      if (!stripeSecret) {
+      const stripeSecretRaw = process.env.STRIPE_SECRET_KEY || '';
+      const stripeSecret = stripeSecretRaw.trim();
+      if (!stripeSecret || stripeSecret.startsWith('pk_')) {
         return res.status(500).json({ ok: false, error: 'Stripe no configurado (STRIPE_SECRET_KEY faltante)' });
       }
       
