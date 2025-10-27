@@ -97,7 +97,12 @@ export class AuthController {
       }
       // Siempre leer del DB para evitar rol obsoleto del JWT
       const pool = DatabaseConnection.getPool();
-      const [[dbCtx]]: any = await pool.query('SELECT DATABASE() AS db');
+      if (!pool) {
+        Logger.error(MODULE, 'Database pool not available in /auth/me');
+        return res.status(500).json(ResponseUtil.error('DB no disponible'));
+      }
+      const [dbRows] = await pool.query('SELECT DATABASE() AS db');
+      const dbCtx = (dbRows as any[])[0] || null;
       const [urows] = await pool.query(
         'SELECT id, email, name, role, stripe_account_id, stripe_payouts_enabled, stripe_onboarding_status FROM users WHERE id = ? LIMIT 1',
         [user.id]
@@ -118,7 +123,7 @@ export class AuthController {
       }
       const userOut = {
         id: u.id,
-        email: user.email,
+        email: u.email,
         name: u.name || user.name || null,
         role: u.role,
         stripe_account_id: u.stripe_account_id || null,
@@ -132,7 +137,7 @@ export class AuthController {
         stripe_account_id: userOut.stripe_account_id,
         stripe_payouts_enabled: userOut.stripe_payouts_enabled,
         stripe_onboarding_status: userOut.stripe_onboarding_status,
-        db: dbCtx?.db
+        db: (dbCtx as any)?.db || null
       });
       // Desactivar caché para que el front reciba el rol actualizado inmediatamente tras el webhook
       try { res.set('Cache-Control', 'no-store'); } catch {}
