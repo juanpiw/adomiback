@@ -6,7 +6,7 @@ import { authenticateToken } from '../../../shared/middleware/auth.middleware';
 
 const MODULE = 'PROVIDER_STRIPE_CONNECT';
 
-const STRIPE_SECRET = process.env.STRIPE_SECRET_KEY || '';
+const STRIPE_SECRET = (process.env.STRIPE_SECRET_KEY || '').trim();
 const CONNECT_ENABLED = String(process.env.STRIPE_CONNECT_ENABLED || '').toLowerCase() === 'true';
 const ONBOARD_RETURN_URL = process.env.STRIPE_CONNECT_ONBOARD_RETURN_URL || (process.env.FRONTEND_BASE_URL || process.env.FRONTEND_URL || 'http://localhost:4200');
 const ONBOARD_REFRESH_URL = process.env.STRIPE_CONNECT_ONBOARD_REFRESH_URL || ONBOARD_RETURN_URL;
@@ -66,6 +66,18 @@ router.post('/providers/:id/stripe/connect/create', authenticateToken, async (re
     const stripe = ensureStripe();
     if (!stripe) return res.status(500).json({ success: false, error: 'Stripe no configurado' });
 
+    // Diagnóstico: verificar a qué cuenta pertenece la API key
+    try {
+      const platform = await stripe.accounts.retrieve();
+      Logger.info(MODULE, 'Platform account (API key owner)', {
+        platform_account_id: (platform as any)?.id,
+        business_type: (platform as any)?.business_type,
+        country: (platform as any)?.country
+      });
+    } catch (e: any) {
+      Logger.warn(MODULE, 'Could not retrieve platform account with current API key', { message: e?.message });
+    }
+
     // Idempotencia: si ya tiene acct, retornamos estado actual
     const current = await getUserStripeFields(providerId);
     Logger.info(MODULE, 'Create connect - current user stripe fields', { providerId, current });
@@ -90,7 +102,11 @@ router.post('/providers/:id/stripe/connect/create', authenticateToken, async (re
     return res.json({ success: true, account_id: accountId, onboarding_url: link.url, expires_at: link.expires_at || null });
   } catch (err: any) {
     Logger.error(MODULE, 'create connect account error', err);
-    return res.status(500).json({ success: false, error: 'Error creando cuenta conectada' });
+    // Propagar más detalles para depuración (mensaje de Stripe)
+    const message = err?.raw?.message || err?.message || 'Error creando cuenta conectada';
+    const code = err?.raw?.code || err?.code || null;
+    const type = err?.raw?.type || err?.type || null;
+    return res.status(500).json({ success: false, error: message, code, type });
   }
 });
 
