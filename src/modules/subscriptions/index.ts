@@ -191,6 +191,7 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
       const FRONTEND_BASE_URL = process.env.FRONTEND_BASE_URL || 'https://adomiapp.com';
 
       async function createSessionWithPrice(priceId: string) {
+        console.log('[SUBS][CHECKOUT] Creating session with priceId=', priceId, 'planId=', plan.id, 'currency=', currency, 'unitAmount=', unitAmount, 'userId=', userId || 'guest');
         return await stripe.checkout.sessions.create({
           mode: 'subscription',
           line_items: [
@@ -222,9 +223,20 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
       } catch (err: any) {
         const isMissingPrice = err?.code === 'resource_missing' || /No such price/i.test(String(err?.message || ''));
         if (!isMissingPrice) {
+          console.error('[SUBS][CHECKOUT] Stripe error creating session with existing price', {
+            planId: plan.id,
+            stripe_price_id: plan.stripe_price_id,
+            statusCode: err?.statusCode,
+            type: err?.type || err?.rawType,
+            code: err?.code,
+            param: err?.param,
+            message: err?.message,
+            requestId: err?.requestId || err?.raw?.requestId,
+            request_log_url: err?.raw?.request_log_url
+          });
           // Propagar errores 4xx de Stripe como 400 para evitar 500 engañoso
           if (err?.statusCode && err.statusCode >= 400 && err.statusCode < 500) {
-            return res.status(400).json({ ok: false, error: err?.message || 'Stripe error', code: err?.code, param: err?.param });
+            return res.status(400).json({ ok: false, error: err?.message || 'Stripe error', code: err?.code, param: err?.param, requestId: err?.requestId || err?.raw?.requestId, request_log_url: err?.raw?.request_log_url });
           }
           throw err;
         }
@@ -245,7 +257,18 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
           const lookupCollision = /already uses that lookup key/i.test(String(createErr?.message || ''));
           if (!lookupCollision) {
             if (createErr?.statusCode && createErr.statusCode >= 400 && createErr.statusCode < 500) {
-              return res.status(400).json({ ok: false, error: createErr?.message || 'Stripe error', code: createErr?.code, param: createErr?.param });
+              console.error('[SUBS][CHECKOUT] Stripe price create error', {
+                planId: plan.id,
+                lookup_key: lookupKey,
+                statusCode: createErr?.statusCode,
+                type: createErr?.type || createErr?.rawType,
+                code: createErr?.code,
+                param: createErr?.param,
+                message: createErr?.message,
+                requestId: createErr?.requestId || createErr?.raw?.requestId,
+                request_log_url: createErr?.raw?.request_log_url
+              });
+              return res.status(400).json({ ok: false, error: createErr?.message || 'Stripe error', code: createErr?.code, param: createErr?.param, requestId: createErr?.requestId || createErr?.raw?.requestId, request_log_url: createErr?.raw?.request_log_url });
             }
             throw createErr;
           }
@@ -261,7 +284,8 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
           } catch {}
           if (!existing) {
             // Si no pudimos listar (límite) o no se encontró, propagamos el error original
-            return res.status(400).json({ ok: false, error: createErr?.message || 'Stripe price lookup_key collision' });
+            console.error('[SUBS][CHECKOUT] Lookup key collision but price not found via list', { planId: plan.id, lookup_key: lookupKey });
+            return res.status(400).json({ ok: false, error: createErr?.message || 'Stripe price lookup_key collision', lookup_key: lookupKey });
           }
           priceIdToUse = existing.id;
         }
@@ -277,9 +301,17 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
 
       return res.json({ ok: true, sessionId: session.id });
     } catch (error: any) {
-      console.error('[STRIPE][CHECKOUT][ERROR]', error);
+      console.error('[STRIPE][CHECKOUT][ERROR]', {
+        message: error?.message,
+        statusCode: error?.statusCode,
+        type: error?.type || error?.rawType,
+        code: error?.code,
+        param: error?.param,
+        requestId: error?.requestId || error?.raw?.requestId,
+        request_log_url: error?.raw?.request_log_url
+      });
       if (error?.statusCode && error.statusCode >= 400 && error.statusCode < 500) {
-        return res.status(400).json({ ok: false, error: error?.message || 'Stripe error', code: error?.code, param: error?.param });
+        return res.status(400).json({ ok: false, error: error?.message || 'Stripe error', code: error?.code, param: error?.param, requestId: error?.requestId || error?.raw?.requestId, request_log_url: error?.raw?.request_log_url });
       }
       return res.status(500).json({ ok: false, error: 'Error al crear sesión de pago', details: error?.message || 'unknown' });
     }
