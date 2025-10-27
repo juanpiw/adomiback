@@ -235,6 +235,8 @@ export class GoogleAuthRoutes {
                 pending_role: (after as any)?.pending_role,
                 pending_plan_id: (after as any)?.pending_plan_id
               });
+              // Asegurar que el objeto en memoria refleje el rol pendiente
+              user = after as any;
             } catch (e: any) {
               console.error('[BACKEND][CALLBACK] ❌ Error al setPendingRole(provider):', e?.message || e);
               console.error('[BACKEND][CALLBACK] Posible falta de columnas pending_* en tabla users');
