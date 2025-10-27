@@ -98,13 +98,15 @@ export class AuthController {
       // Enriquecer con foto de perfil desde la tabla correspondiente
       try {
         const pool = DatabaseConnection.getPool();
-        // Adjuntar campos de Stripe Connect al usuario
+        // Refrescar rol y adjuntar campos de Stripe Connect desde la base de datos (evita rol obsoleto en JWT)
         try {
           const [urows] = await pool.query(
-            'SELECT stripe_account_id, stripe_payouts_enabled, stripe_onboarding_status FROM users WHERE id = ? LIMIT 1',
+            'SELECT role, name, stripe_account_id, stripe_payouts_enabled, stripe_onboarding_status FROM users WHERE id = ? LIMIT 1',
             [user.id]
           );
           const u = (urows as any[])[0] || {};
+          if (u?.role) (user as any).role = u.role;
+          if (u?.name) (user as any).name = u.name;
           (user as any).stripe_account_id = u?.stripe_account_id || null;
           (user as any).stripe_payouts_enabled = u?.stripe_payouts_enabled ?? null;
           (user as any).stripe_onboarding_status = u?.stripe_onboarding_status || null;
@@ -128,6 +130,8 @@ export class AuthController {
           stripe_onboarding_status: (user as any)?.stripe_onboarding_status || null
         });
       } catch {}
+      // Desactivar caché para que el front reciba el rol actualizado inmediatamente tras el webhook
+      try { res.set('Cache-Control', 'no-store'); } catch {}
       res.json(ResponseUtil.success({ user }));
     } catch (error: any) {
       Logger.error(MODULE, 'Get me failed', error);
