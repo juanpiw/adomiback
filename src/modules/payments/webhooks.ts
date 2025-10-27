@@ -114,7 +114,7 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
           const customer = inv.customer;
           const pool = DatabaseConnection.getPool();
           if (customer) {
-            const [[u]]: any = await pool.query('SELECT id, role, pending_role FROM users WHERE stripe_customer_id = ? LIMIT 1', [customer]);
+            const [[u]]: any = await pool.query('SELECT id, role, pending_role, email FROM users WHERE stripe_customer_id = ? LIMIT 1', [customer]);
             if (u && String(u.pending_role) === 'provider') {
               await pool.execute("UPDATE users SET role = 'provider', pending_role = NULL, pending_plan_id = NULL, pending_started_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [u.id]);
               // Crear provider_profiles si no existe y copiar avatar de client_profiles si está disponible
@@ -129,6 +129,34 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
                 );
               } catch {}
               Logger.info(MODULE, '✅ Promoted user to provider after invoice.payment_succeeded', { userId: u.id });
+
+              // Enviar recibo/boleta del plan al correo del proveedor
+              try {
+                const customerEmail = (inv as any).customer_email || u.email || null;
+                const invoicePdfUrl = (inv as any).invoice_pdf || null;
+                if (customerEmail) {
+                  const currency = String((inv as any).currency || 'clp').toUpperCase();
+                  const ZERO_DECIMAL = new Set(['BIF','CLP','DJF','GNF','JPY','KMF','KRW','MGA','PYG','RWF','UGX','VND','VUV','XAF','XOF','XPF']);
+                  const rawAmount = Number((inv as any).amount_paid || 0);
+                  const amount = ZERO_DECIMAL.has(currency) ? rawAmount : Number((rawAmount / 100).toFixed(2));
+                  await EmailService.sendClientReceipt(customerEmail, {
+                    appName: 'Adomi',
+                    amount,
+                    currency,
+                    receiptNumber: (inv as any).number || null,
+                    invoiceNumber: (inv as any).number || null,
+                    invoicePdfUrl,
+                    receiptUrl: null,
+                    paymentDateISO: (inv as any).status_transitions?.paid_at ? new Date(((inv as any).status_transitions.paid_at as any) * 1000).toISOString() : new Date().toISOString(),
+                    appointmentId: null
+                  });
+                  Logger.info(MODULE, '✉️ [INVOICE] Provider plan receipt sent', { to: customerEmail, amount, currency });
+                } else {
+                  Logger.warn(MODULE, '✉️ [INVOICE] Missing customer email; skipping provider plan receipt');
+                }
+              } catch (e) {
+                Logger.warn(MODULE, '✉️ [INVOICE] Failed sending provider plan receipt', e as any);
+              }
             }
           }
         } catch (e) {
