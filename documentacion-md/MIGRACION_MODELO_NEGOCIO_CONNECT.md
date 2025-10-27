@@ -51,6 +51,20 @@ Este documento define:
 Rollback: toggle de feature flag por proveedor a MoR si hay incidentes. Scripts SQL son aditivos y no rompen el flujo MoR.
 
 
+### 3.1) Disponibilidad por país (situación Chile)
+
+- Stripe Connect (cuentas conectadas + payouts) solo puede usarse en países soportados por Stripe para cuentas conectadas y pagos de salida. Esta disponibilidad es independiente del modo TEST/LIVE de la plataforma.
+- Estado actual (referencial): Chile no está disponible como país de cuentas conectadas/payouts locales. En consecuencia, los proveedores con cuentas bancarias en Chile no pueden, por ahora, recibir depósitos a bancos chilenos vía Connect.
+- Implicancias operativas:
+  - En países soportados: usar Connect (destination charges) como modelo por defecto.
+  - En Chile (momentáneo): operar en modo MoR para proveedores con cuenta bancaria chilena, o permitir Connect solo a proveedores que dispongan de cuenta bancaria en un país soportado (y completen KYC allí).
+- Estrategia de transición para Chile:
+  1) Feature flag por proveedor/país: `CONNECT_ENABLED=false` para proveedores con país CL; `true` para proveedores con país soportado.
+  2) Checkout híbrido: Connect cuando elegible (acct_xxx + payouts_enabled), MoR en caso contrario.
+  3) Cash: se mantiene el esquema de deudas de comisión y el motor de cobro (netting/card/manual). Para Chile, aplica igual bajo MoR.
+  4) Prepararse para activación futura: mantener código Connect listo y solo conmutar flags cuando Stripe habilite Chile.
+
+
 ## 4) Plan detallado por componente
 
 ### 4.1 Base de Datos (esquema)

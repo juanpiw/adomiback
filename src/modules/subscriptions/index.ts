@@ -221,30 +221,67 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
         session = await createSessionWithPrice(plan.stripe_price_id);
       } catch (err: any) {
         const isMissingPrice = err?.code === 'resource_missing' || /No such price/i.test(String(err?.message || ''));
-        if (!isMissingPrice) throw err;
+        if (!isMissingPrice) {
+          // Propagar errores 4xx de Stripe como 400 para evitar 500 engañoso
+          if (err?.statusCode && err.statusCode >= 400 && err.statusCode < 500) {
+            return res.status(400).json({ ok: false, error: err?.message || 'Stripe error', code: err?.code, param: err?.param });
+          }
+          throw err;
+        }
 
-        // Crear Price al vuelo y actualizar BD
+        // Crear Price al vuelo y actualizar BD (manejo de colisión de lookup_key)
         const lookupKey = `adomi_plan_${plan.id}_${String(plan.billing_period)}`;
-        const price = await stripe.prices.create({
-          currency,
-          unit_amount: unitAmount,
-          recurring: { interval: String(plan.billing_period) === 'year' ? 'year' : 'month' },
-          product_data: { name: plan.name, metadata: { planId: String(plan.id) } },
-          lookup_key: lookupKey
-        });
-
-        // Persistir nuevo price id
+        let priceIdToUse: string | null = null;
         try {
-          await pool.execute('UPDATE plans SET stripe_price_id = ? WHERE id = ?', [price.id, plan.id]);
-        } catch {}
+          const price = await stripe.prices.create({
+            currency,
+            unit_amount: unitAmount,
+            recurring: { interval: String(plan.billing_period) === 'year' ? 'year' : 'month' },
+            product_data: { name: plan.name, metadata: { planId: String(plan.id) } },
+            lookup_key: lookupKey
+          });
+          priceIdToUse = price.id;
+        } catch (createErr: any) {
+          const lookupCollision = /already uses that lookup key/i.test(String(createErr?.message || ''));
+          if (!lookupCollision) {
+            if (createErr?.statusCode && createErr.statusCode >= 400 && createErr.statusCode < 500) {
+              return res.status(400).json({ ok: false, error: createErr?.message || 'Stripe error', code: createErr?.code, param: createErr?.param });
+            }
+            throw createErr;
+          }
+          // Buscar Price existente por lookup_key y reutilizarlo
+          let existing = null as any;
+          try {
+            const listActive = await stripe.prices.list({ active: true, limit: 100 });
+            existing = listActive.data.find(p => p.lookup_key === lookupKey) || null;
+            if (!existing) {
+              const listAll = await stripe.prices.list({ active: false, limit: 100 });
+              existing = listAll.data.find(p => p.lookup_key === lookupKey) || null;
+            }
+          } catch {}
+          if (!existing) {
+            // Si no pudimos listar (límite) o no se encontró, propagamos el error original
+            return res.status(400).json({ ok: false, error: createErr?.message || 'Stripe price lookup_key collision' });
+          }
+          priceIdToUse = existing.id;
+        }
 
-        session = await createSessionWithPrice(price.id);
+        // Persistir price id elegido
+        if (priceIdToUse) {
+          try {
+            await pool.execute('UPDATE plans SET stripe_price_id = ? WHERE id = ?', [priceIdToUse, plan.id]);
+          } catch {}
+          session = await createSessionWithPrice(priceIdToUse);
+        }
       }
 
       return res.json({ ok: true, sessionId: session.id });
     } catch (error: any) {
       console.error('[STRIPE][CHECKOUT][ERROR]', error);
-      return res.status(500).json({ ok: false, error: 'Error al crear sesión de pago', details: error.message });
+      if (error?.statusCode && error.statusCode >= 400 && error.statusCode < 500) {
+        return res.status(400).json({ ok: false, error: error?.message || 'Stripe error', code: error?.code, param: error?.param });
+      }
+      return res.status(500).json({ ok: false, error: 'Error al crear sesión de pago', details: error?.message || 'unknown' });
     }
   });
 
