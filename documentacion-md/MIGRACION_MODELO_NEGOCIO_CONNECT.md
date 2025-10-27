@@ -117,6 +117,11 @@ Rollback: toggle de feature flag por proveedor a MoR si hay incidentes. Scripts 
 - `STRIPE_CONNECT_ONBOARD_REFRESH_URL=https://app.adomiapp.cl/dash/ingresos/onboarding-retry`
 - (Opcional) `STRIPE_WEBHOOK_SECRET_CONNECT` si separa endpoint para Connect
 
+Modo operativo actual: TEST
+- Frontend: `stripePublishableKey = pk_test_...` (en environment.ts y environment.prod.ts)
+- Backend: `STRIPE_SECRET_KEY = sk_test_...` y `STRIPE_WEBHOOK_SECRET = whsec_test_...`
+- No mezclar TEST/LIVE en ningún flujo (Checkout, SetupIntent, Webhooks)
+
 
 ## 6) Scripts SQL (idempotentes)
 
@@ -491,6 +496,54 @@ Estructura por fases para implementar el modelo Intermediario (Connect) con coex
 - [ ] Comisiones cash se recuperan por balance_debit y/o card fallback; auditoría completa.
 - [ ] Admin/Reportes muestran cifras consistentes y exportables.
 - [ ] Seguridad y privacidad revisadas; logs sin PII sensible.
+
+## 15) Diagrama de Etapas (Estado actual y pendientes)
+
+```mermaid
+flowchart LR
+  A[0. Preparación/Compliance] --> B[1. Migraciones DB y Settings]
+  B --> C[2. Onboarding Proveedor (Express)]
+  C --> D[3. Checkout Connect (Destination Charges)]
+  D --> E[4. Motor Cash: Débito de saldo]
+  E --> F[4b. Fallback Tarjeta (off_session)]
+  F --> G[5. Admin/Reportes/Observabilidad]
+  G --> H[6. UI Proveedor - Integraciones]
+  H --> I[7. QA/Seguridad]
+  I --> J[8. Rollout Piloto]
+  J --> K[9. Cutover]
+
+  subgraph Estado
+    direction TB
+    S1([Onboarding Endpoints]):::done
+    S2([Webhook account.updated]):::done
+    S3([Checkout con Connect]):::done
+    S4([Persistencia metadatos Connect]):::done
+    S5([Billing: SetupIntent + Deudas]):::done
+    S6([Admin run-collection]):::done
+    S7([Job balance_debit]):::todo
+    S8([Cobro off_session + webhooks]):::doing
+    S9([Stripe Elements UI]):::doing
+    S10([Reportes/KPIs Connect+Cash]):::todo
+  end
+
+  classDef done fill:#16a34a,color:#fff,stroke:#0f5132;
+  classDef doing fill:#f59e0b,color:#fff,stroke:#7c2d12;
+  classDef todo fill:#9ca3af,color:#1f2937,stroke:#374151;
+
+  A -.-> S1
+  C -.-> S2
+  D -.-> S3
+  D -.-> S4
+  H -.-> S9
+  E -.-> S7
+  F -.-> S8
+  G -.-> S10
+```
+
+Leyenda breve:
+- done: implementado y cableado
+- doing: en ejecución/QA
+- todo: pendiente
 
 ### 13.4 Frontend
 

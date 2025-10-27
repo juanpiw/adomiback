@@ -206,11 +206,13 @@ export class GoogleAuthRoutes {
             role: parsedState.role
           });
           
+          // Crear SIEMPRE como client; marcar pending_role si el flujo pedía provider
+          const baseRole: Role = 'client';
           const newId = await this.usersRepo.createGoogleUser(
-            payload.sub, 
-            payload.email, 
-            payload.name || payload.email.split('@')[0], 
-            parsedState.role
+            payload.sub,
+            payload.email,
+            payload.name || payload.email.split('@')[0],
+            baseRole
           );
           
           console.log('🟡 [BACKEND] ✅ Usuario creado con ID:', newId);
@@ -222,6 +224,10 @@ export class GoogleAuthRoutes {
             role: user?.role,
             name: user?.name
           });
+          // Si el state pedía provider, marcar pending_role para promover solo tras pago Stripe
+          if (parsedState.role === 'provider') {
+            try { await this.usersRepo.setPendingRole(newId as number, 'provider', null); } catch {}
+          }
           
         } else if (!user.google_id) {
           console.log('🟡 [BACKEND] ==================== VINCULANDO CUENTA EXISTENTE ====================');

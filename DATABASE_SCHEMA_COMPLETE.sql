@@ -1434,6 +1434,136 @@ CREATE INDEX idx_payments_status_date ON payments(status, paid_at);
 CREATE INDEX idx_conversations_last_message ON conversations(last_message_at DESC);
 
 -- ============================================
+-- STRIPE CONNECT (Marketplace) – Additions 2025-10-27
+-- ============================================
+
+-- Users: Stripe Connect columns
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS stripe_account_id VARCHAR(255) NULL,
+  ADD COLUMN IF NOT EXISTS stripe_account_type ENUM('standard','express','custom') NULL DEFAULT 'express',
+  ADD COLUMN IF NOT EXISTS stripe_onboarding_status ENUM('none','pending','requirements_due','completed','restricted') NULL DEFAULT 'none',
+  ADD COLUMN IF NOT EXISTS stripe_payouts_enabled TINYINT(1) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS stripe_requirements JSON NULL;
+CREATE INDEX IF NOT EXISTS idx_users_stripe_account_id ON users (stripe_account_id);
+
+-- Users: pending upgrade fields (promoción tras pago Stripe)
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS pending_role ENUM('provider') NULL,
+  ADD COLUMN IF NOT EXISTS pending_plan_id INT NULL,
+  ADD COLUMN IF NOT EXISTS pending_started_at DATETIME NULL;
+
+-- Payments: Connect metadata
+ALTER TABLE payments
+  ADD COLUMN IF NOT EXISTS marketplace_model ENUM('mor','connect') NOT NULL DEFAULT 'mor' AFTER payment_method,
+  ADD COLUMN IF NOT EXISTS stripe_destination_account_id VARCHAR(255) NULL AFTER stripe_payment_intent_id,
+  ADD COLUMN IF NOT EXISTS stripe_application_fee_id VARCHAR(255) NULL AFTER stripe_destination_account_id,
+  ADD COLUMN IF NOT EXISTS stripe_transfer_id VARCHAR(255) NULL AFTER stripe_application_fee_id,
+  ADD COLUMN IF NOT EXISTS stripe_charge_id VARCHAR(255) NULL AFTER stripe_transfer_id;
+CREATE INDEX IF NOT EXISTS idx_payments_marketplace_model ON payments (marketplace_model);
+CREATE INDEX IF NOT EXISTS idx_payments_destination ON payments (stripe_destination_account_id);
+
+-- Proveedor: logs de onboarding de cuenta conectada
+CREATE TABLE IF NOT EXISTS provider_connect_onboarding (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  provider_id INT NOT NULL,
+  stripe_account_id VARCHAR(255) NULL,
+  account_link_url VARCHAR(1000) NULL,
+  account_link_expires_at DATETIME NULL,
+  status ENUM('created','opened','expired','completed','failed') NOT NULL DEFAULT 'created',
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  KEY idx_provider_status (provider_id, status),
+  CONSTRAINT fk_pco_provider FOREIGN KEY (provider_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Perfil de cobro del proveedor (para fallback con tarjeta)
+CREATE TABLE IF NOT EXISTS provider_billing_profiles (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  provider_id INT NOT NULL UNIQUE,
+  stripe_customer_id VARCHAR(255) NULL,
+  default_payment_method_id VARCHAR(255) NULL,
+  status ENUM('none','setup_required','ready') NOT NULL DEFAULT 'none',
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  CONSTRAINT fk_pbp_provider FOREIGN KEY (provider_id) REFERENCES users(id) ON DELETE CASCADE,
+  KEY idx_customer (stripe_customer_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Asentamientos de deudas de comisión (balance_debit / netting / card / manual)
+CREATE TABLE IF NOT EXISTS provider_commission_settlements (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  debt_id BIGINT UNSIGNED NOT NULL,
+  provider_id INT NOT NULL,
+  payment_id INT NULL,
+  appointment_id INT NULL,
+  settled_amount DECIMAL(10,2) NOT NULL,
+  method ENUM('balance_debit','netting','card','manual') NOT NULL,
+  stripe_payment_intent_id VARCHAR(255) NULL,
+  stripe_charge_id VARCHAR(255) NULL,
+  stripe_transfer_id VARCHAR(255) NULL,
+  transfer_group VARCHAR(255) NULL,
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  KEY idx_debt (debt_id),
+  KEY idx_provider_created (provider_id, created_at),
+  CONSTRAINT fk_pcs_debt FOREIGN KEY (debt_id) REFERENCES provider_commission_debts(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Extensión de provider_commission_debts para motor de cobro híbrido
+ALTER TABLE provider_commission_debts
+  ADD COLUMN IF NOT EXISTS settlement_method ENUM('netting','card','manual') NULL AFTER status,
+  ADD COLUMN IF NOT EXISTS attempt_count INT NOT NULL DEFAULT 0 AFTER due_date,
+  ADD COLUMN IF NOT EXISTS last_attempt_at DATETIME(6) NULL AFTER attempt_count,
+  ADD COLUMN IF NOT EXISTS settled_amount DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER commission_amount,
+  ADD COLUMN IF NOT EXISTS stripe_payment_intent_id VARCHAR(255) NULL AFTER voucher_url,
+  ADD COLUMN IF NOT EXISTS stripe_charge_id VARCHAR(255) NULL AFTER stripe_payment_intent_id,
+  ADD COLUMN IF NOT EXISTS stripe_transfer_id VARCHAR(255) NULL AFTER stripe_charge_id,
+  ADD COLUMN IF NOT EXISTS transfer_group VARCHAR(255) NULL AFTER stripe_transfer_id,
+  ADD COLUMN IF NOT EXISTS last_balance_available BIGINT NULL AFTER last_attempt_at,
+  ADD COLUMN IF NOT EXISTS last_balance_checked_at DATETIME(6) NULL AFTER last_balance_available;
+ALTER TABLE provider_commission_debts ADD INDEX IF NOT EXISTS idx_pcd_status_due (status, due_date);
+ALTER TABLE provider_commission_debts ADD INDEX IF NOT EXISTS idx_pcd_transfer (stripe_transfer_id);
+
+-- Eventos de payout de cuentas conectadas (opcional)
+CREATE TABLE IF NOT EXISTS connect_payout_events (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  stripe_payout_id VARCHAR(255) NOT NULL,
+  stripe_account_id VARCHAR(255) NOT NULL,
+  amount BIGINT NOT NULL,
+  currency VARCHAR(10) NOT NULL,
+  status ENUM('paid','failed','canceled','in_transit') NOT NULL,
+  arrival_date DATETIME NULL,
+  received_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  raw JSON NULL,
+  UNIQUE KEY uk_payout_account (stripe_payout_id, stripe_account_id),
+  KEY idx_account_status (stripe_account_id, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Settings requeridos para Connect y motor cash
+INSERT INTO platform_settings (setting_key, setting_value, setting_type, description)
+SELECT 'stripe_connect_enabled','true','boolean','Feature flag global para usar Connect'
+WHERE NOT EXISTS (SELECT 1 FROM platform_settings WHERE setting_key='stripe_connect_enabled');
+
+INSERT INTO platform_settings (setting_key, setting_value, setting_type, description)
+SELECT 'stripe_connect_fee_percent','15','number','Porcentaje comisión Connect (%)'
+WHERE NOT EXISTS (SELECT 1 FROM platform_settings WHERE setting_key='stripe_connect_fee_percent');
+
+INSERT INTO platform_settings (setting_key, setting_value, setting_type, description)
+SELECT 'cash_debt_cycle_days','7','number','Días por ciclo de cobro de comisiones cash'
+WHERE NOT EXISTS (SELECT 1 FROM platform_settings WHERE setting_key='cash_debt_cycle_days');
+
+INSERT INTO platform_settings (setting_key, setting_value, setting_type, description)
+SELECT 'cash_debt_max_attempts','3','number','Intentos máx. para cobro con tarjeta'
+WHERE NOT EXISTS (SELECT 1 FROM platform_settings WHERE setting_key='cash_debt_max_attempts');
+
+INSERT INTO platform_settings (setting_key, setting_value, setting_type, description)
+SELECT 'cash_debt_netting_cap_percent','30','number','% tope por cargo para netear deuda'
+WHERE NOT EXISTS (SELECT 1 FROM platform_settings WHERE setting_key='cash_debt_netting_cap_percent');
+
+INSERT INTO platform_settings (setting_key, setting_value, setting_type, description)
+SELECT 'cash_debt_preferred_method','balance_debit','string','Método preferido: balance_debit, netting, card, manual'
+WHERE NOT EXISTS (SELECT 1 FROM platform_settings WHERE setting_key='cash_debt_preferred_method');
+
+-- ============================================
 -- RESUMEN Y NOTAS DE IMPLEMENTACIÓN
 -- ============================================
 

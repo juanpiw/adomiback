@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import DatabaseConnection from '../../../shared/database/connection';
 import { JWTUtil } from '../../../shared/utils/jwt.util';
+import { requireRole } from '../../../shared/middleware/auth.middleware';
 
 interface AuthUser {
   id: number;
@@ -39,7 +40,7 @@ export class ProviderRoutes {
 
   private mountRoutes() {
     // GET /provider/profile - Obtener perfil del provider
-    this.router.get('/provider/profile', authenticateToken, async (req: Request, res: Response) => {
+    this.router.get('/provider/profile', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         console.log('[PROVIDER_ROUTES] GET /provider/profile - Usuario:', user.id, 'rol:', user.role);
@@ -139,7 +140,7 @@ export class ProviderRoutes {
     });
 
     // PUT /provider/profile - Actualizar perfil del provider
-    this.router.put('/provider/profile', authenticateToken, async (req: Request, res: Response) => {
+    this.router.put('/provider/profile', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
         console.log('[PROVIDER_ROUTES] PUT /provider/profile - Usuario:', user.id);

@@ -13,6 +13,9 @@ export interface UserRow {
   password: string | null;
   role: 'client' | 'provider';
   stripe_customer_id?: string | null;
+  pending_role?: 'provider' | null;
+  pending_plan_id?: number | null;
+  pending_started_at?: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -22,7 +25,7 @@ export class UsersRepository {
 
   async findByEmail(email: string): Promise<UserRow | null> {
     const [rows] = await this.pool.query(
-      'SELECT id, google_id, name, email, password, role, stripe_customer_id FROM users WHERE email = ? LIMIT 1',
+      'SELECT id, google_id, name, email, password, role, stripe_customer_id, pending_role, pending_plan_id, pending_started_at FROM users WHERE email = ? LIMIT 1',
       [email]
     );
     const arr = rows as any[];
@@ -32,7 +35,7 @@ export class UsersRepository {
   async findById(id: number): Promise<UserRow | null> {
     console.log('[USERS_REPO] findById llamado con ID:', id);
     const [rows] = await this.pool.query(
-      'SELECT id, google_id, name, email, password, role FROM users WHERE id = ? LIMIT 1',
+      'SELECT id, google_id, name, email, password, role, pending_role, pending_plan_id, pending_started_at FROM users WHERE id = ? LIMIT 1',
       [id]
     );
     const arr = rows as any[];
@@ -59,6 +62,20 @@ export class UsersRepository {
     const insertId = (result as any).insertId as number;
     console.log('[USERS_REPO] Usuario creado con ID:', insertId);
     return insertId;
+  }
+
+  async setPendingRole(userId: number, role: 'provider', planId: number | null = null): Promise<void> {
+    await this.pool.execute(
+      'UPDATE users SET pending_role = ?, pending_plan_id = ?, pending_started_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [role, planId, userId]
+    );
+  }
+
+  async promoteToProviderFromPending(userId: number): Promise<void> {
+    await this.pool.execute(
+      "UPDATE users SET role = CASE WHEN pending_role = 'provider' THEN 'provider' ELSE role END, pending_role = NULL, pending_plan_id = NULL, pending_started_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+      [userId]
+    );
   }
 
   async findByGoogleId(googleId: string): Promise<UserRow | null> {

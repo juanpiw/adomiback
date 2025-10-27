@@ -105,6 +105,25 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
 
     Logger.info(MODULE, '🔔 [WEBHOOK] Dispatching handler', { type: event.type });
     switch (event.type) {
+      case 'invoice.payment_succeeded':
+        Logger.info(MODULE, '🔔 [WEBHOOK] invoice.payment_succeeded', { invoiceId: (event.data.object as any).id });
+        await handleInvoicePaymentSucceeded(event.data.object as Stripe.Invoice);
+        try {
+          // Promover a provider si estaba pendiente (cuando el plan es de proveedor)
+          const inv: any = event.data.object as any;
+          const customer = inv.customer;
+          const pool = DatabaseConnection.getPool();
+          if (customer) {
+            const [[u]]: any = await pool.query('SELECT id, role, pending_role FROM users WHERE stripe_customer_id = ? LIMIT 1', [customer]);
+            if (u && String(u.pending_role) === 'provider') {
+              await pool.execute("UPDATE users SET role = 'provider', pending_role = NULL, pending_plan_id = NULL, pending_started_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [u.id]);
+              Logger.info(MODULE, '✅ Promoted user to provider after invoice.payment_succeeded', { userId: u.id });
+            }
+          }
+        } catch (e) {
+          Logger.warn(MODULE, 'Could not promote pending provider on invoice.payment_succeeded');
+        }
+        break;
       case 'account.updated':
         Logger.info(MODULE, '🔔 [WEBHOOK] account.updated', { accountId: (event.data.object as any).id });
         await handleAccountUpdated(event.data.object as any as Stripe.Account);
