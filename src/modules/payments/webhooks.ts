@@ -34,6 +34,12 @@ export function setupPaymentsWebhooks(app: any) {
     return handleStripeWebhook(req, res, stripe, webhookSecret);
   });
 
+  // Alias legacy: algunas configuraciones apuntan a /stripe/webhook (singular)
+  app.post('/stripe/webhook', express.raw({ type: 'application/json' }), async (req: any, res: any) => {
+    Logger.warn(MODULE, 'Received webhook on legacy path /stripe/webhook. Update Stripe endpoint to /webhooks/stripe to avoid confusion.');
+    return handleStripeWebhook(req, res, stripe, webhookSecret);
+  });
+
   // Webhook específico para pagos de citas (usar raw body)
   app.post('/webhooks/stripe-appointments', express.raw({ type: 'application/json' }), async (req: any, res: any) => {
     return handleStripeWebhook(req, res, stripe, webhookSecret);
