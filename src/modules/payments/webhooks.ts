@@ -114,9 +114,17 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
           const customer = inv.customer;
           const pool = DatabaseConnection.getPool();
           if (customer) {
+            const [[dbRowBeforeCtx]]: any = await pool.query('SELECT DATABASE() AS db');
             const [[u]]: any = await pool.query('SELECT id, role, pending_role, email FROM users WHERE stripe_customer_id = ? LIMIT 1', [customer]);
+            Logger.info(MODULE, '🧪 [PROMO] Context before update', { db: dbRowBeforeCtx?.db, stripe_customer_id: customer, userId: u?.id, role: u?.role, pending_role: u?.pending_role });
             if (u && String(u.pending_role) === 'provider') {
-              await pool.execute("UPDATE users SET role = 'provider', pending_role = NULL, pending_plan_id = NULL, pending_started_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [u.id]);
+              const [[before]]: any = await pool.query('SELECT role, pending_role, updated_at FROM users WHERE id = ? LIMIT 1', [u.id]);
+              Logger.info(MODULE, '🧪 [PROMO] Before update', { userId: u.id, before });
+              const [upd]: any = await pool.execute("UPDATE users SET role = 'provider', pending_role = NULL, pending_plan_id = NULL, pending_started_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [u.id]);
+              Logger.info(MODULE, '🧪 [PROMO] Update result', { affectedRows: upd?.affectedRows });
+              const [[after]]: any = await pool.query('SELECT role, pending_role, updated_at FROM users WHERE id = ? LIMIT 1', [u.id]);
+              const [[dbRowAfterCtx]]: any = await pool.query('SELECT DATABASE() AS db');
+              Logger.info(MODULE, '🧪 [PROMO] After update', { db: dbRowAfterCtx?.db, userId: u.id, after });
               // Crear provider_profiles si no existe y copiar avatar de client_profiles si está disponible
               try {
                 const [[cp]]: any = await pool.query('SELECT profile_photo_url FROM client_profiles WHERE client_id = ? LIMIT 1', [u.id]);

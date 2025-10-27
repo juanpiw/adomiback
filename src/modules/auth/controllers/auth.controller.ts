@@ -95,44 +95,48 @@ export class AuthController {
       if (!user) {
         return res.status(401).json(ResponseUtil.error('Autenticación requerida'));
       }
-      // Enriquecer con foto de perfil desde la tabla correspondiente
-      try {
-        const pool = DatabaseConnection.getPool();
-        // Refrescar rol y adjuntar campos de Stripe Connect desde la base de datos (evita rol obsoleto en JWT)
-        try {
-          const [urows] = await pool.query(
-            'SELECT role, name, stripe_account_id, stripe_payouts_enabled, stripe_onboarding_status FROM users WHERE id = ? LIMIT 1',
-            [user.id]
-          );
-          const u = (urows as any[])[0] || {};
-          if (u?.role) (user as any).role = u.role;
-          if (u?.name) (user as any).name = u.name;
-          (user as any).stripe_account_id = u?.stripe_account_id || null;
-          (user as any).stripe_payouts_enabled = u?.stripe_payouts_enabled ?? null;
-          (user as any).stripe_onboarding_status = u?.stripe_onboarding_status || null;
-        } catch {}
-        if (user.role === 'client') {
-          const [rows] = await pool.query('SELECT profile_photo_url FROM client_profiles WHERE client_id = ? LIMIT 1', [user.id]);
-          const avatar = (rows as any[])[0]?.profile_photo_url || null;
-          (user as any).profile_photo_url = avatar;
-        } else if (user.role === 'provider') {
-          const [rows] = await pool.query('SELECT profile_photo_url FROM provider_profiles WHERE provider_id = ? LIMIT 1', [user.id]);
-          const avatar = (rows as any[])[0]?.profile_photo_url || null;
-          (user as any).profile_photo_url = avatar;
-        }
-      } catch {}
-      try {
-        Logger.info(MODULE, 'ME response user fields', {
-          id: user.id,
-          role: user.role,
-          stripe_account_id: (user as any)?.stripe_account_id || null,
-          stripe_payouts_enabled: (user as any)?.stripe_payouts_enabled ?? null,
-          stripe_onboarding_status: (user as any)?.stripe_onboarding_status || null
-        });
-      } catch {}
+      // Siempre leer del DB para evitar rol obsoleto del JWT
+      const pool = DatabaseConnection.getPool();
+      const [[dbCtx]]: any = await pool.query('SELECT DATABASE() AS db');
+      const [urows] = await pool.query(
+        'SELECT id, email, name, role, stripe_account_id, stripe_payouts_enabled, stripe_onboarding_status FROM users WHERE id = ? LIMIT 1',
+        [user.id]
+      );
+      const u = (urows as any[])[0];
+      if (!u) {
+        Logger.warn(MODULE, 'User not found in DB for /auth/me', { userId: user.id, db: dbCtx?.db });
+        return res.status(404).json(ResponseUtil.error('Usuario no encontrado'));
+      }
+      // Adjuntar avatar desde la tabla correspondiente
+      let profilePhotoUrl: string | null = null;
+      if (u.role === 'client') {
+        const [rows] = await pool.query('SELECT profile_photo_url FROM client_profiles WHERE client_id = ? LIMIT 1', [u.id]);
+        profilePhotoUrl = (rows as any[])[0]?.profile_photo_url || null;
+      } else if (u.role === 'provider') {
+        const [rows] = await pool.query('SELECT profile_photo_url FROM provider_profiles WHERE provider_id = ? LIMIT 1', [u.id]);
+        profilePhotoUrl = (rows as any[])[0]?.profile_photo_url || null;
+      }
+      const userOut = {
+        id: u.id,
+        email: user.email,
+        name: u.name || user.name || null,
+        role: u.role,
+        stripe_account_id: u.stripe_account_id || null,
+        stripe_payouts_enabled: u.stripe_payouts_enabled ?? null,
+        stripe_onboarding_status: u.stripe_onboarding_status || null,
+        profile_photo_url: profilePhotoUrl
+      } as any;
+      Logger.info(MODULE, 'ME response user fields', {
+        id: userOut.id,
+        role: userOut.role,
+        stripe_account_id: userOut.stripe_account_id,
+        stripe_payouts_enabled: userOut.stripe_payouts_enabled,
+        stripe_onboarding_status: userOut.stripe_onboarding_status,
+        db: dbCtx?.db
+      });
       // Desactivar caché para que el front reciba el rol actualizado inmediatamente tras el webhook
       try { res.set('Cache-Control', 'no-store'); } catch {}
-      res.json(ResponseUtil.success({ user }));
+      res.json(ResponseUtil.success({ user: userOut }));
     } catch (error: any) {
       Logger.error(MODULE, 'Get me failed', error);
       res.status(500).json(ResponseUtil.error('Error interno del servidor'));
