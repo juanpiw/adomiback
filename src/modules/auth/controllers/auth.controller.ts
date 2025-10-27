@@ -98,6 +98,17 @@ export class AuthController {
       // Enriquecer con foto de perfil desde la tabla correspondiente
       try {
         const pool = DatabaseConnection.getPool();
+        // Adjuntar campos de Stripe Connect al usuario
+        try {
+          const [urows] = await pool.query(
+            'SELECT stripe_account_id, stripe_payouts_enabled, stripe_onboarding_status FROM users WHERE id = ? LIMIT 1',
+            [user.id]
+          );
+          const u = (urows as any[])[0] || {};
+          (user as any).stripe_account_id = u?.stripe_account_id || null;
+          (user as any).stripe_payouts_enabled = u?.stripe_payouts_enabled ?? null;
+          (user as any).stripe_onboarding_status = u?.stripe_onboarding_status || null;
+        } catch {}
         if (user.role === 'client') {
           const [rows] = await pool.query('SELECT profile_photo_url FROM client_profiles WHERE client_id = ? LIMIT 1', [user.id]);
           const avatar = (rows as any[])[0]?.profile_photo_url || null;

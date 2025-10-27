@@ -100,6 +100,10 @@ Rollback: toggle de feature flag por proveedor a MoR si hay incidentes. Scripts 
 ### 4.4 Frontend
 
 - Proveedor (Dashboard): botón “Configurar mis pagos” (onboarding), estado de cuenta (conectada/pendiente), enlace al dashboard Express.
+- Handoff post‑pago (proveedor): tras `payment-success` y promoción a provider, si `payouts_enabled=false` → abrir wizard de Connect automáticamente.
+  - Google success (intención provider) fuerza redirección a `/auth/select-plan` y marca `providerOnboarding=1` en `sessionStorage` para evitar redirecciones del layout de cliente.
+  - `payment-success` hace polling a `/auth/me` hasta `role='provider'`; si el usuario no tiene payouts habilitados, redirige a `/dash/ingresos` para iniciar onboarding (el wizard invoca `POST /providers/:id/stripe/connect/create` y luego `POST /providers/:id/stripe/connect/onboarding-link` y redirige a `account_link.url`).
+  - Al retornar desde Stripe (RETURN_URL), mostrar estado y, cuando `account.updated` indique `payouts_enabled=true`, cerrar wizard y dirigir al dashboard.
 - Cliente (Checkout): sin cambios visibles (sigue Stripe Checkout). 
 - Admin: reportes de `application_fee` (comisiones Connect) y consolidado con comisiones cash.
 
