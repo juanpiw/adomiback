@@ -370,6 +370,16 @@ export class GoogleAuthRoutes {
           intendedRole: (typeof parsedState?.role !== 'undefined' ? parsedState.role : null),
           mode: (typeof parsedState?.mode !== 'undefined' ? parsedState.mode : null)
         };
+        try {
+          console.log('🟣 [BACKEND] Payload para frontend (userData):', {
+            id: userData.id,
+            email: userData.email,
+            role: userData.role,
+            pending_role: (userData as any).pending_role,
+            intendedRole: (userData as any).intendedRole,
+            mode: (userData as any).mode
+          });
+        } catch {}
         console.log('🟣 [BACKEND] User data a enviar:', userData);
         
         const encodedToken = encodeURIComponent(tokens.accessToken);

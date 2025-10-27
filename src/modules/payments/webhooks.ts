@@ -453,13 +453,15 @@ async function handleSubscriptionCheckoutCompleted(session: Stripe.Checkout.Sess
     Logger.info(MODULE, '🧭 [SUB_CHECKOUT_COMPLETED] Start', {
       sessionId: session.id,
       mode: (session as any).mode,
-      client_reference_id: (session as any).client_reference_id
+      client_reference_id: (session as any).client_reference_id,
+      customer: typeof session.customer === 'string' ? session.customer : (session.customer as any)?.id
     });
     const customerId = typeof session.customer === 'string' ? session.customer : (session.customer as any)?.id;
     const clientReferenceId = (session as any).client_reference_id;
     if (customerId && clientReferenceId) {
       const userId = Number(clientReferenceId);
       if (Number.isFinite(userId)) {
+        Logger.info(MODULE, '🧭 [SUB_CHECKOUT_COMPLETED] Persisting stripe_customer_id to user', { userId, customerId });
         await pool.execute(
           'UPDATE users SET stripe_customer_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND (stripe_customer_id IS NULL OR stripe_customer_id = \'\')',
           [customerId, userId]

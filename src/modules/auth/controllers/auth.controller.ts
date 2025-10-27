@@ -119,6 +119,15 @@ export class AuthController {
           (user as any).profile_photo_url = avatar;
         }
       } catch {}
+      try {
+        Logger.info(MODULE, 'ME response user fields', {
+          id: user.id,
+          role: user.role,
+          stripe_account_id: (user as any)?.stripe_account_id || null,
+          stripe_payouts_enabled: (user as any)?.stripe_payouts_enabled ?? null,
+          stripe_onboarding_status: (user as any)?.stripe_onboarding_status || null
+        });
+      } catch {}
       res.json(ResponseUtil.success({ user }));
     } catch (error: any) {
       Logger.error(MODULE, 'Get me failed', error);

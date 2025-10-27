@@ -68,20 +68,24 @@ router.post('/providers/:id/stripe/connect/create', authenticateToken, async (re
 
     // Idempotencia: si ya tiene acct, retornamos estado actual
     const current = await getUserStripeFields(providerId);
+    Logger.info(MODULE, 'Create connect - current user stripe fields', { providerId, current });
     let accountId = current.stripe_account_id || '';
     if (!accountId) {
+      Logger.info(MODULE, 'Creating new Stripe Connect account (express) for provider', { providerId });
       const acct = await stripe.accounts.create({ type: 'express' });
       accountId = acct.id;
       await setUserStripeAccount(providerId, accountId);
     }
 
     // Crear account link para onboarding
+    Logger.info(MODULE, 'Creating account_link for onboarding', { providerId, accountId, returnUrl: ONBOARD_RETURN_URL, refreshUrl: ONBOARD_REFRESH_URL });
     const link = await stripe.accountLinks.create({
       account: accountId,
       refresh_url: ONBOARD_REFRESH_URL,
       return_url: ONBOARD_RETURN_URL,
       type: 'account_onboarding'
     });
+    Logger.info(MODULE, 'Account_link created', { providerId, accountId, expires_at: link.expires_at });
     await logOnboarding(providerId, accountId, link.url, link.expires_at ? new Date(link.expires_at * 1000) : null);
     return res.json({ success: true, account_id: accountId, onboarding_url: link.url, expires_at: link.expires_at || null });
   } catch (err: any) {
@@ -101,14 +105,17 @@ router.post('/providers/:id/stripe/connect/onboarding-link', authenticateToken, 
     if (!stripe) return res.status(500).json({ success: false, error: 'Stripe no configurado' });
 
     const { stripe_account_id } = await getUserStripeFields(providerId);
+    Logger.info(MODULE, 'Onboarding-link requested', { providerId, stripe_account_id });
     if (!stripe_account_id) return res.status(400).json({ success: false, error: 'Cuenta conectada no creada' });
 
+    Logger.info(MODULE, 'Creating account_link (existing account)', { providerId, accountId: stripe_account_id, returnUrl: ONBOARD_RETURN_URL, refreshUrl: ONBOARD_REFRESH_URL });
     const link = await stripe.accountLinks.create({
       account: stripe_account_id,
       refresh_url: ONBOARD_REFRESH_URL,
       return_url: ONBOARD_RETURN_URL,
       type: 'account_onboarding'
     });
+    Logger.info(MODULE, 'Account_link created (existing)', { providerId, accountId: stripe_account_id, expires_at: link.expires_at });
     await logOnboarding(providerId, stripe_account_id, link.url, link.expires_at ? new Date(link.expires_at * 1000) : null);
     return res.json({ success: true, onboarding_url: link.url, expires_at: link.expires_at || null });
   } catch (err: any) {
