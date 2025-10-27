@@ -75,10 +75,11 @@ export class AuthService {
     // Generar tokens JWT
     const tokens = JWTUtil.generateTokenPair(userId, data.email, role);
 
-    // Crear refresh token en la base de datos
+    // Crear refresh token en la base de datos (usar jti del payload, no la firma JWT)
     const refreshTokenExpiry = new Date();
     refreshTokenExpiry.setDate(refreshTokenExpiry.getDate() + 7); // 7 días
-    const jti = tokens.refreshToken.split('.')[2];
+    const decodedRt = JWTUtil.verifyRefreshToken(tokens.refreshToken);
+    const jti = decodedRt?.jti || tokens.refreshToken.split('.')[2];
     await this.refreshTokensRepo.create(userId, jti, refreshTokenExpiry);
 
     return {
@@ -119,10 +120,11 @@ export class AuthService {
     // Generar tokens JWT
     const tokens = JWTUtil.generateTokenPair(user.id, user.email, user.role);
 
-    // Crear refresh token en la base de datos
+    // Crear refresh token en la base de datos (usar jti del payload, no la firma JWT)
     const refreshTokenExpiry = new Date();
     refreshTokenExpiry.setDate(refreshTokenExpiry.getDate() + 7);
-    const jti = tokens.refreshToken.split('.')[2];
+    const decodedRt = JWTUtil.verifyRefreshToken(tokens.refreshToken);
+    const jti = decodedRt?.jti || tokens.refreshToken.split('.')[2];
     await this.refreshTokensRepo.create(user.id, jti, refreshTokenExpiry);
 
     Logger.info(MODULE, 'Login successful', { userId: user.id });
@@ -150,9 +152,17 @@ export class AuthService {
       throw new Error('Refresh token inválido o expirado');
     }
 
-    // Verificar en base de datos
-    const tokenData = await this.refreshTokensRepo.findByJti(payload.jti);
-    if (!tokenData || tokenData.is_revoked) {
+    // Verificar en base de datos (primero por jti correcto; fallback por firma histórica)
+    let tokenData = await this.refreshTokensRepo.findByJti(payload.jti);
+    if (!tokenData) {
+      const legacySig = (refreshToken || '').split('.')[2] || '';
+      if (legacySig) {
+        tokenData = await this.refreshTokensRepo.findByJti(legacySig);
+      }
+    }
+    // Modo compatibilidad: si no existe registro pero el token es válido criptográficamente,
+    // permitimos el refresh (para transicionar a esquema basado en jti en BD).
+    if (tokenData && tokenData.is_revoked) {
       throw new Error('Refresh token inválido o revocado');
     }
 
@@ -165,10 +175,11 @@ export class AuthService {
     // Generar nuevos tokens
     const tokens = JWTUtil.generateTokenPair(user.id, user.email, user.role);
 
-    // Crear nuevo refresh token
+    // Crear nuevo refresh token (usar jti del payload)
     const refreshTokenExpiry = new Date();
     refreshTokenExpiry.setDate(refreshTokenExpiry.getDate() + 7);
-    const jti = tokens.refreshToken.split('.')[2];
+    const decodedNew = JWTUtil.verifyRefreshToken(tokens.refreshToken);
+    const jti = decodedNew?.jti || tokens.refreshToken.split('.')[2];
     await this.refreshTokensRepo.create(user.id, jti, refreshTokenExpiry);
 
     return {

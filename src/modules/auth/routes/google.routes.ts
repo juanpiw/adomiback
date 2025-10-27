@@ -315,7 +315,8 @@ export class GoogleAuthRoutes {
         
         const refreshExpiry = new Date();
         refreshExpiry.setDate(refreshExpiry.getDate() + 7);
-        const jti = tokens.refreshToken.split('.')[2];
+        const decodedRt = JWTUtil.verifyRefreshToken(tokens.refreshToken);
+        const jti = decodedRt?.jti || tokens.refreshToken.split('.')[2];
         
         console.log('🟣 [BACKEND] Guardando refresh token en BD...');
         console.log('🟣 [BACKEND] JTI:', jti);
