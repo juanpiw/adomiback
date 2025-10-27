@@ -317,9 +317,11 @@ export class GoogleAuthRoutes {
             if (allowed) {
               const pool = DatabaseConnection.getPool();
               if (user!.role === 'client') {
+                console.log('[AVATAR] Import avatar habilitado. Descargando para client_id:', user!.id);
                 const [rows] = await pool.query('SELECT profile_photo_url FROM client_profiles WHERE client_id = ?', [user!.id]);
                 const existing = (rows as any[])[0]?.profile_photo_url;
                 if (!existing) {
+                  console.log('[AVATAR] No hay avatar previo. Descargando desde:', pictureUrl);
                   const resp = await axios.get(pictureUrl, { responseType: 'arraybuffer', timeout: 4000 });
                   const buffer = Buffer.from(resp.data);
                   const uploadDir = path.join(process.cwd(), 'uploads', 'profiles', 'clients');
@@ -332,11 +334,16 @@ export class GoogleAuthRoutes {
                   await sharp(buffer).resize({ width: 800, height: 800, fit: 'inside' }).webp({ quality: 85 }).toFile(outPath);
                   await sharp(buffer).resize({ width: 200, height: 200, fit: 'cover' }).webp({ quality: 80 }).toFile(thumbPath);
                   const relPhoto = `/uploads/profiles/clients/${path.basename(outPath)}`;
+                  const fullName = user!.name || user!.email || 'Usuario';
+                  console.log('[AVATAR] Guardando avatar en BD para client_id:', user!.id, 'ruta:', relPhoto);
                   await pool.query(
-                    `INSERT INTO client_profiles (client_id, profile_photo_url)
-                     VALUES (?, ?)
-                     ON DUPLICATE KEY UPDATE profile_photo_url = IF(profile_photo_url IS NULL OR profile_photo_url = '', VALUES(profile_photo_url), profile_photo_url), updated_at = CURRENT_TIMESTAMP`,
-                    [user!.id, relPhoto]
+                    `INSERT INTO client_profiles (client_id, full_name, profile_photo_url)
+                     VALUES (?, ?, ?)
+                     ON DUPLICATE KEY UPDATE 
+                       profile_photo_url = IF(profile_photo_url IS NULL OR profile_photo_url = '', VALUES(profile_photo_url), profile_photo_url),
+                       full_name = COALESCE(full_name, VALUES(full_name)),
+                       updated_at = CURRENT_TIMESTAMP`,
+                    [user!.id, fullName, relPhoto]
                   );
                 }
               }
@@ -344,6 +351,7 @@ export class GoogleAuthRoutes {
             }
           }
         } catch (e) {
+          console.error('[AVATAR] ❌ Error importando avatar de Google:', (e as any)?.message || e);
           // No bloquear login si falla la importación de avatar
         }
 
