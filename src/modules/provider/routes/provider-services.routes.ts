@@ -91,6 +91,27 @@ export class ProviderServicesRoutes {
         const pool = DatabaseConnection.getPool();
         console.log('[PROVIDER_SERVICES] Conectando a la base de datos...');
 
+        // Normalizar valores vacíos a null
+        const normalizedCustomCategory = (custom_category && String(custom_category).trim().length > 0)
+          ? String(custom_category).trim()
+          : null;
+
+        // Validar categoría: debe existir en service_categories o proveer custom_category
+        let categoryIdToUse: number | null = null;
+        if (category_id !== undefined && category_id !== null && String(category_id).trim() !== '') {
+          const categoryIdNum = Number(category_id);
+          if (!Number.isFinite(categoryIdNum)) {
+            return res.status(400).json({ success: false, error: 'category_id inválido' });
+          }
+          const [catRows] = await pool.query('SELECT id FROM service_categories WHERE id = ? LIMIT 1', [categoryIdNum]);
+          if ((catRows as any[]).length === 0) {
+            return res.status(400).json({ success: false, error: 'La categoría seleccionada no existe' });
+          }
+          categoryIdToUse = categoryIdNum;
+        } else if (!normalizedCustomCategory) {
+          return res.status(400).json({ success: false, error: 'Debes seleccionar una categoría o indicar una categoría personalizada' });
+        }
+
         // Obtener el siguiente order_index
         console.log('[PROVIDER_SERVICES] Obteniendo order_index para provider_id:', user.id);
         const [countResult] = await pool.query(
@@ -107,8 +128,8 @@ export class ProviderServicesRoutes {
           description: description || null,
           price,
           duration_minutes,
-          category_id: category_id || null,
-          custom_category: custom_category || null,
+          category_id: categoryIdToUse,
+          custom_category: normalizedCustomCategory,
           service_image_url: service_image_url || null,
           order_index: nextOrder
         });
@@ -124,8 +145,8 @@ export class ProviderServicesRoutes {
             description || null,
             price,
             duration_minutes,
-            category_id || null,
-            custom_category || null,
+            categoryIdToUse,
+            normalizedCustomCategory,
             service_image_url || null,
             nextOrder
           ]
