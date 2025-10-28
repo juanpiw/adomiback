@@ -205,6 +205,114 @@ TBK_SEC_API_KEY_SECRET=...
 
 ---
 
+### 11.1 Checklist ejecutable (con entregables y criterios de aceptación)
+
+Fase A — Preparación y ambiente
+- [ ] Habilitar productos TBK (Mall + Comercios Secundarios) con Transbank.
+  - CA: credenciales activas (API Key Id/Secret) y `TBK_MALL_COMMERCE_CODE` confirmados.
+- [ ] Configurar envs en backend (`TBK_*`) y feature flag `GATEWAY=stripe|tbk` por proveedor/país.
+  - CA: variables presentes en `.env` y carga verificada al inicio.
+
+Fase B — Migraciones BD (idempotentes)
+- [ ] Agregar columnas TBK en `users` y `payments` + tabla `tbk_secondary_shops`.
+  - CA: SELECTs de verificación retornan columnas/tablas; sin errores.
+
+Fase C — Onboarding Comercios Secundarios
+- [x] POST `/providers/:id/tbk/secondary/create` (auth provider) → crea comercio secundario.
+  - CA: guarda `tbk_secondary_code` y fila en `tbk_secondary_shops` (raw JSON).
+- [x] GET `/providers/:id/tbk/secondary/status` → retorna estado y datos operativos.
+  - CA: refleja campos de TBK y BD.
+- [x] DELETE `/providers/:id/tbk/secondary/:code` → baja con motivo.
+  - CA: estado actualizado y registro en auditoría.
+
+Fase D — Checkout Mall
+- [x] POST `/tbk/mall/transactions` → arma `details[]` (proveedor + comisión Mall) y crea transacción.
+  - CA: retorna `{ token, url }`, logs/auditoría guardados.
+- [x] POST `/tbk/mall/commit` (retorno) → confirma transacción y persiste autorizaciones.
+  - CA: actualiza `payments` (gateway=tbk, montos, códigos, status) y registros por detail.
+- [x] GET `/tbk/mall/status/:token` → consulta estado.
+  - CA: responde estados coherentes con TBK.
+- [x] POST `/tbk/mall/refund` → reembolso total/parcial por `commerce_code`.
+  - CA: persiste referencias y estados de reembolso.
+
+Fase E — Operación, conciliación y QA
+- [ ] Reportes de conciliación: split Mall/Tiendas vs `payments` internos.
+  - CA: export CSV por rango con totales y desglose.
+- [ ] Batería de pruebas INT/CERT (casos sección 10).
+  - CA: resultados documentados y listos para certificación.
+
+---
+
+### 11.2 SQL idempotente (aplicar solo si faltan)
+
+Verificación previa (ejecutar y revisar resultados vacíos):
+```sql
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND COLUMN_NAME='tbk_secondary_code';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND COLUMN_NAME='tbk_status';
+
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payments' AND COLUMN_NAME='gateway';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payments' AND COLUMN_NAME='mall_commerce_code';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payments' AND COLUMN_NAME='secondary_commerce_code';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payments' AND COLUMN_NAME='tbk_buy_order_mall';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payments' AND COLUMN_NAME='tbk_buy_order_secondary';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payments' AND COLUMN_NAME='tbk_token';
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payments' AND COLUMN_NAME='tbk_authorization_code';
+
+SHOW TABLES LIKE 'tbk_secondary_shops';
+```
+
+Altas (ejecutar solo las que falten):
+```sql
+-- users
+ALTER TABLE users ADD COLUMN tbk_secondary_code VARCHAR(16) NULL;
+ALTER TABLE users ADD COLUMN tbk_status ENUM('none','pending','active','restricted') NULL DEFAULT 'none';
+
+-- payments
+ALTER TABLE payments ADD COLUMN gateway ENUM('stripe','tbk') NULL AFTER payment_method;
+ALTER TABLE payments ADD COLUMN mall_commerce_code VARCHAR(16) NULL AFTER gateway;
+ALTER TABLE payments ADD COLUMN secondary_commerce_code VARCHAR(16) NULL AFTER mall_commerce_code;
+ALTER TABLE payments ADD COLUMN tbk_buy_order_mall VARCHAR(255) NULL AFTER secondary_commerce_code;
+ALTER TABLE payments ADD COLUMN tbk_buy_order_secondary VARCHAR(255) NULL AFTER tbk_buy_order_mall;
+ALTER TABLE payments ADD COLUMN tbk_token VARCHAR(255) NULL AFTER tbk_buy_order_secondary;
+ALTER TABLE payments ADD COLUMN tbk_authorization_code VARCHAR(50) NULL AFTER tbk_token;
+
+-- índices opcionales
+CREATE INDEX idx_payments_gateway ON payments (gateway);
+CREATE INDEX idx_payments_tbk_orders ON payments (tbk_buy_order_mall, tbk_buy_order_secondary);
+
+-- tbk_secondary_shops (auditoría de onboarding)
+CREATE TABLE IF NOT EXISTS tbk_secondary_shops (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  provider_id INT NOT NULL,
+  codigo_comercio_secundario VARCHAR(16) NOT NULL,
+  status ENUM('pending','active','restricted','deleted') NOT NULL DEFAULT 'pending',
+  raw JSON NULL,
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  KEY idx_provider_status (provider_id, status),
+  CONSTRAINT fk_tbkss_provider FOREIGN KEY (provider_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+---
+
+### 11.3 Estado de implementación (código y rutas)
+
+- Módulo TBK creado y montado:
+  - `backend/src/modules/tbk/index.ts` (setup)
+  - Registrado en `backend/src/app.ts`
+- Onboarding Comercios Secundarios (implementado):
+  - `POST /providers/:id/tbk/secondary/create`
+  - `GET /providers/:id/tbk/secondary/status`
+  - `DELETE /providers/:id/tbk/secondary/:code`
+- Webpay Plus Mall (implementado):
+  - `POST /tbk/mall/transactions`
+  - `POST /tbk/mall/commit`
+  - `GET /tbk/mall/status/:token`
+  - `POST /tbk/mall/refund`
+- Persistencia mínima en `payments` (gateway=tbk, órdenes y token) y auditoría en `tbk_secondary_shops`.
+- Pending: aplicar migraciones SQL (11.2), configurar envs `TBK_*`, probar en INT/CERT y armar reportes/conciliación.
+
 ### 12) Migración desde Stripe (cuando aplique)
 
 - Mantener feature flag `GATEWAY=stripe|tbk` por proveedor/país.
@@ -231,3 +339,30 @@ Notas:
 - Usar ambientes INT/CERT antes de PROD; mantener feature flag `GATEWAY=tbk` para activar el flujo por país/proveedor.
 
 
+ta del vendedor
+Proveedor se registra en Adomi.
+Backend crea “Comercio Secundario” en TBK (POST /comercios-secundarios).
+TBK devuelve codigoComercioSecundario (5970XXXXXXXX) → se guarda en el perfil del proveedor.
+Armar el cobro (carrito/cita)
+Cliente confirma compra.
+Backend calcula split: monto proveedor y comisión del mall.
+Crea transacción Webpay Plus Mall (POST /webpay…/transactions) con details[]:
+detail 1: { amount: neto proveedor, commerce_code: codigoComercioSecundario, buy_order: unico }
+detail 2: { amount: comisión, commerce_code: mall_commerce_code, buy_order: unico }
+TBK responde { token, url }.
+Pago del cliente
+Front redirige a url de TBK con token.
+Cliente paga en TBK.
+Retorno y confirmación
+TBK redirige a return_url con token_ws.
+Backend hace commit (PUT /webpay…/transactions/{token}) y obtiene autorizaciones por cada detail.
+Persiste pago: total, montos por comercio, códigos de autorización, estado.
+Resultado y conciliación
+Si autorizado: muestra éxito y actualiza estados (provider_amount, commission_amount).
+Reportes/conciliación: cuadrar montos mall vs secundarios con los logs de TBK.
+Reembolsos/errores
+Reembolso total/parcial vía endpoints TBK, indicando qué commerce_code afecta.
+Manejar rechazos/timeout replicando estado en BD y mostrando mensaje al usuario.
+Seguridad/operación
+Firmas HMAC (Api-Key-Id/Secret), idempotencia con buy_order único por commerce_code.
+Feature flag para seleccionar gateway (tbk vs stripe) por país/proveedor.

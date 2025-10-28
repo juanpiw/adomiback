@@ -107,6 +107,14 @@ export function createApp(): Express {
   setupPromotionsModule(app);
   setupNotificationsModule(app);
   setupAdminModule(app);
+  // TBK (Transbank) module
+  try {
+    const { setupTbkModule } = require('./modules/tbk');
+    setupTbkModule(app);
+    Logger.info('APP', 'TBK module mounted');
+  } catch (e) {
+    Logger.warn('APP', 'TBK module not mounted', e as any);
+  }
   // Cron de Cierre Mutuo (cash)
   try {
     const { setupClosureCron } = require('./modules/appointments/closure-cron');
