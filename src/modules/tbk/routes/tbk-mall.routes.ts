@@ -31,18 +31,59 @@ router.post('/tbk/mall/transactions', authenticateToken, async (req: Request, re
     const user = (req as any).user as AuthUser;
     if (!user?.id) return res.status(401).json({ success: false, error: 'auth_required' });
 
-    const { provider_id, amount_provider, commission_amount, client_reference } = req.body || {};
+    const { appointment_id, provider_id, amount_provider, commission_amount, client_reference } = req.body || {} as any;
     const mallCode = requireEnv('TBK_MALL_COMMERCE_CODE');
     const pool = DatabaseConnection.getPool();
 
-    // Validaciones mínimas
-    const pid = Number(provider_id);
-    const gross = Number(amount_provider) + Number(commission_amount);
-    if (!Number.isFinite(pid) || pid <= 0) {
-      return res.status(400).json({ success: false, error: 'provider_id inválido' });
-    }
-    if (!Number.isFinite(gross) || gross <= 0) {
-      return res.status(400).json({ success: false, error: 'monto inválido' });
+    let pid: number;
+    let gross: number;
+    let providerAmount: number;
+    let commissionAmount: number;
+
+    // Modo recomendado: appointment_id → calcular montos e IDs
+    if (appointment_id) {
+      const apptId = Number(appointment_id);
+      if (!Number.isFinite(apptId) || apptId <= 0) return res.status(400).json({ success: false, error: 'appointment_id inválido' });
+
+      const [[appt]]: any = await pool.query(
+        `SELECT id, client_id, provider_id, price FROM appointments WHERE id = ? LIMIT 1`,
+        [apptId]
+      );
+      if (!appt) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      if (Number(appt.client_id) !== Number(user.id)) return res.status(403).json({ success: false, error: 'No autorizado para pagar esta cita' });
+
+      pid = Number(appt.provider_id);
+      const amount = Math.round(Number(appt.price || 0));
+      if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Monto de la cita inválido' });
+
+      // Leer settings de comisión/IVA
+      let taxRate = 0.0; // si no hay IVA, se considera 0
+      let commissionRate = 15.0;
+      try {
+        const [setRows]: any = await pool.query(
+          `SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN ('default_tax_rate','default_commission_rate')`
+        );
+        for (const r of setRows as any[]) {
+          if (r.setting_key === 'default_tax_rate') taxRate = Number(r.setting_value) || 0.0;
+          if (r.setting_key === 'default_commission_rate') commissionRate = Number(r.setting_value) || 15.0;
+        }
+      } catch {}
+
+      // Calcular sobre base neta si hay IVA configurado
+      const priceBase = taxRate > 0 ? Math.round(amount / (1 + taxRate / 100)) : amount;
+      commissionAmount = Math.max(0, Math.round(priceBase * (commissionRate / 100)));
+      providerAmount = Math.max(0, amount - commissionAmount);
+      gross = amount;
+    } else {
+      // Modo compatibilidad: payload explícito
+      const pidRaw = Number(provider_id);
+      const grossRaw = Number(amount_provider) + Number(commission_amount);
+      if (!Number.isFinite(pidRaw) || pidRaw <= 0) return res.status(400).json({ success: false, error: 'provider_id inválido' });
+      if (!Number.isFinite(grossRaw) || grossRaw <= 0) return res.status(400).json({ success: false, error: 'monto inválido' });
+      pid = pidRaw;
+      gross = Math.round(grossRaw);
+      providerAmount = Math.round(Number(amount_provider));
+      commissionAmount = Math.round(Number(commission_amount));
     }
 
     // Obtener codigo secundario del proveedor
@@ -61,8 +102,8 @@ router.post('/tbk/mall/transactions', authenticateToken, async (req: Request, re
       session_id: client_reference || `sess-${user.id}-${Date.now()}`,
       return_url: requireEnv('TBK_RETURN_URL'),
       details: [
-        { amount: Math.round(Number(amount_provider)), commerce_code: String(prov.tbk_secondary_code), buy_order: detailProvOrder },
-        { amount: Math.round(Number(commission_amount)), commerce_code: String(mallCode), buy_order: detailMallOrder }
+        { amount: Math.round(providerAmount), commerce_code: String(prov.tbk_secondary_code), buy_order: detailProvOrder },
+        { amount: Math.round(commissionAmount), commerce_code: String(mallCode), buy_order: detailMallOrder }
       ]
     };
 
@@ -74,9 +115,9 @@ router.post('/tbk/mall/transactions', authenticateToken, async (req: Request, re
 
     // Persistencia mínima de intento
     await pool.execute(
-      `INSERT INTO payments (client_id, provider_id, amount, commission_amount, provider_amount, currency, payment_method, status, gateway, mall_commerce_code, secondary_commerce_code, tbk_buy_order_mall, tbk_buy_order_secondary, tbk_token)
-       VALUES (?, ?, ?, ?, ?, 'CLP', 'card', 'pending', 'tbk', ?, ?, ?, ?, ?)`,
-      [user.id, pid, sum, Math.round(Number(commission_amount)), Math.round(Number(amount_provider)), mallCode, prov.tbk_secondary_code, detailMallOrder, detailProvOrder, data?.token || null]
+      `INSERT INTO payments (appointment_id, client_id, provider_id, amount, commission_amount, provider_amount, currency, payment_method, status, gateway, mall_commerce_code, secondary_commerce_code, tbk_buy_order_mall, tbk_buy_order_secondary, tbk_token)
+       VALUES (?, ?, ?, ?, ?, ?, 'CLP', 'card', 'pending', 'tbk', ?, ?, ?, ?, ?)`,
+      [appointment_id || null, user.id, pid, sum, Math.round(commissionAmount), Math.round(providerAmount), mallCode, prov.tbk_secondary_code, detailMallOrder, detailProvOrder, data?.token || null]
     );
 
     return res.status(201).json({ success: true, token: data?.token, url: data?.url, buy_order: buyOrder });
