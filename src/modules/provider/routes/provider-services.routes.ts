@@ -114,20 +114,26 @@ export class ProviderServicesRoutes {
 
         // Validar categoría: debe existir en service_categories o proveer custom_category
         let categoryIdToUse: number | null = null;
-        if (category_id !== undefined && category_id !== null && String(category_id).trim() !== '') {
+        const hasCategoryId = (category_id !== undefined && category_id !== null && String(category_id).trim() !== '');
+        if (hasCategoryId) {
           const categoryIdNum = Number(category_id);
           if (!Number.isFinite(categoryIdNum)) {
             console.warn('[PROVIDER_SERVICES][VALIDATION] category_id no numérico', { category_id });
             return res.status(400).json({ success: false, error: 'category_id inválido' });
           }
-          const [catRows] = await pool.query('SELECT id FROM service_categories WHERE id = ? LIMIT 1', [categoryIdNum]);
-          if ((catRows as any[]).length === 0) {
-            console.warn('[PROVIDER_SERVICES][VALIDATION] category_id no existe en service_categories', { category_id: categoryIdNum });
-            return res.status(400).json({ success: false, error: 'La categoría seleccionada no existe' });
+          if (categoryIdNum > 0) {
+            const [catRows] = await pool.query('SELECT id FROM service_categories WHERE id = ? LIMIT 1', [categoryIdNum]);
+            if ((catRows as any[]).length === 0) {
+              console.warn('[PROVIDER_SERVICES][VALIDATION] category_id no existe en service_categories', { category_id: categoryIdNum });
+              return res.status(400).json({ success: false, error: 'La categoría seleccionada no existe' });
+            }
+            categoryIdToUse = categoryIdNum;
+          } else {
+            console.warn('[PROVIDER_SERVICES][VALIDATION] category_id <= 0, se ignorará y se usará custom_category si existe', { category_id: categoryIdNum });
           }
-          categoryIdToUse = categoryIdNum;
-        } else if (!normalizedCustomCategory) {
-          console.warn('[PROVIDER_SERVICES][VALIDATION] Sin category_id y sin custom_category', {
+        }
+        if (!categoryIdToUse && !normalizedCustomCategory) {
+          console.warn('[PROVIDER_SERVICES][VALIDATION] Sin category_id válido (>0) y sin custom_category', {
             category_id,
             normalizedCustomCategory
           });
