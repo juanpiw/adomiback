@@ -377,15 +377,22 @@ function buildRouter(): Router {
                 (SELECT name FROM users WHERE id = a.provider_id) AS provider_name,
                 (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
                 a.price,
-                (SELECT p.status FROM payments p WHERE p.appointment_id = a.id ORDER BY p.id DESC LIMIT 1) AS payment_status
+                (SELECT p.status FROM payments p WHERE p.appointment_id = a.id ORDER BY p.id DESC LIMIT 1) AS payment_status,
+                pp.profile_photo_url AS provider_avatar_url
          FROM appointments a
+         LEFT JOIN provider_profiles pp ON pp.provider_id = a.provider_id
          WHERE a.client_id = ?
          ORDER BY a.\`date\` ASC, a.\`start_time\` ASC`,
         [clientId]
       );
-      Logger.info(MODULE, `Client appointments loaded: ${(rows as any[]).length} appointments`, { sample: (rows as any[])[0] });
-      console.log('[BACKEND] Sample appointment data:', (rows as any[])[0] ? { id: (rows as any[])[0].id, price: (rows as any[])[0].price, service_name: (rows as any[])[0].service_name } : 'No appointments');
-      return res.json({ success: true, appointments: rows });
+      const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
+      const withAvatars = (rows as any[]).map(r => ({
+        ...r,
+        provider_avatar_url: r.provider_avatar_url ? `${publicBase}${r.provider_avatar_url}` : null
+      }));
+      Logger.info(MODULE, `Client appointments loaded: ${(withAvatars as any[]).length} appointments`, { sample: (withAvatars as any[])[0] });
+      console.log('[BACKEND] Sample appointment data:', (withAvatars as any[])[0] ? { id: (withAvatars as any[])[0].id, price: (withAvatars as any[])[0].price, service_name: (withAvatars as any[])[0].service_name } : 'No appointments');
+      return res.json({ success: true, appointments: withAvatars });
     } catch (err) {
       Logger.error(MODULE, 'Error listing client appointments', err as any);
       return res.status(500).json({ success: false, error: 'Error al listar citas del cliente' });

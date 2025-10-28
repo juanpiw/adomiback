@@ -166,10 +166,24 @@ router.post('/tbk/mall/commit', async (req: Request, res: Response) => {
 
     const { data } = await axios.put(`${getTbkBase()}/rswebpaytransaction/api/webpay/v1.2/transactions/${token}`, {}, { headers: getTbkHeaders() });
 
-    // Persistir autorizaciones por detail
+    // Persistir autorizaciones por detail + marcar pago en cita
     const pool = DatabaseConnection.getPool();
     const status = String(data?.status || '').toLowerCase().includes('authorized') ? 'completed' : 'failed';
-    await pool.execute('UPDATE payments SET status = ?, tbk_authorization_code = ?, updated_at = CURRENT_TIMESTAMP WHERE tbk_token = ?', [status, String(data?.authorization_code || ''), token]);
+
+    // Obtener pago para conocer la cita
+    const [[paymentRow]]: any = await pool.query('SELECT id, appointment_id FROM payments WHERE tbk_token = ? LIMIT 1', [token]);
+    await pool.execute(
+      'UPDATE payments SET status = ?, paid_at = CASE WHEN ? = "completed" THEN CURRENT_TIMESTAMP ELSE paid_at END, tbk_authorization_code = ?, updated_at = CURRENT_TIMESTAMP WHERE tbk_token = ?',
+      [status, status, String(data?.authorization_code || ''), token]
+    );
+
+    if (paymentRow?.appointment_id && status === 'completed') {
+      try {
+        await pool.execute('UPDATE appointments SET payment_status = "paid", updated_at = CURRENT_TIMESTAMP WHERE id = ?', [paymentRow.appointment_id]);
+      } catch (e) {
+        Logger.warn(MODULE, 'Unable to update appointment payment_status', e as any);
+      }
+    }
 
     return res.json({ success: true, commit: data });
   } catch (err: any) {
