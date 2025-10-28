@@ -162,7 +162,11 @@ export class ClientSearchRoutes {
         const [rows] = await pool.execute(query, params);
         
         // Obtener servicios para cada profesional
-        const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || 'http://localhost:3000';
+        // Base pública para construir URLs absolutas de imágenes
+        // Preferir PUBLIC_BASE_URL; si no existe, usar host del request (soporta HTTPS y dominios en prod)
+        const publicBase = process.env.PUBLIC_BASE_URL 
+          || process.env.API_BASE_URL 
+          || `${req.protocol}://${req.get('host')}`;
         const providers = await Promise.all((rows as any[]).map(async (provider) => {
           const [servicesRows] = await pool.execute(
             `SELECT 

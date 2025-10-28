@@ -154,6 +154,7 @@ function buildRouter(): Router {
         [user.id, date]
       );
       Logger.info(MODULE, `📅 Citas retornadas: ${(rows as any[]).length}`, { sample: (rows as any[])[0] });
+      res.setHeader('Cache-Control', 'no-store');
       return res.json({ success: true, appointments: rows });
     } catch (err) {
       Logger.error(MODULE, 'Error listing appointments by day', err as any);
@@ -1369,6 +1370,7 @@ function buildRouter(): Router {
       console.log('[APPOINTMENTS] 📋 Citas confirmadas sin pagar encontradas:', (rows as any[]).length);
       Logger.info(MODULE, `✅ ${(rows as any[]).length} citas confirmadas sin pagar encontradas`);
       
+      res.setHeader('Cache-Control', 'no-store');
       return res.json({ 
         success: true, 
         appointments: rows 
@@ -1416,6 +1418,7 @@ function buildRouter(): Router {
       console.log('[APPOINTMENTS] 📅 Próxima cita encontrada:', nextAppointment ? nextAppointment.id : 'ninguna');
       Logger.info(MODULE, `✅ Próxima cita encontrada: ${nextAppointment ? nextAppointment.id : 'ninguna'}`);
       
+      res.setHeader('Cache-Control', 'no-store');
       return res.json({ 
         success: true, 
         appointment: nextAppointment 
