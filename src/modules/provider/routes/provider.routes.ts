@@ -1,30 +1,8 @@
 import { Router, Request, Response } from 'express';
 import DatabaseConnection from '../../../shared/database/connection';
-import { JWTUtil } from '../../../shared/utils/jwt.util';
-import { requireRole } from '../../../shared/middleware/auth.middleware';
+import { authenticateToken, requireRole, AuthUser } from '../../../shared/middleware/auth.middleware';
 
-interface AuthUser {
-  id: number;
-  email: string;
-  role: 'client' | 'provider';
-}
-
-function authenticateToken(req: Request, res: Response, next: () => void) {
-  const token = JWTUtil.extractTokenFromHeader(req.headers.authorization);
-  if (!token) {
-    return res.status(401).json({ success: false, error: 'Unauthorized' });
-  }
-  const payload = JWTUtil.verifyAccessToken(token);
-  if (!payload) {
-    return res.status(401).json({ success: false, error: 'Invalid token' });
-  }
-  (req as any).user = {
-    id: payload.userId,
-    email: payload.email,
-    role: payload.role
-  } as AuthUser;
-  next();
-}
+// Use shared authenticateToken which re-hydrates role from DB
 
 export class ProviderRoutes {
   private router: Router;

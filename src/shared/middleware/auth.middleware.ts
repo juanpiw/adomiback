@@ -5,6 +5,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { JWTUtil } from '../utils/jwt.util';
+import DatabaseConnection from '../database/connection';
 
 export interface AuthUser {
   id: number;
@@ -28,14 +29,30 @@ export function authenticateToken(req: Request, res: Response, next: NextFunctio
     return res.status(401).json({ success: false, error: 'Invalid or expired token' });
   }
 
-  // Agregar usuario al request
-  (req as any).user = {
-    id: payload.userId,
-    email: payload.email,
-    role: payload.role
-  } as AuthUser;
+  // Agregar usuario al request, hidratando el rol desde la BD para evitar obsolescencia del JWT
+  (async () => {
+    let resolvedRole: 'client' | 'provider' = payload.role;
+    try {
+      const pool = DatabaseConnection.getPool();
+      if (pool) {
+        const [rows]: any = await pool.query('SELECT role FROM users WHERE id = ? LIMIT 1', [payload.userId]);
+        const dbRole = rows?.[0]?.role as 'client' | 'provider' | undefined;
+        if (dbRole === 'client' || dbRole === 'provider') {
+          resolvedRole = dbRole;
+        }
+      }
+    } catch {
+      // En caso de fallo de BD, continuamos con el rol del token
+    }
 
-  next();
+    (req as any).user = {
+      id: payload.userId,
+      email: payload.email,
+      role: resolvedRole
+    } as AuthUser;
+
+    next();
+  })();
 }
 
 /**

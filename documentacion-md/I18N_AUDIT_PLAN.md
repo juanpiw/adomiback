@@ -149,3 +149,4 @@ No alcance (fase 1): rutas localizadas (URLs con `/en/`), traducción de datos i
 7) QA lingüística y visual; toggle en producción.
 
 
+
