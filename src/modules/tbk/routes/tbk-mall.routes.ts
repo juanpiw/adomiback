@@ -97,14 +97,23 @@ router.post('/tbk/mall/transactions', authenticateToken, async (req: Request, re
     const detailProvOrder = `ord-prov-${Date.now()}-${pid}`;
     const detailMallOrder = `ord-mall-${Date.now()}-${user.id}`;
 
+    const platformChildCode = (process.env.TBK_PLATFORM_CHILD_CODE || '').trim();
+
+    // Armar details: si tenemos comercio hijo de plataforma y hay comisión > 0, dividimos en 2 detalles.
+    // Si no, enviamos un solo detail al hijo del proveedor por el monto total (gross).
+    const details: any[] = [];
+    if (Number(commissionAmount) > 0 && platformChildCode) {
+      details.push({ amount: Math.round(providerAmount), commerce_code: String(prov.tbk_secondary_code), buy_order: detailProvOrder });
+      details.push({ amount: Math.round(commissionAmount), commerce_code: String(platformChildCode), buy_order: detailMallOrder });
+    } else {
+      details.push({ amount: Math.round(gross), commerce_code: String(prov.tbk_secondary_code), buy_order: detailProvOrder });
+    }
+
     const payload = {
       buy_order: buyOrder,
       session_id: client_reference || `sess-${user.id}-${Date.now()}`,
       return_url: requireEnv('TBK_RETURN_URL'),
-      details: [
-        { amount: Math.round(providerAmount), commerce_code: String(prov.tbk_secondary_code), buy_order: detailProvOrder },
-        { amount: Math.round(commissionAmount), commerce_code: String(mallCode), buy_order: detailMallOrder }
-      ]
+      details
     };
 
     // Validación suma
@@ -114,10 +123,13 @@ router.post('/tbk/mall/transactions', authenticateToken, async (req: Request, re
     const { data } = await axios.post(`${getTbkBase()}/rswebpaytransaction/api/webpay/v1.2/transactions`, payload, { headers: getTbkHeaders() });
 
     // Persistencia mínima de intento
+    const usedMallCommerceCode = (Number(commissionAmount) > 0 && platformChildCode) ? platformChildCode : null;
+    const usedMallBuyOrder = (Number(commissionAmount) > 0 && platformChildCode) ? detailMallOrder : null;
+
     await pool.execute(
       `INSERT INTO payments (appointment_id, client_id, provider_id, amount, commission_amount, provider_amount, currency, payment_method, status, gateway, mall_commerce_code, secondary_commerce_code, tbk_buy_order_mall, tbk_buy_order_secondary, tbk_token)
        VALUES (?, ?, ?, ?, ?, ?, 'CLP', 'card', 'pending', 'tbk', ?, ?, ?, ?, ?)`,
-      [appointment_id || null, user.id, pid, sum, Math.round(commissionAmount), Math.round(providerAmount), mallCode, prov.tbk_secondary_code, detailMallOrder, detailProvOrder, data?.token || null]
+      [appointment_id || null, user.id, pid, sum, Math.round(commissionAmount), Math.round(providerAmount), usedMallCommerceCode, prov.tbk_secondary_code, usedMallBuyOrder, detailProvOrder, data?.token || null]
     );
 
     return res.status(201).json({ success: true, token: data?.token, url: data?.url, buy_order: buyOrder });

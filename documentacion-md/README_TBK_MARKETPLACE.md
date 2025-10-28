@@ -156,6 +156,7 @@ TBK_API_KEY_SECRET=...
 TBK_BASE_URL=https://webpay3gint.transbank.cl   # integración
 TBK_RETURN_URL=https://app.adomiapp.cl/tbk/retorno
 TBK_FINAL_URL=https://app.adomiapp.cl/tbk/final
+TBK_PLATFORM_CHILD_CODE=5970ZZZZZZZZ  # comercio hijo de la plataforma para la comisión
 ```
 
 Para Comercios Secundarios (si usan credenciales distintas):
@@ -377,6 +378,7 @@ Feature flag para seleccionar gateway (tbk vs stripe) por país/proveedor.
   - `TBK_API_KEY_ID=597055555535`
   - `TBK_API_KEY_SECRET=579B532A7440BB0C9079DED94D31EA1615BACEB56610332264630D42D0A36B1C`
   - `TBK_RETURN_URL=https://adomiapp.com/tbk/return`
+  - `TBK_PLATFORM_CHILD_CODE=597055555537`
   - `PUBLIC_BASE_URL=https://adomi.impactrenderstudio.com`
 
 - BD (aplicado):
@@ -396,7 +398,8 @@ Feature flag para seleccionar gateway (tbk vs stripe) por país/proveedor.
   - `base = IVA > 0 ? round(total / (1 + IVA/100)) : total`.
   - `commission = round(base × commissionRate/100)`.
   - `providerAmount = total − commission`.
-  - `details = [ { amount: providerAmount, commerce_code: tbk_secondary_code }, { amount: commission, commerce_code: TBK_MALL_COMMERCE_CODE } ]`.
+  - `details = [ { amount: providerAmount, commerce_code: tbk_secondary_code }, { amount: commission, commerce_code: TBK_PLATFORM_CHILD_CODE } ]`.
+  - Si no hay `TBK_PLATFORM_CHILD_CODE` o la comisión es 0, se envía un solo `detail` al `tbk_secondary_code` del proveedor por el total.
 
 - Frontend (cliente):
   - “Mis Reservas” → botón Pagar llama `POST /tbk/mall/transactions` con `{ appointment_id }` y redirige a la `url` de TBK.
@@ -412,3 +415,24 @@ Feature flag para seleccionar gateway (tbk vs stripe) por país/proveedor.
 - Producción (cuando TBK apruebe):
   - Cambiar `TBK_BASE_URL=https://webpay3g.transbank.cl` y usar `TBK_MALL_COMMERCE_CODE`, `TBK_API_KEY_ID/SECRET` productivos entregados por Transbank.
   - Registrar `TBK_RETURN_URL` en la configuración del comercio y validar con una venta real de $50 (requisito de TBK).
+
+
+
+  n el backend, el split se arma al crear la transacción TBK Mall (POST /tbk/mall/transactions) así:
+Se recibe appointment_id.
+Se lee el precio de la cita y los parámetros de platform_settings:
+default_tax_rate (IVA, p.ej. 19)
+default_commission_rate (p.ej. 15)
+Se calcula:
+base = IVA > 0 ? round(total/(1+IVA/100)) : total
+comisión = round(base × comisión%)
+netoProveedor = total − comisión
+Se construye la transacción Mall con 2 detalles:
+detalle 1 → commerce_code = tbk_secondary_code del proveedor, amount = netoProveedor
+detalle 2 → commerce_code = TBK_PLATFORM_CHILD_CODE, amount = comisión
+Se inserta un registro en payments con: amount total, commission_amount, provider_amount, gateway='tbk', buy_orders, tbk_token, y status ‘pending’.
+Al volver de TBK, el front llama POST /tbk/mall/commit con token_ws. El backend confirma y actualiza payments.status (pasa a ‘completed’ si autorizado).
+Configuración dinámica:
+Cambias comisión/IVA en platform_settings sin tocar código.
+Cada proveedor debe tener su tbk_secondary_code activo para recibir su tramo del split.
+A futuro se puede extender a comisión por proveedor o por servicio (nueva tabla o columnas específicas) y el cálculo se ajusta antes de armar los dos detalles.
