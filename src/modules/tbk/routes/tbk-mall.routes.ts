@@ -207,6 +207,20 @@ router.post('/tbk/return', express.urlencoded({ extended: false }), async (req: 
   }
 });
 
+// Soportar retornos vía GET (algunos navegadores o integraciones envían token_ws por query)
+router.get('/tbk/return', async (req: Request, res: Response) => {
+  try {
+    const token = String(req.query?.token_ws || '').trim();
+    const publicBase = process.env.FRONTEND_BASE_URL || process.env.PUBLIC_BASE_URL || '';
+    const target = token ? `${publicBase}/tbk/return?token_ws=${encodeURIComponent(token)}` : `${publicBase}/tbk/return`;
+    Logger.info(MODULE, `TBK return GET bridge redirect -> ${target}`);
+    return res.redirect(302, target);
+  } catch (e) {
+    Logger.warn(MODULE, 'TBK return GET bridge error', e as any);
+    return res.redirect(302, (process.env.FRONTEND_BASE_URL || '/') + '/tbk/return');
+  }
+});
+
 // GET /tbk/mall/status/:token
 router.get('/tbk/mall/status/:token', authenticateToken, async (req: Request, res: Response) => {
   try {
