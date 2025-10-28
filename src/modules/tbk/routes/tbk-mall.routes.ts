@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import express, { Router, Request, Response } from 'express';
 import { authenticateToken, AuthUser } from '../../../shared/middleware/auth.middleware';
 import DatabaseConnection from '../../../shared/database/connection';
 import axios from 'axios';
@@ -176,6 +176,20 @@ router.post('/tbk/mall/commit', async (req: Request, res: Response) => {
     Logger.error(MODULE, 'Commit mall tx error', err);
     const msg = err?.response?.data || err?.message || 'error';
     return res.status(500).json({ success: false, error: 'Error confirmando transacción TBK', details: msg });
+  }
+});
+
+// Bridge de retorno TBK: recibe POST con token_ws y redirige al frontend con query param
+router.post('/tbk/return', express.urlencoded({ extended: false }), async (req: Request, res: Response) => {
+  try {
+    const token = String((req as any).body?.token_ws || '').trim();
+    const publicBase = process.env.FRONTEND_BASE_URL || process.env.PUBLIC_BASE_URL || '';
+    const target = token ? `${publicBase}/tbk/return?token_ws=${encodeURIComponent(token)}` : `${publicBase}/tbk/return`;
+    Logger.info(MODULE, `TBK return bridge redirect -> ${target}`);
+    return res.redirect(302, target);
+  } catch (e) {
+    Logger.warn(MODULE, 'TBK return bridge error', e as any);
+    return res.redirect(302, (process.env.FRONTEND_BASE_URL || '/') + '/tbk/return');
   }
 });
 

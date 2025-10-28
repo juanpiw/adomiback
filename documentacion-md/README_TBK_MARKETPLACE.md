@@ -377,7 +377,8 @@ Feature flag para seleccionar gateway (tbk vs stripe) por país/proveedor.
   - `TBK_MALL_COMMERCE_CODE=597055555535`
   - `TBK_API_KEY_ID=597055555535`
   - `TBK_API_KEY_SECRET=579B532A7440BB0C9079DED94D31EA1615BACEB56610332264630D42D0A36B1C`
-  - `TBK_RETURN_URL=https://adomiapp.com/tbk/return`
+  - `TBK_RETURN_URL=https://adomi.impactrenderstudio.com/tbk/return`  # apuntar al backend (bridge)
+  - `TBK_RETURN_URL=https://adomi.impactrenderstudio.com/tbk/return`
   - `TBK_PLATFORM_CHILD_CODE=597055555537`
   - `PUBLIC_BASE_URL=https://adomi.impactrenderstudio.com`
 
