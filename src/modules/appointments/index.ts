@@ -378,9 +378,10 @@ function buildRouter(): Router {
                 (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
                 a.price,
                 (SELECT p.status FROM payments p WHERE p.appointment_id = a.id ORDER BY p.id DESC LIMIT 1) AS payment_status,
-                pp.profile_photo_url AS provider_avatar_url
+                COALESCE(pp.profile_photo_url, cpp.profile_photo_url) AS provider_avatar_url
          FROM appointments a
          LEFT JOIN provider_profiles pp ON pp.provider_id = a.provider_id
+         LEFT JOIN client_profiles cpp ON cpp.client_id = a.provider_id
          WHERE a.client_id = ?
          ORDER BY a.\`date\` ASC, a.\`start_time\` ASC`,
         [clientId]
