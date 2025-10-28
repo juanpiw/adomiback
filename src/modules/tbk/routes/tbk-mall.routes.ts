@@ -120,7 +120,16 @@ router.post('/tbk/mall/transactions', authenticateToken, async (req: Request, re
     const sum = payload.details.reduce((a: number, d: any) => a + Number(d.amount || 0), 0);
     if (sum <= 0) return res.status(400).json({ success: false, error: 'La suma de detalles debe ser > 0' });
 
-    const { data } = await axios.post(`${getTbkBase()}/rswebpaytransaction/api/webpay/v1.2/transactions`, payload, { headers: getTbkHeaders() });
+    // Logs de diagnóstico (no incluyen secretos)
+    Logger.info(MODULE, `Creating TBK Mall tx | appt=${appointment_id || null} client=${user.id} provider=${pid}`);
+    Logger.info(MODULE, `Amounts | gross=${gross} providerAmount=${providerAmount} commissionAmount=${commissionAmount}`);
+    Logger.info(MODULE, `Codes | provider_child=${prov.tbk_secondary_code} platform_child=${platformChildCode || '(none)'} mall_parent=${mallCode}`);
+    Logger.info(MODULE, `Details | ${JSON.stringify(payload.details)}`);
+    Logger.info(MODULE, `Return URL | ${payload.return_url}`);
+
+    const endpoint = `${getTbkBase()}/rswebpaytransaction/api/webpay/v1.2/transactions`;
+    Logger.info(MODULE, `POST ${endpoint}`);
+    const { data } = await axios.post(endpoint, payload, { headers: getTbkHeaders() });
 
     // Persistencia mínima de intento
     const usedMallCommerceCode = (Number(commissionAmount) > 0 && platformChildCode) ? platformChildCode : null;
@@ -134,8 +143,17 @@ router.post('/tbk/mall/transactions', authenticateToken, async (req: Request, re
 
     return res.status(201).json({ success: true, token: data?.token, url: data?.url, buy_order: buyOrder });
   } catch (err: any) {
-    Logger.error(MODULE, 'Create mall tx error', err);
-    const msg = err?.response?.data || err?.message || 'error';
+    const tbkStatus = err?.response?.status;
+    const tbkData = err?.response?.data;
+    const tbkHeaders = err?.response?.headers;
+    Logger.error(MODULE, 'Create mall tx error', {
+      message: err?.message,
+      tbkStatus,
+      tbkData,
+      // headers pueden ser grandes; no incluyen secretos pero truncamos
+      tbkHeaderKeys: tbkHeaders ? Object.keys(tbkHeaders) : undefined
+    });
+    const msg = tbkData || err?.message || 'error';
     return res.status(500).json({ success: false, error: 'Error creando transacción TBK', details: msg });
   }
 });
