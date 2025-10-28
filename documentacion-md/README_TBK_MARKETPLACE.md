@@ -366,3 +366,49 @@ Manejar rechazos/timeout replicando estado en BD y mostrando mensaje al usuario.
 Seguridad/operación
 Firmas HMAC (Api-Key-Id/Secret), idempotencia con buy_order único por commerce_code.
 Feature flag para seleccionar gateway (tbk vs stripe) por país/proveedor.
+
+---
+
+### 15) Implementado en Adomi (resumen práctico)
+
+- Variables de entorno (INT/CERT de ejemplo ya probadas):
+  - `TBK_BASE_URL=https://webpay3gint.transbank.cl`
+  - `TBK_MALL_COMMERCE_CODE=597055555535`
+  - `TBK_API_KEY_ID=597055555535`
+  - `TBK_API_KEY_SECRET=579B532A7440BB0C9079DED94D31EA1615BACEB56610332264630D42D0A36B1C`
+  - `TBK_RETURN_URL=https://adomiapp.com/tbk/return`
+  - `PUBLIC_BASE_URL=https://adomi.impactrenderstudio.com`
+
+- BD (aplicado):
+  - `users.tbk_secondary_code`, `users.tbk_status`.
+  - `payments.gateway='tbk'`, `tbk_token`, `tbk_buy_order_mall`, `tbk_buy_order_secondary`, `mall_commerce_code`, `secondary_commerce_code`.
+  - Índices de agenda y TBK (mejoran consultas/conciliación).
+  - `platform_settings`: `default_commission_rate`, `default_tax_rate` (usadas para cálculo de split).
+
+- Backend (montado y operativo):
+  - `POST /tbk/mall/transactions`: ahora acepta `{ appointment_id }` (recomendado). Calcula montos (comisión y neto proveedor) leyendo `platform_settings` y `appointments.price`. Genera `details[]` Mall + Secundario y persiste intento en `payments`.
+  - `POST /tbk/mall/commit`: confirma con `token_ws` y actualiza estado/autorizarciones.
+  - `GET /tbk/mall/status/:token`, `POST /tbk/mall/refund` listos.
+  - Onboarding secundarios (`/providers/:id/tbk/secondary/*`) listo; en INT se pueden usar códigos de prueba (p.ej. 597055555536/597055555537) asignados a `users.tbk_secondary_code`.
+
+- Lógica de split (implementación):
+  - `total = appointments.price`.
+  - `base = IVA > 0 ? round(total / (1 + IVA/100)) : total`.
+  - `commission = round(base × commissionRate/100)`.
+  - `providerAmount = total − commission`.
+  - `details = [ { amount: providerAmount, commerce_code: tbk_secondary_code }, { amount: commission, commerce_code: TBK_MALL_COMMERCE_CODE } ]`.
+
+- Frontend (cliente):
+  - “Mis Reservas” → botón Pagar llama `POST /tbk/mall/transactions` con `{ appointment_id }` y redirige a la `url` de TBK.
+  - Ruta de retorno `GET /tbk/return`: lee `token_ws`, llama `POST /tbk/mall/commit` y vuelve a `/client/reservas`.
+
+- Prueba E2E (INT/CERT):
+  1) Asegurar `users.tbk_secondary_code` para el proveedor (en INT: 597055555536/597055555537).
+  2) Crear cita confirmada con `price > 0`.
+  3) En “Mis Reservas” del cliente, presionar “Pagar” → TBK.
+  4) Completar con tarjeta de prueba (VISA 4051 8856 0044 6623, CVV 123, fecha cualquiera).
+  5) Retorno `token_ws` → commit → verificar `payments.status='completed'`, montos `commission_amount` y `provider_amount` correctos.
+
+- Producción (cuando TBK apruebe):
+  - Cambiar `TBK_BASE_URL=https://webpay3g.transbank.cl` y usar `TBK_MALL_COMMERCE_CODE`, `TBK_API_KEY_ID/SECRET` productivos entregados por Transbank.
+  - Registrar `TBK_RETURN_URL` en la configuración del comercio y validar con una venta real de $50 (requisito de TBK).

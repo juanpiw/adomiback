@@ -56,6 +56,11 @@ export function setupAdminModule(app: Express) {
         where.push('p.paid_at BETWEEN ? AND ?');
         params.push(start, end);
       }
+      const gateway = req.query.gateway as string | undefined;
+      if (gateway && ['tbk','stripe','cash'].includes(gateway)) {
+        where.push('p.gateway = ?');
+        params.push(gateway);
+      }
       const releaseStatus = req.query.release_status as string | undefined;
       if (releaseStatus && ['pending','eligible','completed','failed'].includes(releaseStatus)) {
         where.push('p.release_status = ?');
@@ -82,9 +87,16 @@ export function setupAdminModule(app: Express) {
                pr.account_holder,
                pr.account_rut,
                pr.account_type,
-               p.amount, p.commission_amount, p.provider_amount,
+               p.amount, p.tax_amount, p.commission_amount, p.provider_amount,
                p.currency, p.payment_method, p.status, p.paid_at,
                p.release_status,
+               p.gateway,
+               p.mall_commerce_code,
+               p.secondary_commerce_code,
+               p.tbk_buy_order_mall,
+               p.tbk_buy_order_secondary,
+               p.tbk_token,
+               p.tbk_authorization_code,
                p.stripe_payment_intent_id
         FROM payments p
         LEFT JOIN users uc ON uc.id = p.client_id
@@ -263,6 +275,8 @@ export function setupAdminModule(app: Express) {
       const where: string[] = [];
       const params: any[] = [];
       if (start && end) { where.push('p.paid_at BETWEEN ? AND ?'); params.push(start, end); }
+      const gateway = req.query.gateway as string | undefined;
+      if (gateway && ['tbk','stripe','cash'].includes(gateway)) { where.push('p.gateway = ?'); params.push(gateway); }
       const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
       const [rows]: any = await pool.query(
         `SELECT COUNT(*) AS count,
