@@ -69,8 +69,22 @@ export class ProviderServicesRoutes {
           service_image_url
         } = req.body;
 
+        console.info('[PROVIDER_SERVICES][REQUEST] Payload recibido', {
+          name,
+          description,
+          price,
+          duration_minutes,
+          category_id,
+          custom_category,
+          service_image_url
+        });
+
         // Validaciones
         if (!name || !price || !duration_minutes) {
+          console.warn('[PROVIDER_SERVICES][VALIDATION] Campos faltantes', {
+            hasName: !!name, hasPrice: !!price, hasDuration: !!duration_minutes,
+            body: req.body
+          });
           return res.status(400).json({
             success: false,
             error: 'name, price y duration_minutes son requeridos'
@@ -78,10 +92,12 @@ export class ProviderServicesRoutes {
         }
 
         if (price < 0) {
+          console.warn('[PROVIDER_SERVICES][VALIDATION] Precio negativo', { price });
           return res.status(400).json({ success: false, error: 'El precio debe ser mayor o igual a 0' });
         }
 
         if (duration_minutes < 1 || duration_minutes > 480) {
+          console.warn('[PROVIDER_SERVICES][VALIDATION] Duración fuera de rango', { duration_minutes });
           return res.status(400).json({
             success: false,
             error: 'La duración debe estar entre 1 y 480 minutos'
@@ -101,14 +117,20 @@ export class ProviderServicesRoutes {
         if (category_id !== undefined && category_id !== null && String(category_id).trim() !== '') {
           const categoryIdNum = Number(category_id);
           if (!Number.isFinite(categoryIdNum)) {
+            console.warn('[PROVIDER_SERVICES][VALIDATION] category_id no numérico', { category_id });
             return res.status(400).json({ success: false, error: 'category_id inválido' });
           }
           const [catRows] = await pool.query('SELECT id FROM service_categories WHERE id = ? LIMIT 1', [categoryIdNum]);
           if ((catRows as any[]).length === 0) {
+            console.warn('[PROVIDER_SERVICES][VALIDATION] category_id no existe en service_categories', { category_id: categoryIdNum });
             return res.status(400).json({ success: false, error: 'La categoría seleccionada no existe' });
           }
           categoryIdToUse = categoryIdNum;
         } else if (!normalizedCustomCategory) {
+          console.warn('[PROVIDER_SERVICES][VALIDATION] Sin category_id y sin custom_category', {
+            category_id,
+            normalizedCustomCategory
+          });
           return res.status(400).json({ success: false, error: 'Debes seleccionar una categoría o indicar una categoría personalizada' });
         }
 
