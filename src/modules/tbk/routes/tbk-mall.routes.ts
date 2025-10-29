@@ -182,8 +182,8 @@ router.post('/tbk/mall/commit', async (req: Request, res: Response) => {
     // Obtener pago para conocer la cita
     const [[paymentRow]]: any = await pool.query('SELECT id, appointment_id FROM payments WHERE tbk_token = ? LIMIT 1', [token]);
     await pool.execute(
-      'UPDATE payments SET status = ?, paid_at = CASE WHEN ? = "completed" THEN CURRENT_TIMESTAMP ELSE paid_at END, tbk_authorization_code = ?, updated_at = CURRENT_TIMESTAMP WHERE tbk_token = ?',
-      [status, status, String(data?.authorization_code || ''), token]
+      'UPDATE payments SET status = ?, paid_at = CASE WHEN ? = "completed" THEN CURRENT_TIMESTAMP ELSE paid_at END, updated_at = CURRENT_TIMESTAMP WHERE tbk_token = ?',
+      [status, status, token]
     );
 
     if (paymentRow?.appointment_id && status === 'completed') {
