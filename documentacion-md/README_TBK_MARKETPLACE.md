@@ -437,3 +437,134 @@ Configuración dinámica:
 Cambias comisión/IVA en platform_settings sin tocar código.
 Cada proveedor debe tener su tbk_secondary_code activo para recibir su tramo del split.
 A futuro se puede extender a comisión por proveedor o por servicio (nueva tabla o columnas específicas) y el cálculo se ajusta antes de armar los dos detalles.
+
+
+
+
+
+
+
+Flujo (TBK Mall) en 5 pasos
+1) Cliente paga en TBK → creamos fila en payments (status='pending', gateway='tbk').
+2) TBK “commit” autorizado → payments.status='completed', paid_at=NOW(), guardamos tbk_token y buy_orders; generamos verification_code en appointments.
+3) Cliente ve el código en “Pagadas/Realizadas”.
+4) Proveedor ingresa el código → appointments.status='completed' (servicio verificado).
+5) Conciliación TBK: como TBK paga al comercio hijo, nosotros solo registramos settlement_status='settled' cuando conciliamos (no “pagamos” manualmente).
+Qué debe tener la tabla payments (mínimos y para TBK)
+Identidad y vínculo:
+id, appointment_id, client_id, provider_id
+Montos:
+amount (total cobrado), commission_amount (plataforma), provider_amount (neto proveedor), currency ('CLP')
+tax_amount (opcional; para reportes)
+Método y pasarela:
+payment_method ENUM('card','cash','transfer','wallet') → cómo pagó el cliente
+gateway ENUM('tbk','stripe','cash') → quién procesó
+Estado de cobro:
+status ENUM('pending','completed','failed','refunded'), paid_at DATETIME
+Campos TBK (auditoría/conciliación):
+tbk_token, tbk_buy_order_mall, tbk_buy_order_secondary
+mall_commerce_code (código del padre), secondary_commerce_code (código del hijo)
+tbk_authorization_code (si lo quieres guardar cuando TBK lo devuelve)
+Conciliación/liquidación en la plataforma:
+settlement_channel ENUM('tbk_mall','manual','cash','stripe') DEFAULT 'tbk_mall'
+settlement_status ENUM('not_applicable','scheduled','settled','failed','manual_paid') DEFAULT 'not_applicable'
+settled_at DATETIME, settlement_reference VARCHAR(128)
+Índices útiles:
+(gateway), (paid_at), (status), (settlement_channel, settlement_status, settled_at)
+Tabla appointments (lo necesario para el flujo de verificación)
+status ENUM('scheduled','confirmed','completed','cancelled', ...)
+verification_code (código de 4 dígitos), code_generated_at, verified_at, verified_by_provider_id
+Nota: payment_status es opcional; para TBK podemos derivar del payments.status.
+Qué cambia en el Admin con TBK
+Filas TBK (payment_method='card', gateway='tbk'):
+No “A pagar”. Acción “Conciliar” (settlement_reference y settled_at) cuando ves el abono de TBK.
+Filas cash (payment_method='cash'):
+Sí “A pagar” (o gestionar comisión en provider_commission_debts).
+Resúmenes salen de payments (sumas de amount, commission_amount, provider_amount); impuestos si usas tax_amount.
+Estados visibles en la UI
+Tras commit TBK: cita “Pagada” con código (appointments.verification_code).
+Tras verificación de código: cita “Completado”.
+Admin: TBK aparece “pending” hasta que concilias → settlement_status='settled' (no hay pago manual).
+
+
+
+Qué es conciliación
+Comparar lo que tu sistema dice que se cobró (payments) con lo que el adquirente/banco efectivamente depositó (TBK Mall a comercios hijo) y con lo que ves en el extracto bancario. Objetivo: asegurar que cada pago “autorizado” tiene su depósito y registrar la evidencia.
+Qué se concilia (fuentes)
+Interno: payments (amount, commission_amount, provider_amount, paid_at).
+Adquirente: TBK (token, buy_orders por detail, commerce_code, status, response_code, monto por detail, fecha de liquidación).
+Banco: abono a la cuenta del comercio hijo (monto y referencia bancaria).
+Identificadores para matchear
+Por transacción: tbk_token (único), buy_order_mall y buy_order_secondary.
+Por comercio: commerce_code (mall y secundario).
+Por fecha: paid_at (interno), fecha commit TBK, fecha liquidación TBK/banco.
+Qué se valida
+Estado: AUTORIZADO en TBK y status='completed' en payments.
+Montos: suma de details TBK = amount (interno). En Mall: detail secundario (proveedor) y detail mall (comisión) suman el total.
+Commerce codes correctos (child vs mall).
+Depósito TBK al hijo (cuando sea visible): que el neto del hijo coincida con el detail del proveedor.
+Estados de conciliación (propuestos)
+not_applicable: no requiere conciliación (p.ej., cash).
+scheduled: TBK informó liquidación programada.
+settled: conciliado (visto en reporte/abono bancario).
+failed: inconsistencia (monto/estado/código).
+manual_paid: registrado manualmente (sólo si aplica un ajuste).
+Evidencias que se guardan
+settlement_reference: número/leyenda interna (p.ej., id de remesa, nro de abono).
+settled_at: fecha/hora concilidada.
+Opcional: snapshot TBK (JSON resumido) y observaciones.
+Cadena de control (auditoría)
+Cada payment conserva token, buy_orders y codes; la conciliación agrega settlement_* y, si hubo disputa, comentario/bitácora.
+Reportes: pendientes de conciliación por antigüedad; conciliados por período; diferencias.
+Automatización recomendada
+Job diario: consulta estado TBK de tokens recientes, mapea a settled/scheduled/failed y sugiere conciliaciones.
+Tolerancias: rangos de fechas (T+1/T+2); alertas si pasa de N días sin conciliar.
+IVA en conciliación
+Mall: el proveedor factura al cliente; la plataforma sólo factura su comisión (IVA sobre comisión). La conciliación no altera IVA; sirve para cuadrar ingresos vs comisiones y validar que TBK liquida al hijo.
+¿Cuándo marcar “settled”?
+Cuando TBK confirma liquidación y/o ves el abono en el extracto del hijo, y el monto coincide con el detail del proveedor.
+¿Qué hacer ante diferencias?
+Reabrir como failed; reintentar consulta TBK; si persiste, levantar ticket con TBK (pasando token/buy_orders) y registrar la evidencia en el payment (nota y, si aplica, documento).
+
+
+
+
+
+
+
+Sí. Propongo añadir un “Onboarding TBK (Webpay Mall)” dentro de dash/ingresos con estado y acciones guiadas.
+Qué verá el proveedor
+Sección: Transbank Webpay Mall
+Estado: none | pending | active | restricted (chip de color)
+Código secundario: 5970XXXXXXXX (si existe)
+Botones:
+Crear comercio secundario (si estado=none)
+Actualizar estado (si estado!=active)
+Ver documentación/ayuda
+Nota: “Con TBK Mall, los abonos van directo a tu comercio secundario. La app solo concilia.”
+Integración (lo que ya tenemos/usar)
+BD: users.tbk_secondary_code, users.tbk_status (OK).
+Backend TBK Onboarding:
+POST /providers/:id/tbk/secondary/create → crea comercio secundario (guarda tbk_secondary_code, tbk_status='pending')
+GET /providers/:id/tbk/secondary/status → consulta y actualiza tbk_status (active|restricted)
+DELETE /providers/:id/tbk/secondary → revocar (opcional)
+Frontend Servicio (provider-profile.service.ts o payments/tbk.service):
+getTbkOnboarding(): GET /providers/:id/tbk/secondary/status
+createTbkSecondary(): POST /providers/:id/tbk/secondary/create
+revokeTbkSecondary(): DELETE /providers/:id/tbk/secondary
+UX del flujo
+Si estado=none: mostrar CTA “Crear comercio secundario” + texto explicativo.
+Tras crear: mostrar “En revisión por TBK” (pending) y botón “Actualizar estado”.
+Cuando active: mostrar código, chip “Activo” y texto “Tus pagos Mall se abonarán a este código”.
+Si restricted: mostrar advertencia y CTA “Contactar soporte”.
+Validaciones
+En cada pago Mall: usar users.tbk_secondary_code; si no existe → bloquear pago y mostrar “Proveedor sin TBK secundario”.
+En “Pagadas/Realizadas”: sin cambios (sigue el flujo de código de verificación).
+Admin: no mostrar “A pagar” para TBK (solo “Conciliar”); cash sigue con “A pagar”.
+Campos de respaldo/conciliación (ya cubiertos o recomendados)
+payments: gateway='tbk', tbk_token, tbk_buy_order_mall, tbk_buy_order_secondary, mall_commerce_code, secondary_commerce_code, tbk_authorization_code, settlement_status/reference (para conciliación).
+Aceptación
+Un proveedor sin TBK ve botón “Crear” y tras pulsar queda en pending o active según TBK INT.
+Un proveedor con TBK activo ve su código y no ve errores al pagar (split hacia su hijo).
+En Admin: TBK aparece con status ‘pending’/‘settled’ según conciliación; no se ofrecen pagos manuales para TBK.
+Si te parece, implemento la sección en dash/ingresos con esos 3 botones y el estado con chips, consumiendo los endpoints existentes.

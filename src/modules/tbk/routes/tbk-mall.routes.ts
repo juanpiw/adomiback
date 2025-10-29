@@ -207,10 +207,14 @@ router.post('/tbk/mall/commit', async (req: Request, res: Response) => {
     );
 
     if (paymentRow?.appointment_id && status === 'completed') {
+      // Intentar marcar pagada (si la columna existe)
       try {
-        // Marcar pagada
         await pool.execute('UPDATE appointments SET payment_status = "paid" WHERE id = ?', [paymentRow.appointment_id]);
-        // Asegurar código de verificación (si aún no existe)
+      } catch (e) {
+        Logger.warn(MODULE, 'payment_status column may not exist; skipping set paid', e as any);
+      }
+      // Asegurar código de verificación (si aún no existe), independientemente del pago_status
+      try {
         const [[appt]]: any = await pool.query('SELECT verification_code FROM appointments WHERE id = ? LIMIT 1', [paymentRow.appointment_id]);
         let code: string = String(appt?.verification_code || '').trim();
         if (!code) {
@@ -219,7 +223,7 @@ router.post('/tbk/mall/commit', async (req: Request, res: Response) => {
           Logger.info(MODULE, `Generated verification code for appt ${paymentRow.appointment_id}`);
         }
       } catch (e) {
-        Logger.warn(MODULE, 'Unable to update appointment payment_status', e as any);
+        Logger.warn(MODULE, 'Unable to ensure verification_code', e as any);
       }
     }
 
