@@ -1,6 +1,7 @@
 import DatabaseConnection from '../../shared/database/connection';
 import { Logger } from '../../shared/utils/logger.util';
 import { PushService } from '../notifications/services/push.service';
+import { loadCashSettings } from './utils/cash-settings.util';
 
 const MODULE = 'CLOSURE_CRON';
 
@@ -58,6 +59,7 @@ async function activatePendingClose(offsetMinutes: number) {
 
 async function autoResolveClose() {
   const pool = DatabaseConnection.getPool();
+  const settings = await loadCashSettings(pool, MODULE);
   const [rows]: any = await pool.query(
     `SELECT id, provider_id, client_id, price, closure_provider_action, closure_client_action
        FROM appointments
@@ -86,24 +88,13 @@ async function autoResolveClose() {
       // Si cliente dijo OK o no hay acciones (gatillo), generar payment cash + deuda
       if (clientAction === 'ok' || providerAction === 'code_entered' || (providerAction === 'none' && clientAction === 'none')) {
         const amount = Number(a.price || 0);
-        // Cargar settings
-        let taxRate = 19.0, commissionRate = 15.0, dueDays = 3, cashCap = 150000;
-        try {
-          const [setRows]: any = await pool.query(`SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN ('default_tax_rate','default_commission_rate','cash_commission_due_days','cash_max_amount')`);
-          for (const r of setRows as any[]) {
-            if (r.setting_key === 'default_tax_rate') taxRate = Number(r.setting_value) || taxRate;
-            if (r.setting_key === 'default_commission_rate') commissionRate = Number(r.setting_value) || commissionRate;
-            if (r.setting_key === 'cash_commission_due_days') dueDays = Number(r.setting_value) || dueDays;
-            if (r.setting_key === 'cash_max_amount') cashCap = Number(r.setting_value) || cashCap;
-          }
-        } catch {}
-        if (amount > cashCap) {
+        if (amount > settings.cashCap) {
           await pool.execute(`UPDATE appointments SET closure_state = 'resolved', updated_at = NOW() WHERE id = ?`, [a.id]);
           continue;
         }
-        const priceBase = Number((amount / (1 + taxRate / 100)).toFixed(2));
+        const priceBase = Number((amount / (1 + settings.taxRate / 100)).toFixed(2));
         const taxAmount = Number((amount - priceBase).toFixed(2));
-        const commissionAmount = Number((priceBase * (commissionRate / 100)).toFixed(2));
+        const commissionAmount = Number((priceBase * (settings.commissionRate / 100)).toFixed(2));
         const providerAmount = Number((priceBase - commissionAmount).toFixed(2));
         const [[ids]]: any = await pool.query(`SELECT provider_id, client_id FROM appointments WHERE id = ? LIMIT 1`, [a.id]);
         const providerId = Number(ids?.provider_id || 0);
@@ -118,7 +109,7 @@ async function autoResolveClose() {
           await pool.execute(
             `INSERT INTO provider_commission_debts (provider_id, appointment_id, payment_id, commission_amount, currency, status, due_date, created_at)
              VALUES (?, ?, ?, ?, 'CLP', 'pending', DATE_ADD(NOW(), INTERVAL ? DAY), NOW())`,
-            [providerId, a.id, paymentId, commissionAmount, dueDays]
+            [providerId, a.id, paymentId, commissionAmount, settings.dueDays]
           );
         } catch {}
         await pool.execute(`UPDATE appointments SET closure_state = 'resolved', updated_at = NOW() WHERE id = ?`, [a.id]);

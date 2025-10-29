@@ -11,11 +11,64 @@ import { emitToUser } from '../../shared/realtime/socket';
 import { PushService } from '../notifications/services/push.service';
 import { validateCodeFormat, compareVerificationCodes, sanitizeCode, generateVerificationCode } from '../../shared/utils/verification-code.util';
 import { cashClosureGate } from '../../shared/middleware/cash-closure-gate';
+import { buildCashCapErrorMessage, loadCashSettings } from './utils/cash-settings.util';
 
 const MODULE = 'APPOINTMENTS';
 
+let ensureCashSchemaPromise: Promise<void> | null = null;
+
+async function ensureCashSchema(): Promise<void> {
+  if (ensureCashSchemaPromise) {
+    return ensureCashSchemaPromise;
+  }
+
+  ensureCashSchemaPromise = (async () => {
+    try {
+      const pool = DatabaseConnection.getPool();
+      const statements: string[] = [
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS closure_state ENUM('none','pending_close','resolved','in_review') NOT NULL DEFAULT 'none' AFTER status",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS closure_due_at DATETIME(6) NULL AFTER closure_state",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS closure_provider_action ENUM('none','code_entered','no_show','issue') NOT NULL DEFAULT 'none' AFTER closure_due_at",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS closure_client_action ENUM('none','ok','no_show','issue') NOT NULL DEFAULT 'none' AFTER closure_provider_action",
+        'ALTER TABLE appointments ADD COLUMN IF NOT EXISTS closure_notes JSON NULL AFTER closure_client_action',
+        'ALTER TABLE appointments ADD COLUMN IF NOT EXISTS cash_verified_at DATETIME(6) NULL AFTER closure_notes',
+        'ALTER TABLE appointments ADD COLUMN IF NOT EXISTS verification_code VARCHAR(8) NULL',
+        'ALTER TABLE appointments ADD COLUMN IF NOT EXISTS code_generated_at DATETIME(6) NULL',
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS payment_method ENUM('card','cash') NULL"
+      ];
+
+      for (const sql of statements) {
+        await pool.query(sql);
+      }
+
+      const indexStatements: string[] = [
+        'CREATE INDEX IF NOT EXISTS idx_appointments_closure_state ON appointments (closure_state)',
+        'CREATE INDEX IF NOT EXISTS idx_appointments_closure_due_at ON appointments (closure_due_at)'
+      ];
+
+      for (const sql of indexStatements) {
+        await pool.query(sql);
+      }
+
+      await pool.query(
+        `INSERT INTO platform_settings (setting_key, setting_value, setting_type, description)
+         SELECT 'cash_max_amount', '150000', 'number', 'Tope máximo por cita para pagos en efectivo (CLP)'
+         WHERE NOT EXISTS (SELECT 1 FROM platform_settings WHERE setting_key = 'cash_max_amount')`
+      );
+
+      Logger.info(MODULE, '[CASH_SCHEMA] Columnas cash/closure verificadas');
+    } catch (error) {
+      Logger.error(MODULE, '[CASH_SCHEMA] Error garantizando columnas cash/closure', error);
+    }
+  })();
+
+  return ensureCashSchemaPromise;
+}
+
 function buildRouter(): Router {
   const router = Router();
+
+  void ensureCashSchema();
 
   // POST /appointments - crear cita
   router.post('/appointments', authenticateToken, async (req: Request, res: Response) => {
@@ -501,14 +554,10 @@ function buildRouter(): Router {
       const amount = Number(appt.price || 0);
       if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Precio inválido para la cita' });
 
-      // Tope de efectivo (cash_max_amount)
-      try {
-        const [[cap]]: any = await pool.query(`SELECT setting_value FROM platform_settings WHERE setting_key = 'cash_max_amount' LIMIT 1`);
-        const cashCap = cap ? Number(cap.setting_value) || 150000 : 150000;
-        if (amount > cashCap) {
-          return res.status(400).json({ success: false, error: `Por el momento no podemos procesar pagos en efectivo de $${cashCap.toLocaleString('es-CL')} o más. Por favor, selecciona pago con tarjeta.` });
-        }
-      } catch {}
+      const cashSettings = await loadCashSettings(pool, MODULE);
+      if (amount > cashSettings.cashCap) {
+        return res.status(400).json({ success: false, error: buildCashCapErrorMessage(cashSettings.cashCap), cashCap: cashSettings.cashCap });
+      }
 
       // Evitar duplicados si ya existe payment completed
       const [[existing]]: any = await pool.query(
@@ -518,17 +567,8 @@ function buildRouter(): Router {
       if (existing) return res.status(400).json({ success: false, error: 'El pago ya fue registrado' });
 
       // Obtener tax y comisión desde settings
-      let taxRate = 19.0;
-      let commissionRate = 15.0;
-      try {
-        const [setRows]: any = await pool.query(
-          `SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN ('default_tax_rate','default_commission_rate')`
-        );
-        for (const r of setRows as any[]) {
-          if (r.setting_key === 'default_tax_rate') taxRate = Number(r.setting_value) || taxRate;
-          if (r.setting_key === 'default_commission_rate') commissionRate = Number(r.setting_value) || commissionRate;
-        }
-      } catch {}
+      const taxRate = cashSettings.taxRate;
+      const commissionRate = cashSettings.commissionRate;
 
       const priceBase = Number((amount / (1 + taxRate / 100)).toFixed(2));
       const taxAmount = Number((amount - priceBase).toFixed(2));
@@ -545,17 +585,10 @@ function buildRouter(): Router {
 
       // Registrar deuda de comisión del proveedor (si existe la tabla) con due_date (T + cash_commission_due_days)
       try {
-        let dueDays = 3;
-        try {
-          const [[cfg]]: any = await pool.query(
-            `SELECT setting_value FROM platform_settings WHERE setting_key = 'cash_commission_due_days' LIMIT 1`
-          );
-          if (cfg) dueDays = Number(cfg.setting_value) || dueDays;
-        } catch {}
         await pool.execute(
           `INSERT INTO provider_commission_debts (provider_id, appointment_id, payment_id, commission_amount, currency, status, due_date, created_at)
            VALUES (?, ?, ?, ?, 'CLP', 'pending', DATE_ADD(NOW(), INTERVAL ? DAY), NOW())`,
-          [appt.provider_id, appointmentId, paymentId, commissionAmount, dueDays]
+          [appt.provider_id, appointmentId, paymentId, commissionAmount, cashSettings.dueDays]
         );
       } catch (e) {
         Logger.warn(MODULE, 'No se pudo registrar deuda de comisión (tabla puede no existir aún)');
@@ -563,13 +596,10 @@ function buildRouter(): Router {
 
       // Actualizar appointment para reflejar método de pago
       try {
-        const [colRows] = await pool.query(`SHOW COLUMNS FROM appointments LIKE 'payment_method'`);
-        const hasCol = (colRows as any[]).length > 0;
-        if (!hasCol) {
-          await pool.query(`ALTER TABLE appointments ADD COLUMN payment_method ENUM('card','cash') NULL AFTER status`);
-        }
         await pool.execute(`UPDATE appointments SET payment_method = 'cash', updated_at = NOW() WHERE id = ?`, [appointmentId]);
-      } catch {}
+      } catch (err) {
+        Logger.warn(MODULE, '[CASH] No se pudo actualizar payment_method al registrar cobro', err as any);
+      }
 
       // Notificar a cliente (push + in-app)
       try {
@@ -610,34 +640,10 @@ function buildRouter(): Router {
 
       const amount = Number(appt.price || 0);
       if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Precio inválido para la cita' });
-      // Tope cash
-      try {
-        const [[cap]]: any = await pool.query(`SELECT setting_value FROM platform_settings WHERE setting_key = 'cash_max_amount' LIMIT 1`);
-        const cashCap = cap ? Number(cap.setting_value) || 150000 : 150000;
-        if (amount > cashCap) {
-          return res.status(400).json({ success: false, error: `Por el momento no podemos procesar pagos en efectivo de $${cashCap.toLocaleString('es-CL')} o más. Por favor, selecciona pago con tarjeta.` });
-        }
-      } catch {}
 
-      // Asegurar columnas requeridas (producción puede estar desfasada)
-      try {
-        const [cols]: any = await pool.query(
-          `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'appointments'
-             AND COLUMN_NAME IN ('verification_code','code_generated_at','payment_method')`
-        );
-        const have = new Set((cols as any[]).map((r: any) => String(r.COLUMN_NAME)));
-        if (!have.has('verification_code')) {
-          await pool.query(`ALTER TABLE appointments ADD COLUMN verification_code VARCHAR(8) NULL AFTER status`);
-        }
-        if (!have.has('code_generated_at')) {
-          await pool.query(`ALTER TABLE appointments ADD COLUMN code_generated_at DATETIME(6) NULL AFTER verification_code`);
-        }
-        if (!have.has('payment_method')) {
-          await pool.query(`ALTER TABLE appointments ADD COLUMN payment_method ENUM('card','cash') NULL AFTER status`);
-        }
-      } catch (e) {
-        Logger.warn(MODULE, 'No se pudieron asegurar columnas de verificación (puede existir ya)', e as any);
+      const cashSettings = await loadCashSettings(pool, MODULE);
+      if (amount > cashSettings.cashCap) {
+        return res.status(400).json({ success: false, error: buildCashCapErrorMessage(cashSettings.cashCap), cashCap: cashSettings.cashCap });
       }
 
       // Generar/asegurar código de verificación
@@ -654,11 +660,14 @@ function buildRouter(): Router {
           return res.status(500).json({ success: false, error: 'No se pudo guardar el código de verificación. Intenta nuevamente.' });
         }
       } else {
-        // Asegurar payment_method
-        try { await pool.execute(`UPDATE appointments SET payment_method = 'cash', updated_at = NOW() WHERE id = ?`, [appointmentId]); } catch {}
+        try {
+          await pool.execute(`UPDATE appointments SET payment_method = 'cash', updated_at = NOW() WHERE id = ?`, [appointmentId]);
+        } catch (err) {
+          Logger.warn(MODULE, '[CASH] No se pudo actualizar payment_method al seleccionar efectivo', err as any);
+        }
       }
 
-      return res.json({ success: true, code: verificationCode });
+      return res.json({ success: true, code: verificationCode, cashCap: cashSettings.cashCap });
     } catch (err) {
       Logger.error(MODULE, 'Error en cash/select', err as any);
       return res.status(500).json({ success: false, error: 'Error al seleccionar efectivo' });
@@ -690,15 +699,11 @@ function buildRouter(): Router {
         return res.status(400).json({ success: false, error: 'Código incorrecto' });
       }
 
-      // Tope cash
       const amount = Number(appt.price || 0);
-      try {
-        const [[cap]]: any = await pool.query(`SELECT setting_value FROM platform_settings WHERE setting_key = 'cash_max_amount' LIMIT 1`);
-        const cashCap = cap ? Number(cap.setting_value) || 150000 : 150000;
-        if (amount > cashCap) {
-          return res.status(400).json({ success: false, error: `Por el momento no podemos procesar pagos en efectivo de $${cashCap.toLocaleString('es-CL')} o más. Por favor, selecciona pago con tarjeta.` });
-        }
-      } catch {}
+      const cashSettings = await loadCashSettings(pool, MODULE);
+      if (amount > cashSettings.cashCap) {
+        return res.status(400).json({ success: false, error: buildCashCapErrorMessage(cashSettings.cashCap), cashCap: cashSettings.cashCap });
+      }
 
       // Evitar duplicados si ya existe payment completed
       const [[existing]]: any = await pool.query(
@@ -708,19 +713,9 @@ function buildRouter(): Router {
       if (existing) return res.status(400).json({ success: false, error: 'El pago ya fue registrado' });
 
       // Calcular impuestos/comisión
-      let taxRate = 19.0;
-      let commissionRate = 15.0;
-      let dueDays = 3;
-      try {
-        const [setRows]: any = await pool.query(
-          `SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN ('default_tax_rate','default_commission_rate','cash_commission_due_days')`
-        );
-        for (const r of setRows as any[]) {
-          if (r.setting_key === 'default_tax_rate') taxRate = Number(r.setting_value) || taxRate;
-          if (r.setting_key === 'default_commission_rate') commissionRate = Number(r.setting_value) || commissionRate;
-          if (r.setting_key === 'cash_commission_due_days') dueDays = Number(r.setting_value) || dueDays;
-        }
-      } catch {}
+      const taxRate = cashSettings.taxRate;
+      const commissionRate = cashSettings.commissionRate;
+      const dueDays = cashSettings.dueDays;
 
       const priceBase = Number((amount / (1 + taxRate / 100)).toFixed(2));
       const taxAmount = Number((amount - priceBase).toFixed(2));
@@ -742,7 +737,9 @@ function buildRouter(): Router {
            VALUES (?, ?, ?, ?, 'CLP', 'pending', DATE_ADD(NOW(), INTERVAL ? DAY), NOW())`,
           [appt.provider_id, appointmentId, paymentId, commissionAmount, dueDays]
         );
-      } catch {}
+      } catch (err) {
+        Logger.warn(MODULE, '[CASH] No se pudo registrar deuda de comisión durante verify-code', err as any);
+      }
 
       // Marcar cash_verified_at y preparar cierre
       try {
@@ -794,24 +791,12 @@ function buildRouter(): Router {
     // Si el cliente dijo OK o no hay acciones pero queremos forzar comisión por defecto, crear payment+debt
     if (clientAction === 'ok' || providerAction === 'code_entered') {
       const amount = Number(appt.price || 0);
-      let taxRate = 19.0; let commissionRate = 15.0; let dueDays = 3;
-      try {
-        const [setRows]: any = await pool.query(
-          `SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN ('default_tax_rate','default_commission_rate','cash_commission_due_days','cash_max_amount')`
-        );
-        let cashCap = 150000;
-        for (const r of setRows as any[]) {
-          if (r.setting_key === 'default_tax_rate') taxRate = Number(r.setting_value) || taxRate;
-          if (r.setting_key === 'default_commission_rate') commissionRate = Number(r.setting_value) || commissionRate;
-          if (r.setting_key === 'cash_commission_due_days') dueDays = Number(r.setting_value) || dueDays;
-          if (r.setting_key === 'cash_max_amount') cashCap = Number(r.setting_value) || cashCap;
-        }
-        if (amount > cashCap) return { resolved: false };
-      } catch {}
+      const settings = await loadCashSettings(pool, MODULE);
+      if (amount > settings.cashCap) return { resolved: false };
 
-      const priceBase = Number((amount / (1 + taxRate / 100)).toFixed(2));
+      const priceBase = Number((amount / (1 + settings.taxRate / 100)).toFixed(2));
       const taxAmount = Number((amount - priceBase).toFixed(2));
-      const commissionAmount = Number((priceBase * (commissionRate / 100)).toFixed(2));
+      const commissionAmount = Number((priceBase * (settings.commissionRate / 100)).toFixed(2));
       const providerAmount = Number((priceBase - commissionAmount).toFixed(2));
 
       const [ins]: any = await pool.execute(
@@ -824,7 +809,7 @@ function buildRouter(): Router {
         await pool.execute(
           `INSERT INTO provider_commission_debts (provider_id, appointment_id, payment_id, commission_amount, currency, status, due_date, created_at)
            VALUES (?, ?, ?, ?, 'CLP', 'pending', DATE_ADD(NOW(), INTERVAL ? DAY), NOW())`,
-          [appt.provider_id, appointmentId, paymentId, commissionAmount, dueDays]
+          [appt.provider_id, appointmentId, paymentId, commissionAmount, settings.dueDays]
         );
       } catch {}
       await pool.execute(`UPDATE appointments SET closure_state = 'resolved', payment_method = 'cash', updated_at = NOW() WHERE id = ?`, [appointmentId]);

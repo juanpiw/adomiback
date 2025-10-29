@@ -43,6 +43,92 @@ export function setupAdminModule(app: Express) {
     }
   });
 
+  router.get('/cash/summary', adminAuth, async (_req, res) => {
+    try {
+      const pool = DatabaseConnection.getPool();
+      const [[row]]: any = await pool.query(
+        `SELECT 
+           COALESCE(SUM(CASE WHEN status IN ('pending','overdue') THEN commission_amount ELSE 0 END), 0) AS total_due,
+           COALESCE(SUM(CASE WHEN status = 'overdue' THEN commission_amount ELSE 0 END), 0) AS overdue_due,
+           COUNT(*) AS total_count,
+           SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+           SUM(CASE WHEN status = 'overdue' THEN 1 ELSE 0 END) AS overdue_count,
+           SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) AS paid_count
+         FROM provider_commission_debts`
+      );
+      return res.json({
+        success: true,
+        summary: {
+          total_due: Number(row?.total_due || 0),
+          overdue_due: Number(row?.overdue_due || 0),
+          total_count: Number(row?.total_count || 0),
+          pending_count: Number(row?.pending_count || 0),
+          overdue_count: Number(row?.overdue_count || 0),
+          paid_count: Number(row?.paid_count || 0)
+        }
+      });
+    } catch (e: any) {
+      Logger.error('ADMIN_MODULE', 'Error fetching admin cash summary', e);
+      return res.status(500).json({ success: false, error: 'cash_summary_error' });
+    }
+  });
+
+  router.get('/cash/commissions', adminAuth, async (req, res) => {
+    try {
+      const status = String(req.query.status || '').trim().toLowerCase();
+      const provider = Number(req.query.provider || 0);
+      const limit = Math.min(Math.max(Number(req.query.limit || 100), 1), 500);
+      const offset = Math.max(Number(req.query.offset || 0), 0);
+
+      const pool = DatabaseConnection.getPool();
+      const params: any[] = [];
+      const where: string[] = [];
+      if (['pending','overdue','paid','cancelled'].includes(status)) {
+        where.push('d.status = ?');
+        params.push(status);
+      }
+      if (provider) {
+        where.push('d.provider_id = ?');
+        params.push(provider);
+      }
+      const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+      const [rows] = await pool.query(
+        `SELECT d.id,
+                d.provider_id,
+                up.email AS provider_email,
+                pr.full_name AS provider_name,
+                d.appointment_id,
+                a.date,
+                a.start_time,
+                a.end_time,
+                d.commission_amount,
+                d.currency,
+                d.status,
+                d.due_date,
+                d.settlement_reference,
+                d.voucher_url,
+                uc.email AS client_email,
+                cp.full_name AS client_name
+         FROM provider_commission_debts d
+         LEFT JOIN appointments a ON a.id = d.appointment_id
+         LEFT JOIN users uc ON uc.id = a.client_id
+         LEFT JOIN client_profiles cp ON cp.client_id = a.client_id
+         LEFT JOIN users up ON up.id = d.provider_id
+         LEFT JOIN provider_profiles pr ON pr.provider_id = d.provider_id
+         ${whereSql}
+         ORDER BY d.due_date ASC, d.id DESC
+         LIMIT ? OFFSET ?`,
+        [...params, limit, offset]
+      );
+
+      return res.json({ success: true, data: rows });
+    } catch (e: any) {
+      Logger.error('ADMIN_MODULE', 'Error fetching admin cash commissions', e);
+      return res.status(500).json({ success: false, error: 'cash_commissions_error' });
+    }
+  });
+
   router.get('/payments', adminAuth, async (req, res) => {
     try {
       const limit = Math.max(1, Math.min(500, Number(req.query.limit || 50)));

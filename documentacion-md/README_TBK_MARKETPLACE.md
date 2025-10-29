@@ -579,6 +579,13 @@ En Admin: TBK aparece con status ‘pending’/‘settled’ según conciliació
 - Frontend: servicios Angular (`ProviderProfileService.tbk*`) expuestos pero sin UI en producción; el módulo `dash/ingresos` aún no muestra el flujo TBK.
 - Configuración: variables `TBK_SEC_API_BASE`, `TBK_SEC_API_KEY_ID`, `TBK_SEC_API_KEY_SECRET` pendientes en INT/CERT, junto con credenciales de prueba del API de Comercios Secundarios.
 
+**Flujo implementado vs. flujo oficial TBK**
+- Nuestro backend actual crea comercios secundarios directamente vía API (`POST /comercios-secundarios`) usando los datos KYC cargados en la base. No existen redirecciones al portal Transbank.
+- Si se desea adoptar el onboarding web de TBK Mall (iniciar inscripción → recibir `url_webpay` → redirigir al proveedor → `return_url` con token → confirmación), hay que agregar nuevos endpoints:
+  - `POST /providers/:id/tbk/mall/inscriptions` → llama a `POST /v1.2/mall/inscriptions` y devuelve la `url_webpay`.
+  - `GET /tbk/mall/inscriptions/return` → recibe `token`, confirma la inscripción y guarda `commerce_code`/`buy_order`.
+- La UI debe cambiar a modal “Continuar en Transbank”, spinner intermedio, redirección y página de retorno (éxito/fallo). Hasta entonces, seguimos con la captura directa.
+
 **Próximos hitos**
 - Completar el formulario de datos del proveedor (KYC) y validar antes de llamar al alta TBK.
   - Levantar checklist de campos obligatorios (RUT + DV, razón social, giro, banco, tipo de cuenta, correo de facturación, teléfono de contacto, dirección comercial).
@@ -596,3 +603,73 @@ En Admin: TBK aparece con status ‘pending’/‘settled’ según conciliació
   - Catalogar códigos de error TBK relevantes y proponer UX copy para proveedor.
   - Definir playbook de soporte (qué información solicitar, cómo reintentar o escalar a TBK).
   - Actualizar README y base de conocimiento interna con este flujo.
+
+#### 15.2 Diagrama de flujo: Cobro Webpay Mall
+
+```text
+Actores principales
++-------------------
++- Cliente final (ej.: María)
++- Adomi (Mall principal)
++- Provider (comercio secundario, ej.: Juan Pablo)
++- Transbank (Webpay Mall)
+
+Flujo paso a paso
++-----------------
+1. Cliente María inicia el pago ($20.000) dentro de Adomi.
+2. Backend Adomi llama a la API Mall de TBK e indica el split:
+     - $18.000 para Juan Pablo (`secondary_commerce_code`)
+     - $ 2.000 para Adomi (`mall_commerce_code`)
+3. Transbank genera el formulario de pago por el total ($20.000).
+4. Frontend Adomi redirige a María al portal seguro de Webpay.
+5. María paga los $20.000; la división no es visible para el cliente.
+6. Transbank autoriza y divide internamente:
+     - liquida $18.000 a Juan Pablo
+     - liquida $ 2.000 a Adomi
+7. Transbank redirige/retorna a Adomi con token `token_ws`.
+8. Backend Adomi confirma la transacción (`/commit`) y actualiza dashboards:
+     - María ve “Pago exitoso”.
+     - Juan Pablo suma $18.000 en “Ingresos netos”.
+     - Adomi suma $2.000 en “Comisiones”.
+
+Representación ASCII
++--------------------
+Cliente María
+    |
+    | 1. Inicia pago en Adomi
+    v
+Adomi Backend
+    |
+    | 2. POST /transactions (Mall) → detalla split Mall/Hijo
+    v
+Transbank (Mall)
+    |
+    | 3. Retorna URL de pago total
+    v
+Adomi Frontend
+    |
+    | 4. Redirige a Webpay
+    v
+Portal TBK
+    |
+    | 5. Cliente paga total
+    v
+Transbank (Liquidación)
+    |
+    | 6. Autoriza y divide internamente
+    v
+Adomi Backend
+    |
+    | 7. Recibe token_ws y confirma (`commit`)
+    v
+Dashboards Adomi/Juan Pablo
+    |
+    | 8. Actualiza métricas
+    v
+
+Notas de métricas
++-----------------
++- `Ingresos Netos`: suma de `payments.provider_amount` liquidados por TBK al comercio secundario.
++- `Comisiones Adomi`: suma de `payments.mall_amount` que recibe Adomi como Mall.
++- `Pagos pendientes`: pagos autorizados por TBK pero aún no liquidados al provider (depende del calendario de pagos TBK, normalmente 1–2 días hábiles).
+```
