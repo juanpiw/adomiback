@@ -173,11 +173,30 @@ router.post('/tbk/mall/commit', async (req: Request, res: Response) => {
     const endpoint = `${getTbkBase()}/rswebpaytransaction/api/webpay/v1.2/transactions/${token}`;
     Logger.info(MODULE, `PUT ${endpoint}`);
     const { data } = await axios.put(endpoint, {}, { headers: getTbkHeaders() });
-    Logger.info(MODULE, 'TBK commit response', { status: data?.status, authorization_code: data?.authorization_code, amount: data?.amount, buy_order: data?.buy_order });
+    const details = Array.isArray((data as any)?.details) ? (data as any).details : [];
+    const detailStatuses = details.map((d: any) => ({
+      status: d?.status,
+      response_code: d?.response_code,
+      commerce_code: d?.commerce_code,
+      amount: d?.amount,
+      authorization_code: d?.authorization_code,
+      buy_order: d?.buy_order
+    }));
+    Logger.info(MODULE, 'TBK commit response', {
+      status: (data as any)?.status,
+      buy_order: (data as any)?.buy_order,
+      details: detailStatuses
+    });
+
+    // Determinar status autorizado a partir de details (Mall)
+    const isAuthorized = details.length
+      ? details.every((d: any) => String(d?.status || '').toUpperCase() === 'AUTHORIZED' && Number(d?.response_code || 0) === 0)
+      : String((data as any)?.status || '').toUpperCase() === 'AUTHORIZED';
+    const computedStatus = isAuthorized ? 'completed' : 'failed';
 
     // Persistir autorizaciones por detail + marcar pago en cita
     const pool = DatabaseConnection.getPool();
-    const status = String(data?.status || '').toLowerCase().includes('authorized') ? 'completed' : 'failed';
+    const status = computedStatus;
 
     // Obtener pago para conocer la cita
     const [[paymentRow]]: any = await pool.query('SELECT id, appointment_id FROM payments WHERE tbk_token = ? LIMIT 1', [token]);
