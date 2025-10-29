@@ -567,4 +567,32 @@ Aceptación
 Un proveedor sin TBK ve botón “Crear” y tras pulsar queda en pending o active según TBK INT.
 Un proveedor con TBK activo ve su código y no ve errores al pagar (split hacia su hijo).
 En Admin: TBK aparece con status ‘pending’/‘settled’ según conciliación; no se ofrecen pagos manuales para TBK.
-Si te parece, implemento la sección en dash/ingresos con esos 3 botones y el estado con chips, consumiendo los endpoints existentes.
+
+#### 15.1 Objetivos y estado Onboarding TBK (Webpay Mall)
+- **Objetivo funcional**: permitir que el proveedor complete su KYC/KYB dentro de Adomi y, sin intervención manual, genere su `codigoComercioSecundario` activo en Transbank.
+- **Objetivo operativo**: mantener sincronizados `tbk_secondary_code` y `tbk_status`, registrando auditoría en `tbk_secondary_shops` y bloqueando cobros Mall si el código no existe o está restringido.
+- **Objetivo UX**: ofrecer en `dash/ingresos` un módulo con chips de estado, acciones “Crear/Actualizar estado/Revocar” y mensajería guiada.
+
+**Estado actual (2025-10-29)**
+- Backend: rutas `/providers/:id/tbk/secondary/*` montadas; falta completar el payload del alta con RUT, razón social, giro y datos bancarios obligatorios por TBK (hoy el request usa campos mínimos).
+- Persistencia: migración `2025-10-29-tbk-secondary-shops.sql` lista para ejecutar; verificar aplicación en cada ambiente antes de QA.
+- Frontend: servicios Angular (`ProviderProfileService.tbk*`) expuestos pero sin UI en producción; el módulo `dash/ingresos` aún no muestra el flujo TBK.
+- Configuración: variables `TBK_SEC_API_BASE`, `TBK_SEC_API_KEY_ID`, `TBK_SEC_API_KEY_SECRET` pendientes en INT/CERT, junto con credenciales de prueba del API de Comercios Secundarios.
+
+**Próximos hitos**
+- Completar el formulario de datos del proveedor (KYC) y validar antes de llamar al alta TBK.
+  - Levantar checklist de campos obligatorios (RUT + DV, razón social, giro, banco, tipo de cuenta, correo de facturación, teléfono de contacto, dirección comercial).
+  - Extender la API interna para exponer estos atributos (o reutilizar `provider_profiles`) y agregar validaciones de formato y obligatoriedad.
+  - Actualizar `POST /providers/:id/tbk/secondary/create` para enviar el payload completo y mapear estados (`pending`, `restricted`) según la respuesta de TBK.
+- Construir el componente de Onboarding TBK en `dash/ingresos` consumiendo `tbkCreateSecondary`, `tbkGetSecondaryStatus` y `tbkDeleteSecondary`.
+  - Diseñar tarjetas/estado con chips `{ none, pending, active, restricted }` y CTA condicionales (“Crear”, “Actualizar estado”, “Solicitar baja”).
+  - Incluir loader y manejo de errores (mostrar mensajes de TBK cuando existan, fallback genérico en 500).
+  - Deshabilitar el botón de creación hasta que la ficha KYC esté completa; añadir enlace a la configuración del perfil si faltan datos.
+- Ejecutar pruebas end-to-end en INT: proveedor nuevo → alta comercio secundario → confirmación de estado → cobro Mall exitoso.
+  - Preparar datos seed (proveedor INT con datos demo + credenciales TBK INT).
+  - Registrar evidencia del alta (código secundario, estado, payload TBK) y del cobro (token_ws, autorización, split correcto).
+  - Documentar los pasos en QA checklist y validar con al menos 2 escenarios (comisión > 0 y comisión = 0).
+- Documentar mensajes de error y fallback operativo (soporte) para estados `restricted` o rechazos del API de TBK.
+  - Catalogar códigos de error TBK relevantes y proponer UX copy para proveedor.
+  - Definir playbook de soporte (qué información solicitar, cómo reintentar o escalar a TBK).
+  - Actualizar README y base de conocimiento interna con este flujo.
