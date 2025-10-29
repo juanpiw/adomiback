@@ -1,4 +1,5 @@
 import express, { Router, Request, Response } from 'express';
+import { generateVerificationCode } from '../../../shared/utils/verification-code.util';
 import { authenticateToken, AuthUser } from '../../../shared/middleware/auth.middleware';
 import DatabaseConnection from '../../../shared/database/connection';
 import axios from 'axios';
@@ -199,7 +200,7 @@ router.post('/tbk/mall/commit', async (req: Request, res: Response) => {
     const status = computedStatus;
 
     // Obtener pago para conocer la cita
-    const [[paymentRow]]: any = await pool.query('SELECT id, appointment_id FROM payments WHERE tbk_token = ? LIMIT 1', [token]);
+    const [[paymentRow]]: any = await pool.query('SELECT id, appointment_id, client_id, provider_id FROM payments WHERE tbk_token = ? LIMIT 1', [token]);
     await pool.execute(
       'UPDATE payments SET status = ?, paid_at = CASE WHEN ? = "completed" THEN CURRENT_TIMESTAMP ELSE paid_at END WHERE tbk_token = ?',
       [status, status, token]
@@ -207,7 +208,16 @@ router.post('/tbk/mall/commit', async (req: Request, res: Response) => {
 
     if (paymentRow?.appointment_id && status === 'completed') {
       try {
-        await pool.execute('UPDATE appointments SET payment_status = "paid", updated_at = CURRENT_TIMESTAMP WHERE id = ?', [paymentRow.appointment_id]);
+        // Marcar pagada
+        await pool.execute('UPDATE appointments SET payment_status = "paid" WHERE id = ?', [paymentRow.appointment_id]);
+        // Asegurar código de verificación (si aún no existe)
+        const [[appt]]: any = await pool.query('SELECT verification_code FROM appointments WHERE id = ? LIMIT 1', [paymentRow.appointment_id]);
+        let code: string = String(appt?.verification_code || '').trim();
+        if (!code) {
+          code = generateVerificationCode();
+          await pool.execute('UPDATE appointments SET verification_code = ?, code_generated_at = NOW() WHERE id = ?', [code, paymentRow.appointment_id]);
+          Logger.info(MODULE, `Generated verification code for appt ${paymentRow.appointment_id}`);
+        }
       } catch (e) {
         Logger.warn(MODULE, 'Unable to update appointment payment_status', e as any);
       }
