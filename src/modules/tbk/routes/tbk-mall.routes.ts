@@ -161,10 +161,19 @@ router.post('/tbk/mall/transactions', authenticateToken, async (req: Request, re
 // POST /tbk/mall/commit
 router.post('/tbk/mall/commit', async (req: Request, res: Response) => {
   try {
-    const token = String(req.body?.token_ws || req.query?.token_ws || '').trim();
+    const token = String(
+      (req.body as any)?.token_ws || (req.query as any)?.token_ws ||
+      (req.body as any)?.token || (req.query as any)?.token ||
+      (req.body as any)?.TBK_TOKEN || (req.query as any)?.TBK_TOKEN ||
+      ''
+    ).trim();
+    Logger.info(MODULE, `Commit received | hasToken=${!!token} bodyKeys=${Object.keys((req.body || {}))} queryKeys=${Object.keys((req.query || {}))}`);
     if (!token) return res.status(400).json({ success: false, error: 'token_ws requerido' });
 
-    const { data } = await axios.put(`${getTbkBase()}/rswebpaytransaction/api/webpay/v1.2/transactions/${token}`, {}, { headers: getTbkHeaders() });
+    const endpoint = `${getTbkBase()}/rswebpaytransaction/api/webpay/v1.2/transactions/${token}`;
+    Logger.info(MODULE, `PUT ${endpoint}`);
+    const { data } = await axios.put(endpoint, {}, { headers: getTbkHeaders() });
+    Logger.info(MODULE, 'TBK commit response', { status: data?.status, authorization_code: data?.authorization_code, amount: data?.amount, buy_order: data?.buy_order });
 
     // Persistir autorizaciones por detail + marcar pago en cita
     const pool = DatabaseConnection.getPool();
@@ -187,7 +196,9 @@ router.post('/tbk/mall/commit', async (req: Request, res: Response) => {
 
     return res.json({ success: true, commit: data });
   } catch (err: any) {
-    Logger.error(MODULE, 'Commit mall tx error', err);
+    const tbkStatus = err?.response?.status;
+    const tbkData = err?.response?.data;
+    Logger.error(MODULE, 'Commit mall tx error', { message: err?.message, tbkStatus, tbkData });
     const msg = err?.response?.data || err?.message || 'error';
     return res.status(500).json({ success: false, error: 'Error confirmando transacción TBK', details: msg });
   }
