@@ -12,6 +12,7 @@ import providerAvailabilityRoutes from './routes/provider-availability.routes';
 import providerUploadRoutes from './routes/provider-upload.routes';
 import providerStripeConnectRoutes from './routes/provider-stripe-connect.routes';
 import providerBillingRoutes from './routes/provider-billing.routes';
+import providerIncomeGoalsRoutes from './routes/provider-income-goals.routes';
 
 /**
  * Setup function to mount provider routes
@@ -57,6 +58,14 @@ export function setupProviderModule(app: Express) {
     console.log('[PROVIDER MODULE] Provider billing routes mounted');
   } catch (e) {
     console.warn('[PROVIDER MODULE] Provider billing routes not mounted', e);
+  }
+
+  // Rutas de metas de ingresos
+  try {
+    app.use('/', providerIncomeGoalsRoutes);
+    console.log('[PROVIDER MODULE] Provider income goals routes mounted');
+  } catch (e) {
+    console.warn('[PROVIDER MODULE] Provider income goals routes not mounted', e);
   }
 }
 
