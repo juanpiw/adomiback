@@ -6,10 +6,16 @@
 import { Express, Router, Request, Response } from 'express';
 import DatabaseConnection from '../../shared/database/connection';
 import Stripe from 'stripe';
+import crypto from 'crypto';
 import { JWTUtil } from '../../shared/utils/jwt.util';
 import { setupStripeWebhooks } from './webhooks';
 import { logFunnelEvent, isValidFunnelEvent } from '../../shared/utils/subscription.util';
 import { authenticateToken } from '../../shared/middleware/auth.middleware';
+import { EmailService } from '../../shared/services/email.service';
+import { Logger } from '../../shared/utils/logger.util';
+
+const MODULE = 'SUBSCRIPTIONS_ADMIN';
+const FOUNDER_ADMIN_EMAIL = 'juanpablojpw@gmail.com';
 
 function parseJsonSafe<T>(value: any, fallback: T): T {
   if (value === null || value === undefined) return fallback;
@@ -68,6 +74,98 @@ async function fetchPromoRow(connection: any, code: string) {
   return (rows as any[])[0] || null;
 }
 
+const PROMO_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function sanitizePromoCodeInput(raw?: string): string | null {
+  if (!raw) return null;
+  const cleaned = String(raw).toUpperCase().replace(/[^A-Z0-9]/g, '').trim();
+  return cleaned.length ? cleaned : null;
+}
+
+function validateEmailAddress(email?: string | null): boolean {
+  if (!email) return false;
+  const value = String(email).trim().toLowerCase();
+  if (!value) return false;
+  const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return regex.test(value);
+}
+
+function toMySqlDatetime(date: Date): string {
+  return date.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+async function generateUniqueFounderCode(connection: any, prefix = 'FDR', length = 6): Promise<string> {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    let code = prefix;
+    for (let i = 0; i < length; i++) {
+      const index = crypto.randomInt(0, PROMO_CODE_ALPHABET.length);
+      code += PROMO_CODE_ALPHABET[index];
+    }
+    const [rows] = await connection.query('SELECT id FROM promo_codes WHERE code = ? LIMIT 1', [code]);
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return code;
+    }
+  }
+  throw new Error('No fue posible generar un código único tras múltiples intentos');
+}
+
+async function findFounderPlan(connection: any) {
+  const [rows] = await connection.query(
+    `SELECT id, name, duration_months, commission_rate, metadata
+       FROM plans
+      WHERE plan_type = 'founder'
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 1`
+  );
+  return Array.isArray(rows) ? (rows as any[])[0] : rows;
+}
+
+function buildFounderEmailHtml(params: { name?: string | null; code: string; expiresAt?: string | null; durationMonths?: number | null; customMessage?: string | null; }): string {
+  const { name, code, expiresAt, durationMonths, customMessage } = params;
+  const recipient = name ? `<strong>${name}</strong>` : 'Hola';
+  const expiresCopy = expiresAt ? `Este beneficio vence el <strong>${new Date(expiresAt).toLocaleDateString('es-CL')}</strong>.` : '';
+  const durationCopy = durationMonths ? `Tu plan Fundador incluye <strong>${durationMonths}</strong> meses gratuitos para activar y hacer crecer tu perfil.` : 'Tu plan Fundador incluye meses gratuitos para activar y hacer crecer tu perfil.';
+  const customSection = customMessage ? `<p style="margin:0 0 20px;font-size:15px;line-height:1.7;color:#1f2937;background:#eef2ff;border-left:4px solid #6366f1;padding:12px 18px;border-radius:12px;">${customMessage}</p>` : '';
+
+  return `
+  <div style="background:#f8fafc;padding:32px 0;font-family:'Segoe UI',Tahoma,sans-serif;color:#0f172a;">
+    <table width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:18px;overflow:hidden;box-shadow:0 15px 45px rgba(15,23,42,0.12);">
+      <tr>
+        <td style="background:linear-gradient(135deg,#4f46e5,#7c3aed);padding:32px 28px;color:#ffffff;">
+          <h1 style="margin:0;font-size:26px;font-weight:700;letter-spacing:-0.02em;">AdomiApp</h1>
+          <p style="margin:12px 0 0;font-size:16px;opacity:0.85;">Tu acceso exclusivo al Plan Fundador está listo.</p>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:32px 28px 16px;">
+          <p style="margin:0 0 16px;font-size:16px;line-height:1.6;">${recipient},</p>
+          <p style="margin:0 0 20px;font-size:15px;line-height:1.7;">${durationCopy} Aprovecha la visibilidad prioritaria y las comisiones preferenciales para sumar clientes desde el primer día.</p>
+          ${customSection}
+          <div style="padding:22px;border-radius:14px;background:#f1f5f9;border:1px solid #e2e8f0;margin-bottom:20px;text-align:center;">
+            <p style="margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:0.08em;color:#475569;">Tu código Fundador</p>
+            <div style="display:inline-block;padding:14px 28px;font-size:22px;font-weight:700;letter-spacing:0.24em;background:#1e293b;color:#ffffff;border-radius:12px;">${code}</div>
+          </div>
+          <p style="margin:0 0 16px;font-size:15px;color:#1f2937;">Sigue estos pasos para activarlo:</p>
+          <ol style="margin:0 0 20px 20px;font-size:15px;line-height:1.8;color:#334155;">
+            <li>Ingresa a <a href="https://adomiapp.com/auth/select-plan" style="color:#4f46e5;text-decoration:none;font-weight:600;">adomiapp.com/auth/select-plan</a>.</li>
+            <li>Selecciona la tarjeta “Plan Fundador” e introduce tu código.</li>
+            <li>Completa tu registro como profesional y comienza a recibir clientes.</li>
+          </ol>
+          ${expiresCopy ? `<p style="margin:0 0 14px;font-size:14px;color:#475569;">${expiresCopy}</p>` : ''}
+          <p style="margin:0;font-size:14px;color:#475569;">¿Necesitas ayuda? Escríbenos a <a href="mailto:hola@adomiapp.com" style="color:#4f46e5;font-weight:600;text-decoration:none;">hola@adomiapp.com</a>.</p>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:24px 28px;background:#0f172a;color:#e2e8f0;font-size:12px;text-align:center;">
+          <p style="margin:0 0 6px;">© ${new Date().getFullYear()} AdomiApp. Todos los derechos reservados.</p>
+          <p style="margin:0;opacity:0.7;">Eres parte de un grupo selecto de profesionales invitadas/os al Plan Fundador.</p>
+        </td>
+      </tr>
+    </table>
+  </div>
+  `;
+}
+
 
 /**
  * Setup function to mount subscriptions routes
@@ -84,6 +182,220 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
   
   // Modo normal: montar todas las rutas (excepto webhook que ya se montó)
   const router = Router();
+
+  router.post('/subscriptions/admin/founder-code', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any)?.user;
+      const requesterEmail = String(user?.email || '').toLowerCase();
+      if (!user || requesterEmail !== FOUNDER_ADMIN_EMAIL) {
+        return res.status(403).json({ ok: false, error: 'forbidden' });
+      }
+
+      const providedSecret = (req.headers['x-admin-secret'] as string | undefined) || (typeof req.body?.adminSecret === 'string' ? String(req.body.adminSecret) : '');
+      const expectedSecret = (process.env.ADMIN_PANEL_SECRET || '').trim();
+
+      if (!providedSecret) {
+        return res.status(403).json({ ok: false, error: 'admin_secret_required' });
+      }
+
+      if (expectedSecret && providedSecret !== expectedSecret) {
+        return res.status(403).json({ ok: false, error: 'admin_secret_invalid' });
+      }
+
+      if (!expectedSecret) {
+        Logger.warn(MODULE, 'ADMIN_PANEL_SECRET no configurado; aplicando validación básica.');
+      }
+
+      const pool = DatabaseConnection.getPool();
+      const actionRaw = typeof req.body?.action === 'string' ? String(req.body.action).toLowerCase() : '';
+      const action = actionRaw === 'send' ? 'send' : 'generate';
+
+      if (action === 'generate') {
+        const plan = await findFounderPlan(pool);
+        if (!plan || !plan.id) {
+          return res.status(400).json({ ok: false, error: 'founder_plan_not_configured' });
+        }
+
+        const customCodeInput = sanitizePromoCodeInput(req.body?.code);
+        let code = customCodeInput || await generateUniqueFounderCode(pool);
+
+        if (customCodeInput) {
+          const [existingRows] = await pool.query('SELECT id FROM promo_codes WHERE code = ? LIMIT 1', [code]);
+          if (Array.isArray(existingRows) && existingRows.length > 0) {
+            return res.status(409).json({ ok: false, error: 'code_already_exists' });
+          }
+        }
+
+        const rawDuration = Number(req.body?.durationMonths);
+        let durationMonths = Number.isFinite(rawDuration) && rawDuration > 0 ? Math.floor(rawDuration) : Number(plan.duration_months) || 3;
+        if (durationMonths <= 0) durationMonths = 3;
+
+        const rawExpiryMonths = Number(req.body?.expiryMonths);
+        let expiresAtDate: Date | null = null;
+        if (req.body?.expiresAt) {
+          const parsed = new Date(req.body.expiresAt);
+          if (!Number.isNaN(parsed.getTime())) {
+            expiresAtDate = parsed;
+          }
+        }
+        if (!expiresAtDate) {
+          const monthsToAdd = Number.isFinite(rawExpiryMonths) && rawExpiryMonths > 0 ? Math.floor(rawExpiryMonths) : 6;
+          const base = new Date();
+          base.setMonth(base.getMonth() + monthsToAdd);
+          expiresAtDate = base;
+        }
+        const expiresAtSql = expiresAtDate ? toMySqlDatetime(expiresAtDate) : null;
+
+        const rawMaxRedemptions = Number(req.body?.maxRedemptions);
+        const maxRedemptions = Number.isFinite(rawMaxRedemptions) && rawMaxRedemptions > 0 ? Math.floor(rawMaxRedemptions) : 1;
+
+        const notes = typeof req.body?.notes === 'string' ? req.body.notes.trim().slice(0, 500) : '';
+        const initialRecipientEmail = typeof req.body?.recipientEmail === 'string' ? req.body.recipientEmail.trim().toLowerCase() : '';
+
+        const metadataObj: Record<string, any> = {
+          source: 'admin-pagos-ui',
+          generated_by: requesterEmail,
+          generated_at: new Date().toISOString()
+        };
+        if (notes) metadataObj.notes = notes;
+        if (validateEmailAddress(initialRecipientEmail)) {
+          metadataObj.recipient_email = initialRecipientEmail;
+        }
+
+        const metadataJson = JSON.stringify(metadataObj);
+        const description = 'Código Fundador generado desde Admin Pagos';
+        const allowedRolesJson = JSON.stringify(['provider']);
+        const commissionOverride = Number(plan.commission_rate ?? 0);
+
+        await pool.execute(
+          `INSERT INTO promo_codes (
+              code,
+              description,
+              plan_id,
+              plan_type,
+              max_redemptions,
+              duration_months,
+              grant_commission_override,
+              applies_to_existing,
+              valid_from,
+              expires_at,
+              allowed_roles,
+              metadata,
+              is_active,
+              created_at,
+              updated_at
+            )
+            VALUES (
+              ?, ?, ?, 'founder', ?, ?, ?, FALSE, NOW(), ?, ?, ?, TRUE, NOW(), NOW()
+            )`,
+          [
+            code,
+            description,
+            plan.id,
+            maxRedemptions,
+            durationMonths,
+            commissionOverride,
+            expiresAtSql,
+            allowedRolesJson,
+            metadataJson
+          ]
+        );
+
+        const [promoRows] = await pool.query(
+          'SELECT id, code, duration_months, expires_at, max_redemptions, metadata FROM promo_codes WHERE code = ? LIMIT 1',
+          [code]
+        );
+        const promoRow = Array.isArray(promoRows) ? (promoRows as any[])[0] : promoRows;
+
+        Logger.info(MODULE, 'Founder code generated', { code, by: requesterEmail });
+
+        return res.json({
+          ok: true,
+          action: 'generate',
+          promo: {
+            id: promoRow?.id || null,
+            code,
+            duration_months: promoRow?.duration_months ?? durationMonths,
+            expires_at: promoRow?.expires_at || expiresAtSql,
+            max_redemptions: promoRow?.max_redemptions ?? maxRedemptions
+          },
+          emailSent: false
+        });
+      }
+
+      const normalizedCode = sanitizePromoCodeInput(req.body?.code);
+      if (!normalizedCode) {
+        return res.status(400).json({ ok: false, error: 'code_required' });
+      }
+
+      const recipientEmailRaw = typeof req.body?.recipientEmail === 'string' ? req.body.recipientEmail.trim().toLowerCase() : '';
+      if (!validateEmailAddress(recipientEmailRaw)) {
+        return res.status(400).json({ ok: false, error: 'email_invalid' });
+      }
+
+      const recipientName = typeof req.body?.recipientName === 'string' ? req.body.recipientName.trim().slice(0, 120) : '';
+      const customMessage = typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 600) : '';
+
+      const promo = await fetchPromoRow(pool, normalizedCode);
+      if (!promo || !promo.promo_id) {
+        return res.status(404).json({ ok: false, error: 'promo_not_found' });
+      }
+
+      if (String(promo.plan_type || '').toLowerCase() !== 'founder') {
+        return res.status(400).json({ ok: false, error: 'promo_not_founder' });
+      }
+
+      const now = Date.now();
+      if (promo.expires_at && new Date(promo.expires_at).getTime() < now) {
+        return res.status(400).json({ ok: false, error: 'promo_expired' });
+      }
+
+      let emailSent = false;
+      let emailError: string | null = null;
+      try {
+        const html = buildFounderEmailHtml({
+          name: recipientName,
+          code: promo.code,
+          expiresAt: promo.expires_at,
+          durationMonths: promo.promo_duration_months || promo.plan_duration_months,
+          customMessage: customMessage || null
+        });
+        await EmailService.sendRaw(recipientEmailRaw, 'Tu acceso al Plan Fundador de AdomiApp', html);
+        emailSent = true;
+      } catch (err: any) {
+        emailError = err?.message || 'No fue posible enviar el correo';
+        Logger.error(MODULE, 'Founder promo email failed', {
+          code: promo.code,
+          recipient: recipientEmailRaw,
+          error: emailError
+        });
+      }
+
+      const metadata = parseJsonSafe<Record<string, any>>(promo.promo_metadata, {});
+      metadata.last_email_sent_at = new Date().toISOString();
+      metadata.last_email_recipient = recipientEmailRaw;
+      metadata.last_email_sender = requesterEmail;
+      if (recipientName) metadata.recipient_name = recipientName;
+      if (customMessage) metadata.custom_message = customMessage;
+
+      await pool.execute('UPDATE promo_codes SET metadata = ?, updated_at = NOW() WHERE id = ?', [JSON.stringify(metadata), promo.promo_id]);
+
+      return res.json({
+        ok: true,
+        action: 'send',
+        promo: {
+          id: promo.promo_id,
+          code: promo.code,
+          expires_at: promo.expires_at
+        },
+        emailSent,
+        emailError
+      });
+    } catch (error: any) {
+      Logger.error(MODULE, 'Error en founder-code admin endpoint', { error: error?.message });
+      return res.status(500).json({ ok: false, error: 'Error al gestionar el código Fundador' });
+    }
+  });
 
   router.post('/plans/validate-code', async (req: Request, res: Response) => {
     try {

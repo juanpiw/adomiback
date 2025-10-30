@@ -119,57 +119,50 @@ La UI muestra una tarjeta distintiva “Founder” con beneficios, estado del c�
 
 ## 7. Generación y Gestión de Códigos Fundador
 
-Actualmente los códigos se crean/gestionan vía SQL (no hay UI). Procedimiento recomendado:
+La emisión está automatizada desde la UI interna:
 
-1. **Crear/actualizar plan fundador** (una sola vez):
-   ```sql
-   INSERT INTO plans (...)
-   ON DUPLICATE KEY UPDATE ...;
-   ```
-   Asegúrate de definir `plan_type = 'founder'`, límites (`max_services`, `max_bookings`) y `commission_rate`.
+- Ruta: `/dash/admin-pagos` (solo visible para `juanpablojpw@gmail.com`).
+- Requiere desbloquear el panel con `ADMIN_PANEL_SECRET` (campo en la parte superior).
+- La tarjeta **Plan Fundador – Generador de códigos** consume `POST /subscriptions/admin/founder-code` con dos acciones (`generate` y `send`).
 
-2. **Emitir código promocional**:
-   ```sql
-   SET @plan_id := (SELECT id FROM plans WHERE name = 'Founder' LIMIT 1);
+### Procedimiento desde la UI
+1. Configura duración, vigencia y notas, luego pulsa **Generar código**. El backend crea el registro en `promo_codes` asociándolo al plan Fundador.
+2. El código queda visible para copiarlo. Opcionalmente rellena nombre, correo y un mensaje personalizado.
+3. Pulsa **Enviar correo** para llamar al endpoint con `action=send`. Se envía el email HTML y se actualiza la metadata (`last_email_sent_at`, `recipient_name`, etc.).
 
-   INSERT INTO promo_codes (
-     code, description, plan_id, plan_type, max_redemptions,
-     duration_months, grant_commission_override, applies_to_existing,
-     valid_from, expires_at, metadata, is_active
-   ) VALUES (
-     'FUNDADOR2025',
-     'Acceso gratuito Plan Fundador',
-     @plan_id,
-     'founder',
-     500,
-     12,
-     12.50,
-     FALSE,
-     NOW(),
-     DATE_ADD(NOW(), INTERVAL 6 MONTH),
-     JSON_OBJECT('success_message', '¡Bienvenido al plan Fundador!'),
-     TRUE
-   )
-   ON DUPLICATE KEY UPDATE
-     plan_id = VALUES(plan_id),
-     duration_months = VALUES(duration_months),
-     is_active = TRUE,
-     metadata = VALUES(metadata),
-     updated_at = NOW();
-   ```
+### Payload de referencia
+```http
+POST /subscriptions/admin/founder-code
+Headers: Authorization Bearer <token>, x-admin-secret: <ADMIN_PANEL_SECRET>
 
-3. **Distribución**: entrega el código a través de la campaña (landing, WhatsApp, email). No hay límite de caracteres pero se recomienda mayúsculas y <= 20 chars.
+// Generar código
+{
+  "action": "generate",
+  "durationMonths": 3,
+  "expiryMonths": 6,
+  "notes": "Invitación plan piloto"
+}
 
-4. **Control de uso**: monitorea `promo_codes.current_redemptions` y las filas de `subscriptions` con `plan_origin = 'promo'`.
+// Enviar correo
+{
+  "action": "send",
+  "code": "FDR7X9KQ",
+  "recipientEmail": "fundador@correo.com",
+  "recipientName": "Carla Pérez",
+  "message": "¡Bienvenida al programa Fundador!"
+}
+```
 
-5. **Revocar o pausar**: establece `is_active = FALSE` o acota `expires_at`. El endpoint de validación respetará estos flags.
-
-6. **Auditoría**: consulta `provider_subscription_events` para ver quién canjeó, y `subscription_funnel_events` para analizar en qué paso abandonan.
+### Auditoría y control
+- `promo_codes.metadata` almacena `generated_by`, `notes`, `last_email_sent_at`, etc.
+- `is_active` y `expires_at` permiten pausar o limitar la vigencia de canje.
+- `promo_codes.current_redemptions` y `subscriptions.plan_origin = 'promo'` muestran el uso efectivo del código.
+- Si la UI no está disponible, se puede recurrir al apéndice de SQL (ver Guía Express) como medida de contingencia.
 
 ### Buenas prácticas
-- Cambia los mensajes de éxito/agotamiento via `promo_codes.metadata` (`success_message`, `soldout_message`).
-- Usa `max_redemptions` para campañas controladas; para ilimitadas, deja `NULL`.
-- Define `applies_to_existing = FALSE` para evitar canje de proveedores activos.
+- Ajusta el mensaje personalizado para contextualizar campañas o ferias específicas.
+- Mantén códigos cortos, en mayúsculas y sin caracteres ambiguos.
+- Usa `max_redemptions = 1` para códigos exclusivos; reserva cupos mayores para campañas masivas controladas.
 
 ---
 
@@ -220,67 +213,11 @@ Actualmente los códigos se crean/gestionan vía SQL (no hay UI). Procedimiento 
 
 ## 13. Guía Express: crear y compartir un código Fundador
 
-1. **Genera el código en la base**
-   ```sql
-   SET @founder_plan_id := (SELECT id FROM plans WHERE name = 'Founder' LIMIT 1);
+1. Ingresa a `/dash/admin-pagos` con la cuenta `juanpablojpw@gmail.com` e introduce el `ADMIN_PANEL_SECRET` para habilitar la vista de administración.
+2. En la tarjeta **Plan Fundador – Generador de códigos**, ajusta los parámetros (duración, vigencia, notas) y pulsa **Generar código**. Guarda el código que aparecerá en pantalla.
+3. Completa nombre y correo de la persona invitada y, si corresponde, añade un mensaje personalizado. Pulsa **Enviar correo** para que el backend envíe el HTML y registre la trazabilidad.
+4. Verifica el resultado consultando `SELECT code, expires_at, metadata FROM promo_codes ORDER BY id DESC LIMIT 5;` y confirma que `metadata.last_email_sent_at` se haya actualizado.
+5. Pide al proveedor que ingrese el código en `/auth/select-plan` → tarjeta “Plan Fundador”; tras completar el onboarding quedará con el plan asignado automáticamente.
 
-   INSERT INTO promo_codes (
-     code,
-     description,
-     plan_id,
-     plan_type,
-     max_redemptions,
-     duration_months,
-     grant_commission_override,
-     applies_to_existing,
-     valid_from,
-     expires_at,
-     metadata,
-     is_active
-   ) VALUES (
-     'FUNDADOR2025',
-     'Acceso gratuito Plan Fundador',
-     @founder_plan_id,
-     'founder',
-     500,
-     12,
-     12.50,
-     FALSE,
-     NOW(),
-     DATE_ADD(NOW(), INTERVAL 6 MONTH),
-     JSON_OBJECT('success_message', '¡Bienvenido al plan Fundador!'),
-     TRUE
-   )
-   ON DUPLICATE KEY UPDATE
-     is_active = TRUE,
-     expires_at = VALUES(expires_at),
-     updated_at = NOW();
-   ```
-
-2. **Confírmar que quedó activo**
-   ```sql
-   SELECT code, current_redemptions, expires_at, is_active
-   FROM promo_codes
-   WHERE code = 'FUNDADOR2025';
-   ```
-
-3. **Entrega el código a la persona**
-   - Comparte «FUNDADOR2025» por WhatsApp, mail o landing de invitación.
-   - Explica que debe ingresarlo en `/auth/select-plan` en la tarjeta “Founder”.
-
-4. **La persona canjea el código**
-   - Inicia sesión/registro, pega el código en la tarjeta.
-   - El sistema valida y al llegar a `/auth/checkout` solo presiona “Confirmar”.
-   - Tras el ok, será redirigido al dashboard ya con el plan Fundador activo.
-
-5. **Monitorea los canjes**
-   ```sql
-   SELECT promo_code, COUNT(*) AS total_activos
-   FROM subscriptions
-   WHERE plan_origin = 'promo'
-     AND status IN ('active','warning')
-   GROUP BY promo_code;
-   ```
-
-Con estos cinco pasos puedes crear y entregar rápidamente nuevos códigos a cada interesada/o en el beneficio Fundador.
+> **Plan B (manual)**: si el panel no está disponible, recurre al script SQL de la sección 7 y envía el código por un canal alternativo. Cuando el panel vuelva a estar operativo, migra esos códigos manuales a la UI para mantener el historial centralizado.
 
