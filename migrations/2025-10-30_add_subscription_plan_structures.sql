@@ -73,7 +73,7 @@ CREATE INDEX idx_subscription_grace ON subscriptions (grace_expires_at);
 -- 4. Eventos/bitácora de suscripciones
 CREATE TABLE IF NOT EXISTS provider_subscription_events (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  subscription_id BIGINT UNSIGNED NOT NULL,
+  subscription_id INT NOT NULL,
   event_type ENUM(
     'created','status_changed','renewed','cancelled','expired',
     'promo_applied','limit_reached','warning_sent','grace_started',
