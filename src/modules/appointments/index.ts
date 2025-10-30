@@ -458,7 +458,7 @@ function buildRouter(): Router {
     try {
       const user = (req as any).user || {};
       const id = Number(req.params.id);
-      const { status } = req.body || {};
+      const { status, reason } = req.body || {};
       if (!id || !status) return res.status(400).json({ success: false, error: 'id y status son requeridos' });
       if (!['scheduled','confirmed','completed','cancelled'].includes(status)) {
         return res.status(400).json({ success: false, error: 'status inválido' });
@@ -476,9 +476,28 @@ function buildRouter(): Router {
       if (status === 'cancelled' && !(isProvider || isClient)) {
         return res.status(403).json({ success: false, error: 'No autorizado' });
       }
-      // Determine who cancels (not persisted unless column exists)
-      const cancelledBy = status === 'cancelled' ? (user.role === 'provider' ? 'provider' : (user.role === 'client' ? 'client' : 'system')) : null;
-      await pool.execute('UPDATE appointments SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [status, id]);
+      if (status === 'cancelled' && ['completed', 'cancelled'].includes(String(appt.status))) {
+        return res.status(400).json({ success: false, error: 'La cita ya no puede cancelarse.' });
+      }
+
+      const cancelledBy = status === 'cancelled'
+        ? (isProvider ? 'provider' : (isClient ? 'client' : 'system'))
+        : null;
+
+      const cancelReason = typeof reason === 'string' ? reason.trim().slice(0, 500) : null;
+
+      let updateSql = 'UPDATE appointments SET status = ?, updated_at = CURRENT_TIMESTAMP';
+      const updateParams: any[] = [status];
+
+      if (status === 'cancelled') {
+        updateSql += ', cancelled_by = ?, cancelled_at = CURRENT_TIMESTAMP, cancellation_reason = ?';
+        updateParams.push(cancelledBy || 'system', cancelReason);
+      }
+
+      updateSql += ' WHERE id = ?';
+      updateParams.push(id);
+
+      await pool.execute(updateSql, updateParams);
       const [after] = await pool.query(
         `SELECT a.*, 
                 (SELECT name FROM users WHERE id = a.provider_id) AS provider_name,
@@ -487,7 +506,17 @@ function buildRouter(): Router {
         [id]
       );
       const updated = (after as any[])[0];
-      if (cancelledBy) (updated as any).cancelled_by = cancelledBy;
+      if (cancelledBy) {
+        (updated as any).cancelled_by = cancelledBy;
+        (updated as any).cancellation_reason = cancelReason;
+      }
+      Logger.info(MODULE, '[APPOINTMENTS] Status actualizado', {
+        appointmentId: id,
+        previousStatus: appt.status,
+        nextStatus: status,
+        cancelledBy: cancelledBy || undefined,
+        cancelReason: cancelReason || undefined
+      });
       try { emitToUser(updated.provider_id, 'appointment:updated', updated); } catch {}
       try { emitToUser(updated.client_id, 'appointment:updated', updated); } catch {}
       
@@ -502,16 +531,17 @@ function buildRouter(): Router {
           );
         } else if (status === 'cancelled') {
           const cancelledBy = user.role === 'provider' ? 'el proveedor' : 'el cliente';
+          const cancelMessageSuffix = cancelReason ? ` Motivo: ${cancelReason}` : '';
           await PushService.notifyUser(
             Number(updated.client_id), 
             'Cita cancelada', 
-            `Tu cita con ${updated.provider_name} ha sido cancelada por ${cancelledBy}`, 
+            `Tu cita con ${updated.provider_name} ha sido cancelada por ${cancelledBy}.${cancelMessageSuffix}`, 
             { type: 'appointment', appointment_id: String(id), status: 'cancelled' }
           );
           await PushService.notifyUser(
             Number(updated.provider_id), 
             'Cita cancelada', 
-            `La cita con ${updated.client_name} ha sido cancelada por ${cancelledBy}`, 
+            `La cita con ${updated.client_name} ha sido cancelada por ${cancelledBy}.${cancelMessageSuffix}`, 
             { type: 'appointment', appointment_id: String(id), status: 'cancelled' }
           );
         } else if (status === 'completed') {
