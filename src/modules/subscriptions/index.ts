@@ -826,7 +826,15 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
       );
 
       await connection.execute(
-        'UPDATE users SET active_plan_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        `UPDATE users 
+            SET active_plan_id = ?,
+                role = 'provider',
+                pending_role = NULL,
+                account_switch_in_progress = 0,
+                account_switched_at = NOW(),
+                account_switch_source = COALESCE(account_switch_source, 'promo'),
+                updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
         [promo.plan_id, providerId]
       );
 

@@ -38,7 +38,18 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session, 
   try {
     // Actualizar usuario con customer_id y plan activo
     await pool.execute(
-      'UPDATE users SET stripe_customer_id = ?, active_plan_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      `UPDATE users 
+          SET stripe_customer_id = ?,
+              active_plan_id = ?,
+              role = CASE WHEN pending_role = 'provider' THEN 'provider' ELSE role END,
+              pending_role = NULL,
+              pending_plan_id = NULL,
+              pending_started_at = NULL,
+              account_switch_in_progress = CASE WHEN role = 'provider' OR pending_role = 'provider' THEN 0 ELSE account_switch_in_progress END,
+              account_switched_at = CASE WHEN pending_role = 'provider' THEN NOW() ELSE account_switched_at END,
+              account_switch_source = CASE WHEN pending_role = 'provider' THEN COALESCE(account_switch_source, 'stripe') ELSE account_switch_source END,
+              updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
       [customerId, planId, userId]
     );
     Logger.info(MODULE, 'User updated with customer_id and plan', { userId, customerId, planId });

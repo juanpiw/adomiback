@@ -104,7 +104,12 @@ export class AuthController {
       const [dbRows] = await pool.query('SELECT DATABASE() AS db');
       const dbCtx = (dbRows as any[])[0] || null;
       const [urows] = await pool.query(
-        'SELECT id, email, name, role, stripe_account_id, stripe_payouts_enabled, stripe_onboarding_status FROM users WHERE id = ? LIMIT 1',
+        `SELECT id, email, name, role, pending_role, active_plan_id,
+                account_switch_in_progress, account_switch_started_at, account_switched_at, account_switch_source,
+                stripe_account_id, stripe_payouts_enabled, stripe_onboarding_status
+           FROM users
+          WHERE id = ?
+          LIMIT 1`,
         [user.id]
       );
       const u = (urows as any[])[0];
@@ -126,6 +131,12 @@ export class AuthController {
         email: u.email,
         name: u.name || user.name || null,
         role: u.role,
+        pending_role: u.pending_role || null,
+        active_plan_id: u.active_plan_id || null,
+        account_switch_in_progress: !!u.account_switch_in_progress,
+        account_switch_started_at: u.account_switch_started_at || null,
+        account_switched_at: u.account_switched_at || null,
+        account_switch_source: u.account_switch_source || null,
         stripe_account_id: u.stripe_account_id || null,
         stripe_payouts_enabled: u.stripe_payouts_enabled ?? null,
         stripe_onboarding_status: u.stripe_onboarding_status || null,

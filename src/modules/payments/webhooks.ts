@@ -126,7 +126,19 @@ async function handleStripeWebhook(req: any, res: any, stripe: Stripe, webhookSe
             if (u && String(u.pending_role) === 'provider') {
               const [[before]]: any = await pool.query('SELECT role, pending_role, updated_at FROM users WHERE id = ? LIMIT 1', [u.id]);
               Logger.info(MODULE, '🧪 [PROMO] Before update', { userId: u.id, before });
-              const [upd]: any = await pool.execute("UPDATE users SET role = 'provider', pending_role = NULL, pending_plan_id = NULL, pending_started_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [u.id]);
+              const [upd]: any = await pool.execute(
+                `UPDATE users 
+                    SET role = 'provider',
+                        pending_role = NULL,
+                        pending_plan_id = NULL,
+                        pending_started_at = NULL,
+                        account_switch_in_progress = 0,
+                        account_switched_at = NOW(),
+                        account_switch_source = COALESCE(account_switch_source, 'stripe'),
+                        updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?`,
+                [u.id]
+              );
               Logger.info(MODULE, '🧪 [PROMO] Update result', { affectedRows: upd?.affectedRows });
               const [[after]]: any = await pool.query('SELECT role, pending_role, updated_at FROM users WHERE id = ? LIMIT 1', [u.id]);
               const [[dbRowAfterCtx]]: any = await pool.query('SELECT DATABASE() AS db');
