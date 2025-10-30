@@ -2,6 +2,138 @@ import { Router, Request, Response } from 'express';
 import { authenticateToken } from '../../../shared/middleware/auth.middleware';
 import DatabaseConnection from '../../../shared/database/connection';
 import { Logger } from '../../../shared/utils/logger.util';
+import { EmailService } from '../../../shared/services/email.service';
+
+type TermValidationReason = 'too_short' | 'offensive';
+interface TermValidationResult {
+  ok: boolean;
+  sanitized: string;
+  normalized: string;
+  reason?: TermValidationReason;
+}
+
+const DEFAULT_BLACKLIST_TERMS = [
+  'puta', 'puto', 'mierda', 'caca', 'kaka', 'sexo', 'porn', 'porno', 'verga', 'pene', 'vagina',
+  'fuck', 'shit', 'asshole', 'bitch', 'faggot', 'slut', 'cock', 'dick', 'anal', 'pedo',
+  'rape', 'rapist'
+];
+
+const TERM_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minuto
+const RATE_LIMIT_MAX_ATTEMPTS = 5;
+
+const blacklistCache: { terms: Set<string>; loadedAt: number } = {
+  terms: new Set<string>(),
+  loadedAt: 0
+};
+
+const inviteRateLimiter = new Map<string, { count: number; resetAt: number }>();
+
+const PUBLIC_APP_URL = (process.env.PUBLIC_APP_URL || process.env.APP_BASE_URL || process.env.CLIENT_APP_URL || 'https://adomiapp.com').replace(/\/$/, '');
+
+function stripDiacritics(input: string): string {
+  return input.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function normalizeTermForComparison(term: string): string {
+  return stripDiacritics(term).toLowerCase();
+}
+
+async function loadBlacklist(pool: ReturnType<typeof DatabaseConnection.getPool>) {
+  const now = Date.now();
+  if (now - blacklistCache.loadedAt < TERM_CACHE_TTL_MS && blacklistCache.terms.size > 0) {
+    return;
+  }
+  try {
+    const [rows]: any[] = await pool.query('SELECT term FROM referral_blacklist_terms');
+    const normalized = rows.map((row: any) => normalizeTermForComparison(String(row.term || '')));
+    blacklistCache.terms = new Set(normalized.filter(Boolean));
+    blacklistCache.loadedAt = now;
+  } catch (error) {
+    Logger.warn(MODULE, 'No se pudo cargar blacklist de términos', error as any);
+    blacklistCache.terms = new Set<string>();
+    blacklistCache.loadedAt = now;
+  }
+}
+
+async function getBlacklist(pool: ReturnType<typeof DatabaseConnection.getPool>): Promise<Set<string>> {
+  await loadBlacklist(pool);
+  const merged = new Set<string>();
+  DEFAULT_BLACKLIST_TERMS.forEach(term => {
+    const normalized = normalizeTermForComparison(term);
+    if (normalized) merged.add(normalized);
+  });
+  blacklistCache.terms.forEach(term => {
+    if (term) merged.add(term);
+  });
+  return merged;
+}
+
+function sanitizeRawTerm(raw: string): string {
+  return raw.trim().replace(/\s+/g, ' ').slice(0, 120);
+}
+
+async function validateSearchTerm(pool: ReturnType<typeof DatabaseConnection.getPool>, rawTerm: string): Promise<TermValidationResult> {
+  const sanitized = sanitizeRawTerm(rawTerm);
+  if (!sanitized) {
+    return { ok: false, sanitized: '', normalized: '', reason: 'too_short' };
+  }
+  if (sanitized.length < 2) {
+    return { ok: false, sanitized, normalized: normalizeTermForComparison(sanitized), reason: 'too_short' };
+  }
+
+  const normalized = normalizeTermForComparison(sanitized);
+  if (!normalized) {
+    return { ok: false, sanitized: '', normalized: '', reason: 'too_short' };
+  }
+
+  const blacklist = await getBlacklist(pool);
+  const tokens = normalized.split(/\s+/).filter(Boolean);
+  const normalizedWithoutSpaces = normalized.replace(/\s+/g, '');
+
+  for (const banned of blacklist) {
+    if (!banned) continue;
+    if (normalized.includes(banned)) {
+      return { ok: false, sanitized, normalized, reason: 'offensive' };
+    }
+    if (normalizedWithoutSpaces.includes(banned)) {
+      return { ok: false, sanitized, normalized, reason: 'offensive' };
+    }
+    if (tokens.some(token => token === banned)) {
+      return { ok: false, sanitized, normalized, reason: 'offensive' };
+    }
+  }
+
+  return { ok: true, sanitized, normalized };
+}
+
+function checkInviteRateLimit(key: string): boolean {
+  const now = Date.now();
+  const entry = inviteRateLimiter.get(key);
+  if (!entry || now > entry.resetAt) {
+    inviteRateLimiter.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+  if (entry.count >= RATE_LIMIT_MAX_ATTEMPTS) {
+    return false;
+  }
+  entry.count += 1;
+  return true;
+}
+
+function buildReferralLink(normalizedTerm: string, channel: 'email' | 'whatsapp' | 'copy'): string {
+  const slug = normalizedTerm.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const baseLink = `${PUBLIC_APP_URL}/auth/register`;
+  const params = new URLSearchParams({
+    ref: 'explore-empty',
+    term: slug || 'servicio',
+    utm_source: 'referral',
+    utm_medium: channel,
+    utm_campaign: 'explore-empty'
+  });
+  return `${baseLink}?${params.toString()}`;
+}
+
 
 const MODULE = 'CLIENT_SEARCH';
 
@@ -14,6 +146,113 @@ export class ClientSearchRoutes {
   }
 
   private setupRoutes() {
+    // POST /client/search/validate-term - validar término de búsqueda
+    this.router.post('/client/search/validate-term', authenticateToken, async (req: Request, res: Response) => {
+      try {
+        const pool = DatabaseConnection.getPool();
+        const rawTerm = String((req.body?.term ?? '')).slice(0, 256);
+        const validation = await validateSearchTerm(pool, rawTerm);
+        return res.json({
+          ok: validation.ok,
+          sanitized: validation.sanitized,
+          normalized: validation.normalized,
+          reason: validation.reason ?? null
+        });
+      } catch (error) {
+        Logger.error(MODULE, 'Error validating search term', error as any);
+        return res.status(500).json({ ok: false, error: 'Error al validar término' });
+      }
+    });
+
+    // POST /client/referrals/invite - registrar invitación y enviar email opcional
+    this.router.post('/client/referrals/invite', authenticateToken, async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user || {};
+        const clientId = user?.role === 'client' ? Number(user.id) : null;
+        const pool = DatabaseConnection.getPool();
+        const rawTerm = String((req.body?.searchTerm ?? '')).slice(0, 256);
+        const validation = await validateSearchTerm(pool, rawTerm);
+
+        if (!validation.ok) {
+          return res.status(400).json({ ok: false, reason: validation.reason ?? 'too_short', sanitized: validation.sanitized });
+        }
+
+        let channel = String(req.body?.channel || '').toLowerCase();
+        if (!['email', 'whatsapp', 'copy'].includes(channel)) {
+          channel = 'whatsapp';
+        }
+
+        let source = String(req.body?.source || 'explore-empty').toLowerCase();
+        if (!['explore-empty', 'share-link'].includes(source)) {
+          source = 'explore-empty';
+        }
+
+        const inviteeEmailRaw = typeof req.body?.inviteeEmail === 'string' ? req.body.inviteeEmail.trim() : '';
+        const inviteeEmail = inviteeEmailRaw ? inviteeEmailRaw.toLowerCase() : '';
+        if (inviteeEmail) {
+          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+          if (!emailRegex.test(inviteeEmail)) {
+            return res.status(400).json({ ok: false, error: 'email_invalid' });
+          }
+        }
+
+        const rateKey = clientId ? `client:${clientId}` : `ip:${req.ip}`;
+        if (!checkInviteRateLimit(rateKey)) {
+          return res.status(429).json({ ok: false, error: 'rate_limit' });
+        }
+
+        const referralLink = buildReferralLink(validation.normalized, channel as 'email' | 'whatsapp' | 'copy');
+        const locationLabel = typeof req.body?.locationLabel === 'string' ? String(req.body.locationLabel).trim().slice(0, 120) : '';
+
+        await pool.execute(
+          `INSERT INTO referral_invites (client_id, search_term, invitee_email, source, channel, referral_link, meta)
+           VALUES (?, ?, ?, ?, ?, ?, JSON_OBJECT('user_agent', ?, 'ip', ?, 'location', ?))`,
+          [
+            clientId || null,
+            validation.sanitized,
+            inviteeEmail || null,
+            source,
+            channel,
+            referralLink,
+            req.get('user-agent') || '',
+            req.ip || '',
+            locationLabel
+          ]
+        );
+
+        let emailSent = false;
+        if (channel === 'email' && inviteeEmail) {
+          try {
+            const subject = `Te invitaron a ofrecer ${validation.sanitized} en AdomiApp`;
+            const html = `
+              <p>Hola 👋</p>
+              <p>Te invitaron a unirte a <strong>AdomiApp</strong> para ofrecer servicios de <strong>${validation.sanitized}</strong>.</p>
+              <p>Regístrate aquí y comienza a recibir clientes:</p>
+              <p><a href="${referralLink}" target="_blank" rel="noopener noreferrer">${referralLink}</a></p>
+              <p>¡Te esperamos!<br/>Equipo AdomiApp</p>
+            `;
+            await EmailService.sendRaw(inviteeEmail, subject, html);
+            emailSent = true;
+          } catch (err) {
+            Logger.warn(MODULE, 'No se pudo enviar email de invitación', err as any);
+          }
+        }
+
+        Logger.info(MODULE, 'Referral invite registrada', {
+          clientId,
+          source,
+          channel,
+          sanitized: validation.sanitized,
+          inviteeEmail: inviteeEmail || null
+        });
+
+        return res.json({ ok: true, referralLink, emailSent });
+      } catch (error) {
+        Logger.error(MODULE, 'Error registrando invitación de referidos', error as any);
+        return res.status(500).json({ ok: false, error: 'Error al registrar invitación' });
+      }
+    });
+
     // GET /client/search/providers - Buscar profesionales
     this.router.get('/client/search/providers', authenticateToken, async (req: Request, res: Response) => {
       try {
