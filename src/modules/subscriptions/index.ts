@@ -117,7 +117,26 @@ async function findFounderPlan(connection: any) {
       ORDER BY updated_at DESC, id DESC
       LIMIT 1`
   );
-  return Array.isArray(rows) ? (rows as any[])[0] : rows;
+  let plan = Array.isArray(rows) ? (rows as any[])[0] : rows;
+
+  if (!plan) {
+    const [fallbackRows] = await connection.query(
+      `SELECT id, name, duration_months, commission_rate, metadata
+         FROM plans
+        WHERE LOWER(name) LIKE 'founder%'
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1`
+    );
+    plan = Array.isArray(fallbackRows) ? (fallbackRows as any[])[0] : fallbackRows;
+  }
+
+  if (!plan) {
+    Logger.warn(MODULE, 'Founder plan not found. Ensure a plan exists with plan_type = founder or name matching "Founder"');
+  } else {
+    Logger.info(MODULE, 'Founder plan resolved', { planId: plan.id, name: plan.name, duration: plan.duration_months });
+  }
+
+  return plan;
 }
 
 function buildFounderEmailHtml(params: { name?: string | null; code: string; expiresAt?: string | null; durationMonths?: number | null; customMessage?: string | null; }): string {
@@ -211,8 +230,16 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
       const action = actionRaw === 'send' ? 'send' : 'generate';
 
       if (action === 'generate') {
+        Logger.info(MODULE, 'Founder code generation requested', {
+          by: requesterEmail,
+          durationMonths: req.body?.durationMonths,
+          expiryMonths: req.body?.expiryMonths,
+          notes: req.body?.notes ? '[provided]' : undefined,
+          recipientEmailProvided: !!req.body?.recipientEmail
+        });
         const plan = await findFounderPlan(pool);
         if (!plan || !plan.id) {
+          Logger.warn(MODULE, 'Founder code generation aborted – plan not configured');
           return res.status(400).json({ ok: false, error: 'founder_plan_not_configured' });
         }
 
@@ -335,6 +362,13 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
 
       const recipientName = typeof req.body?.recipientName === 'string' ? req.body.recipientName.trim().slice(0, 120) : '';
       const customMessage = typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 600) : '';
+
+      Logger.info(MODULE, 'Founder code send requested', {
+        by: requesterEmail,
+        code: normalizedCode,
+        recipientEmail: recipientEmailRaw,
+        hasCustomMessage: !!customMessage
+      });
 
       const promo = await fetchPromoRow(pool, normalizedCode);
       if (!promo || !promo.promo_id) {
