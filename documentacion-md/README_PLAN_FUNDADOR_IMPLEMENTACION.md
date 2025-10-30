@@ -216,4 +216,71 @@ Actualmente los códigos se crean/gestionan vía SQL (no hay UI). Procedimiento 
 - Automatizar avisos de expiración por email / push segmentado.
 - Extender lógica para convertir Plan Fundador a plan pagado con descuento especial.
 
+---
+
+## 13. Guía Express: crear y compartir un código Fundador
+
+1. **Genera el código en la base**
+   ```sql
+   SET @founder_plan_id := (SELECT id FROM plans WHERE name = 'Founder' LIMIT 1);
+
+   INSERT INTO promo_codes (
+     code,
+     description,
+     plan_id,
+     plan_type,
+     max_redemptions,
+     duration_months,
+     grant_commission_override,
+     applies_to_existing,
+     valid_from,
+     expires_at,
+     metadata,
+     is_active
+   ) VALUES (
+     'FUNDADOR2025',
+     'Acceso gratuito Plan Fundador',
+     @founder_plan_id,
+     'founder',
+     500,
+     12,
+     12.50,
+     FALSE,
+     NOW(),
+     DATE_ADD(NOW(), INTERVAL 6 MONTH),
+     JSON_OBJECT('success_message', '¡Bienvenido al plan Fundador!'),
+     TRUE
+   )
+   ON DUPLICATE KEY UPDATE
+     is_active = TRUE,
+     expires_at = VALUES(expires_at),
+     updated_at = NOW();
+   ```
+
+2. **Confírmar que quedó activo**
+   ```sql
+   SELECT code, current_redemptions, expires_at, is_active
+   FROM promo_codes
+   WHERE code = 'FUNDADOR2025';
+   ```
+
+3. **Entrega el código a la persona**
+   - Comparte «FUNDADOR2025» por WhatsApp, mail o landing de invitación.
+   - Explica que debe ingresarlo en `/auth/select-plan` en la tarjeta “Founder”.
+
+4. **La persona canjea el código**
+   - Inicia sesión/registro, pega el código en la tarjeta.
+   - El sistema valida y al llegar a `/auth/checkout` solo presiona “Confirmar”.
+   - Tras el ok, será redirigido al dashboard ya con el plan Fundador activo.
+
+5. **Monitorea los canjes**
+   ```sql
+   SELECT promo_code, COUNT(*) AS total_activos
+   FROM subscriptions
+   WHERE plan_origin = 'promo'
+     AND status IN ('active','warning')
+   GROUP BY promo_code;
+   ```
+
+Con estos cinco pasos puedes crear y entregar rápidamente nuevos códigos a cada interesada/o en el beneficio Fundador.
 

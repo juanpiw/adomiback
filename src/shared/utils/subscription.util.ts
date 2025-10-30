@@ -107,7 +107,7 @@ export async function ensureServiceLimit(providerId: number) {
     return limits;
   }
 
-  const [[countRow]] = await pool.query(
+  const [countRows] = await pool.query(
     `SELECT COUNT(*) AS total
        FROM provider_services
       WHERE provider_id = ?
@@ -115,7 +115,8 @@ export async function ensureServiceLimit(providerId: number) {
     [providerId]
   );
 
-  const current = Number((countRow as any).total) || 0;
+  const countRow = Array.isArray(countRows) ? (countRows as any[])[0] : countRows;
+  const current = Number(countRow?.total ?? 0);
   if (current >= limits.maxServices) {
     const message = `Has alcanzado el máximo de ${limits.maxServices} servicios para tu plan actual.`;
     const error: any = new Error(message);
@@ -140,7 +141,7 @@ export async function ensureBookingLimit(providerId: number, targetDate: Date) {
   const endOfMonth = new Date(startOfMonth);
   endOfMonth.setMonth(endOfMonth.getMonth() + 1);
 
-  const [[countRow]] = await pool.query(
+  const [countRows] = await pool.query(
     `SELECT COUNT(*) AS total
        FROM appointments
       WHERE provider_id = ?
@@ -150,7 +151,8 @@ export async function ensureBookingLimit(providerId: number, targetDate: Date) {
     [providerId, startOfMonth, endOfMonth]
   );
 
-  const current = Number((countRow as any).total) || 0;
+  const countRow = Array.isArray(countRows) ? (countRows as any[])[0] : countRows;
+  const current = Number(countRow?.total ?? 0);
   if (current >= limits.maxBookings) {
     const message = `Has alcanzado el máximo de ${limits.maxBookings} reservas mensuales permitidas por tu plan.`;
     const error: any = new Error(message);
