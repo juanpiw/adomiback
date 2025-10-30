@@ -585,11 +585,19 @@ function buildRouter(): Router {
 
       // Registrar deuda de comisión del proveedor (si existe la tabla) con due_date (T + cash_commission_due_days)
       try {
-        await pool.execute(
+        const [debtIns]: any = await pool.execute(
           `INSERT INTO provider_commission_debts (provider_id, appointment_id, payment_id, commission_amount, currency, status, due_date, created_at)
            VALUES (?, ?, ?, ?, 'CLP', 'pending', DATE_ADD(NOW(), INTERVAL ? DAY), NOW())`,
           [appt.provider_id, appointmentId, paymentId, commissionAmount, cashSettings.dueDays]
         );
+        Logger.info(MODULE, '[CASH] Debt registered after collect', {
+          providerId: appt.provider_id,
+          appointmentId,
+          paymentId,
+          commissionAmount,
+          debtId: debtIns.insertId,
+          dueDays: cashSettings.dueDays
+        });
       } catch (e) {
         Logger.warn(MODULE, 'No se pudo registrar deuda de comisión (tabla puede no existir aún)');
       }
@@ -732,11 +740,19 @@ function buildRouter(): Router {
 
       // Deuda de comisión
       try {
-        await pool.execute(
+        const [debtIns]: any = await pool.execute(
           `INSERT INTO provider_commission_debts (provider_id, appointment_id, payment_id, commission_amount, currency, status, due_date, created_at)
            VALUES (?, ?, ?, ?, 'CLP', 'pending', DATE_ADD(NOW(), INTERVAL ? DAY), NOW())`,
           [appt.provider_id, appointmentId, paymentId, commissionAmount, dueDays]
         );
+        Logger.info(MODULE, '[CASH] Debt registered after verify-code', {
+          providerId: appt.provider_id,
+          appointmentId,
+          paymentId,
+          commissionAmount,
+          debtId: debtIns.insertId,
+          dueDays
+        });
       } catch (err) {
         Logger.warn(MODULE, '[CASH] No se pudo registrar deuda de comisión durante verify-code', err as any);
       }
@@ -806,12 +822,22 @@ function buildRouter(): Router {
       );
       const paymentId = ins.insertId;
       try {
-        await pool.execute(
+        const [debtIns]: any = await pool.execute(
           `INSERT INTO provider_commission_debts (provider_id, appointment_id, payment_id, commission_amount, currency, status, due_date, created_at)
            VALUES (?, ?, ?, ?, 'CLP', 'pending', DATE_ADD(NOW(), INTERVAL ? DAY), NOW())`,
           [appt.provider_id, appointmentId, paymentId, commissionAmount, settings.dueDays]
         );
-      } catch {}
+        Logger.info(MODULE, '[CASH] Debt auto-resolve', {
+          providerId: appt.provider_id,
+          appointmentId,
+          paymentId,
+          commissionAmount,
+          debtId: debtIns.insertId,
+          dueDays: settings.dueDays
+        });
+      } catch (err) {
+        Logger.warn(MODULE, '[CASH] No se pudo registrar deuda durante auto-resolve', err as any);
+      }
       await pool.execute(`UPDATE appointments SET closure_state = 'resolved', payment_method = 'cash', updated_at = NOW() WHERE id = ?`, [appointmentId]);
       return { resolved: true, payment_id: paymentId };
     }

@@ -125,13 +125,40 @@ export function buildProviderFinancesRoutes(): Router {
       const [[sum]]: any = await pool.query(
         `SELECT 
            COALESCE(SUM(CASE WHEN status IN ('pending','overdue') THEN commission_amount ELSE 0 END), 0) AS total_due,
-           COALESCE(SUM(CASE WHEN status = 'overdue' THEN commission_amount ELSE 0 END), 0) AS overdue_due
+           COALESCE(SUM(CASE WHEN status = 'overdue' THEN commission_amount ELSE 0 END), 0) AS overdue_due,
+           SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+           SUM(CASE WHEN status = 'overdue' THEN 1 ELSE 0 END) AS overdue_count,
+           SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) AS paid_count
          FROM provider_commission_debts
-         WHERE provider_id = ?
-           AND status IN ('pending','overdue')`,
+         WHERE provider_id = ?`,
         [providerId]
       );
-      return res.json({ success: true, summary: { total_due: Number(sum?.total_due || 0), overdue_due: Number(sum?.overdue_due || 0) } });
+      const [[last]]: any = await pool.query(
+        `SELECT id, commission_amount, currency, status, due_date, created_at
+           FROM provider_commission_debts
+          WHERE provider_id = ?
+          ORDER BY created_at DESC
+          LIMIT 1`,
+        [providerId]
+      );
+      return res.json({
+        success: true,
+        summary: {
+          total_due: Number(sum?.total_due || 0),
+          overdue_due: Number(sum?.overdue_due || 0),
+          pending_count: Number(sum?.pending_count || 0),
+          overdue_count: Number(sum?.overdue_count || 0),
+          paid_count: Number(sum?.paid_count || 0),
+          last_debt: last ? {
+            id: last.id,
+            commission_amount: Number(last.commission_amount || 0),
+            currency: last.currency || 'CLP',
+            status: last.status || null,
+            due_date: last.due_date,
+            created_at: last.created_at
+          } : null
+        }
+      });
     } catch (err) {
       Logger.error(MODULE, 'Error getting cash summary', err as any);
       return res.status(500).json({ success: false, error: 'Error al obtener resumen de efectivo' });
