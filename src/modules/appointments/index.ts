@@ -540,6 +540,11 @@ function buildRouter(): Router {
       const appointmentId = Number(req.params.id);
       if (!Number.isFinite(appointmentId)) return res.status(400).json({ success: false, error: 'id inválido' });
 
+      Logger.info(MODULE, '[TRACE][COLLECT] Solicitud registrar cobro cash', {
+        appointmentId,
+        providerRequestId: user.id
+      });
+
       const pool = DatabaseConnection.getPool();
       // Cargar cita
       const [[appt]]: any = await pool.query('SELECT * FROM appointments WHERE id = ? LIMIT 1', [appointmentId]);
@@ -575,6 +580,16 @@ function buildRouter(): Router {
       const commissionAmount = Number((priceBase * (commissionRate / 100)).toFixed(2));
       const providerAmount = Number((priceBase - commissionAmount).toFixed(2));
 
+      Logger.info(MODULE, '[TRACE][COLLECT] Calculando pago cash', {
+        appointmentId,
+        amount,
+        taxAmount,
+        commissionAmount,
+        providerAmount,
+        providerId: appt.provider_id,
+        clientId: appt.client_id
+      });
+
       // Insertar payment en efectivo
       const [ins]: any = await pool.execute(
         `INSERT INTO payments (appointment_id, client_id, provider_id, amount, tax_amount, commission_amount, provider_amount, currency, payment_method, status, paid_at, can_release, release_status)
@@ -582,6 +597,13 @@ function buildRouter(): Router {
         [appointmentId, appt.client_id, appt.provider_id, amount, taxAmount, commissionAmount, providerAmount]
       );
       const paymentId = ins.insertId;
+
+      Logger.info(MODULE, '[TRACE][COLLECT] Payment cash insertado', {
+        paymentId,
+        appointmentId,
+        providerId: appt.provider_id,
+        clientId: appt.client_id
+      });
 
       // Registrar deuda de comisión del proveedor (si existe la tabla) con due_date (T + cash_commission_due_days)
       try {
@@ -691,6 +713,12 @@ function buildRouter(): Router {
       if (!Number.isFinite(appointmentId)) return res.status(400).json({ success: false, error: 'id inválido' });
       if (!validateCodeFormat(String(code || ''))) return res.status(400).json({ success: false, error: 'Código inválido' });
 
+      Logger.info(MODULE, '[TRACE][VERIFY] Solicitud validar código cash', {
+        appointmentId,
+        providerRequestId: user.id,
+        codeLength: String(code || '').length
+      });
+
       const pool = DatabaseConnection.getPool();
       const [[appt]]: any = await pool.query('SELECT * FROM appointments WHERE id = ? LIMIT 1', [appointmentId]);
       if (!appt) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
@@ -730,6 +758,16 @@ function buildRouter(): Router {
       const commissionAmount = Number((priceBase * (commissionRate / 100)).toFixed(2));
       const providerAmount = Number((priceBase - commissionAmount).toFixed(2));
 
+      Logger.info(MODULE, '[TRACE][VERIFY] Calculando pago cash', {
+        appointmentId,
+        amount,
+        taxAmount,
+        commissionAmount,
+        providerAmount,
+        providerId: appt.provider_id,
+        clientId: appt.client_id
+      });
+
       // Insert payment cash
       const [ins]: any = await pool.execute(
         `INSERT INTO payments (appointment_id, client_id, provider_id, amount, tax_amount, commission_amount, provider_amount, currency, payment_method, status, paid_at, can_release, release_status)
@@ -737,6 +775,13 @@ function buildRouter(): Router {
         [appointmentId, appt.client_id, appt.provider_id, amount, taxAmount, commissionAmount, providerAmount]
       );
       const paymentId = ins.insertId;
+
+      Logger.info(MODULE, '[TRACE][VERIFY] Payment cash insertado', {
+        appointmentId,
+        paymentId,
+        providerId: appt.provider_id,
+        clientId: appt.client_id
+      });
 
       // Deuda de comisión
       try {

@@ -141,6 +141,20 @@ export function buildProviderFinancesRoutes(): Router {
           LIMIT 1`,
         [providerId]
       );
+      Logger.info(MODULE, '[TRACE][SUMMARY] provider cash summary generado', {
+        providerId,
+        total_due: Number(sum?.total_due || 0),
+        overdue_due: Number(sum?.overdue_due || 0),
+        pending_count: Number(sum?.pending_count || 0),
+        overdue_count: Number(sum?.overdue_count || 0),
+        paid_count: Number(sum?.paid_count || 0),
+        last_debt: last ? {
+          id: last.id,
+          commission_amount: Number(last.commission_amount || 0),
+          status: last.status,
+          due_date: last.due_date
+        } : null
+      });
       return res.json({
         success: true,
         summary: {
