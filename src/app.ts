@@ -122,6 +122,13 @@ export function createApp(): Express {
   } catch (e) {
     Logger.warn('APP', 'Closure cron not started', e as any);
   }
+
+  try {
+    const { setupSubscriptionRenewalCron } = require('./modules/subscriptions/renewal-cron');
+    setupSubscriptionRenewalCron();
+  } catch (e) {
+    Logger.warn('APP', 'Subscription renewal cron not started', e as any);
+  }
   
   Logger.info('APP', 'All modules loaded successfully');
 

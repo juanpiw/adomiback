@@ -7,6 +7,7 @@ import { Express, Router, Request, Response } from 'express';
 import DatabaseConnection from '../../shared/database/connection';
 import { authenticateToken } from '../../shared/middleware/auth.middleware';
 import { Logger } from '../../shared/utils/logger.util';
+import { ensureBookingLimit } from '../../shared/utils/subscription.util';
 import { emitToUser } from '../../shared/realtime/socket';
 import { PushService } from '../notifications/services/push.service';
 import { validateCodeFormat, compareVerificationCodes, sanitizeCode, generateVerificationCode } from '../../shared/utils/verification-code.util';
@@ -96,6 +97,16 @@ function buildRouter(): Router {
       if ((over as any[]).length > 0) {
         return res.status(409).json({ success: false, error: 'Horario no disponible (solape)' });
       }
+      try {
+        const targetDate = new Date(`${date}T00:00:00`);
+        await ensureBookingLimit(Number(provider_id), targetDate);
+      } catch (limitError: any) {
+        if (limitError && limitError.code === 'BOOKING_LIMIT_REACHED') {
+          return res.status(limitError.statusCode || 409).json({ success: false, error: limitError.message });
+        }
+        throw limitError;
+      }
+
       // Insertar cita
       const [ins] = await pool.execute(
         `INSERT INTO appointments (provider_id, client_id, service_id, \`date\`, \`start_time\`, \`end_time\`, price, status, notes)

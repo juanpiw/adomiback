@@ -8,6 +8,66 @@ import DatabaseConnection from '../../shared/database/connection';
 import Stripe from 'stripe';
 import { JWTUtil } from '../../shared/utils/jwt.util';
 import { setupStripeWebhooks } from './webhooks';
+import { logFunnelEvent, isValidFunnelEvent } from '../../shared/utils/subscription.util';
+import { authenticateToken } from '../../shared/middleware/auth.middleware';
+
+function parseJsonSafe<T>(value: any, fallback: T): T {
+  if (value === null || value === undefined) return fallback;
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return parsed !== undefined ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeInterval(interval: string): 'month' | 'year' {
+  const normalized = String(interval || '').toLowerCase();
+  if (normalized === 'monthly' || normalized === 'month') return 'month';
+  if (normalized === 'yearly' || normalized === 'year') return 'year';
+  return 'month';
+}
+
+async function fetchPromoRow(connection: any, code: string) {
+  const [rows] = await connection.query(`
+    SELECT 
+      pc.id as promo_id,
+      pc.code,
+      pc.description as promo_description,
+      pc.plan_type as promo_plan_type,
+      pc.max_redemptions,
+      pc.current_redemptions,
+      pc.discount_percentage,
+      pc.duration_months as promo_duration_months,
+      pc.grant_commission_override,
+      pc.applies_to_existing,
+      pc.valid_from,
+      pc.expires_at,
+      pc.allowed_roles,
+      pc.metadata as promo_metadata,
+      pc.is_active,
+      p.id as plan_id,
+      p.name,
+      p.price,
+      p.currency,
+      p.billing_period,
+      p.description,
+      p.features,
+      p.max_services,
+      p.max_bookings,
+      p.commission_rate,
+      p.plan_type,
+      p.duration_months as plan_duration_months,
+      p.benefits,
+      p.metadata as plan_metadata
+    FROM promo_codes pc
+    INNER JOIN plans p ON p.id = pc.plan_id
+    WHERE UPPER(pc.code) = ?
+    LIMIT 1
+  `, [code]);
+  return (rows as any[])[0] || null;
+}
+
 
 /**
  * Setup function to mount subscriptions routes
@@ -25,6 +85,202 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
   // Modo normal: montar todas las rutas (excepto webhook que ya se montó)
   const router = Router();
 
+  router.post('/plans/validate-code', async (req: Request, res: Response) => {
+    try {
+      const { code, email, providerId, billing } = (req.body || {}) as {
+        code?: string;
+        email?: string;
+        providerId?: number;
+        billing?: string;
+      };
+
+      if (!code || !String(code).trim()) {
+        return res.status(400).json({ ok: false, error: 'Debes ingresar un código promocional.' });
+      }
+
+      const normalizedCode = String(code).trim().toUpperCase();
+      const pool = DatabaseConnection.getPool();
+
+      const promo = await fetchPromoRow(pool, normalizedCode);
+
+      if (!promo) {
+        return res.status(404).json({ ok: false, error: 'Código no válido o no disponible.' });
+      }
+      if (!promo.is_active) {
+        return res.status(400).json({ ok: false, error: 'Este código ya no se encuentra activo.' });
+      }
+
+      const now = Date.now();
+      if (promo.valid_from && new Date(promo.valid_from).getTime() > now) {
+        return res.status(400).json({ ok: false, error: 'Este código aún no está disponible.' });
+      }
+      if (promo.expires_at && new Date(promo.expires_at).getTime() < now) {
+        return res.status(400).json({ ok: false, error: 'Este código expiró.' });
+      }
+
+      // Validar redenciones
+      let usedCount = Number(promo.current_redemptions) || 0;
+      if (promo.max_redemptions !== null && promo.max_redemptions !== undefined) {
+        const [[usage]] = await pool.query(
+          'SELECT COUNT(*) AS used FROM subscriptions WHERE promo_code_id = ? AND status IN ("active","warning","past_due")',
+          [promo.promo_id]
+        );
+        usedCount = Math.max(usedCount, Number((usage as any).used) || 0);
+        if (promo.max_redemptions > 0 && usedCount >= promo.max_redemptions) {
+          return res.status(400).json({ ok: false, error: 'Este código ya alcanzó el número máximo de usos.' });
+        }
+      }
+
+      // Validar elegibilidad de proveedor existente si aplica
+      if (!promo.applies_to_existing) {
+        if (providerId) {
+          const [subscriptionCheck] = await pool.query(
+            `SELECT id FROM subscriptions WHERE user_id = ? AND status IN ('active','warning','past_due') LIMIT 1`,
+            [providerId]
+          );
+          if ((subscriptionCheck as any[]).length > 0) {
+            return res.status(400).json({ ok: false, error: 'Este código está limitado a nuevos proveedores.' });
+          }
+        } else if (email) {
+          const [userCheck] = await pool.query(
+            `SELECT id FROM users WHERE email = ? AND role = 'provider' LIMIT 1`,
+            [email]
+          );
+          if ((userCheck as any[]).length > 0) {
+            return res.status(400).json({ ok: false, error: 'Este código aplica solo a cuentas nuevas.' });
+          }
+        }
+      }
+
+      const allowedRoles = parseJsonSafe<string[]>(promo.allowed_roles, []);
+      if (allowedRoles.length > 0 && !allowedRoles.includes('provider')) {
+        return res.status(400).json({ ok: false, error: 'Este código no está disponible para este tipo de cuenta.' });
+      }
+
+      const benefits = parseJsonSafe<any[]>(promo.benefits, []);
+      const features = parseJsonSafe<any[]>(promo.features, []);
+      const planMetadata = parseJsonSafe<Record<string, any>>(promo.plan_metadata, {});
+      const promoMetadata = parseJsonSafe<Record<string, any>>(promo.promo_metadata, {});
+
+      const durationMonths = promo.promo_duration_months || promo.plan_duration_months || 3;
+
+      const responsePlan = {
+        id: promo.plan_id,
+        name: promo.name,
+        price: 0,
+        currency: promo.currency || 'CLP',
+        interval: normalizeInterval(promo.billing_period),
+        description: promo.description || '',
+        features,
+        max_services: Number(promo.max_services) || 0,
+        max_bookings: Number(promo.max_bookings) || 0,
+        commission_rate: Number(promo.commission_rate) || 0,
+        duration_months: durationMonths,
+        isPromo: true,
+        promoCode: promo.code,
+        benefits,
+        metadata: planMetadata
+      };
+
+      const remaining = promo.max_redemptions
+        ? Math.max(0, promo.max_redemptions - usedCount)
+        : null;
+
+      const promoResponse = {
+        code: promo.code,
+        label: promo.promo_description || 'Plan Fundador',
+        message: promoMetadata?.success_message || 'Código aplicado correctamente.',
+        expires_at: promo.expires_at,
+        max_duration_months: durationMonths,
+        remaining_spots: remaining,
+        metadata: promoMetadata
+      };
+
+      await logFunnelEvent(pool, {
+        event: 'promo_validated',
+        email: email ? String(email).toLowerCase() : null,
+        providerId: providerId ? Number(providerId) : null,
+        promoCode: normalizedCode,
+        metadata: {
+          plan_id: promo.plan_id,
+          plan_type: promo.plan_type,
+          duration_months: durationMonths,
+          remaining_spots: remaining
+        }
+      });
+
+      res.json({ ok: true, plan: responsePlan, promo: promoResponse });
+    } catch (error: any) {
+      console.error('[PLANS][VALIDATE_CODE][ERROR]', error);
+      res.status(500).json({ ok: false, error: 'No pudimos validar el código. Intenta más tarde.' });
+    }
+  });
+
+  router.post('/subscriptions/funnel/event', async (req: Request, res: Response) => {
+    try {
+      const { event, email, providerId, promoCode, metadata } = req.body || {};
+      if (!event || !isValidFunnelEvent(String(event))) {
+        return res.status(400).json({ ok: false, error: 'Evento inválido' });
+      }
+      const pool = DatabaseConnection.getPool();
+      await logFunnelEvent(pool, {
+        event: String(event),
+        email: email ? String(email).trim().toLowerCase() : null,
+        providerId: providerId ? Number(providerId) : null,
+        promoCode: promoCode ? String(promoCode).trim().toUpperCase() : null,
+        metadata: metadata && typeof metadata === 'object' ? metadata : null
+      });
+      res.json({ ok: true });
+    } catch (error: any) {
+      console.error('[SUBSCRIPTIONS][FUNNEL_EVENT][ERROR]', error);
+      res.status(500).json({ ok: false, error: 'No se pudo registrar el evento' });
+    }
+  });
+
+  router.get('/subscriptions/funnel/metrics', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      if (!user || user.role !== 'admin') {
+        return res.status(403).json({ ok: false, error: 'Solo administradores pueden acceder a esta métrica' });
+      }
+
+      const pool = DatabaseConnection.getPool();
+      const [totals] = await pool.query(
+        `SELECT event_type, COUNT(*) AS total
+           FROM subscription_funnel_events
+          GROUP BY event_type`
+      );
+
+      const [promoBreakdown] = await pool.query(
+        `SELECT promo_code, COUNT(*) as total
+           FROM subscription_funnel_events
+          WHERE event_type = 'promo_validated'
+          GROUP BY promo_code
+          ORDER BY total DESC`
+      );
+
+      const [activations] = await pool.query(
+        `SELECT promo_code, COUNT(*) as total
+           FROM subscription_funnel_events
+          WHERE event_type = 'promo_activated'
+          GROUP BY promo_code
+          ORDER BY total DESC`
+      );
+
+      res.json({
+        ok: true,
+        data: {
+          totals,
+          promoValidated: promoBreakdown,
+          promoActivated: activations
+        }
+      });
+    } catch (error: any) {
+      console.error('[SUBSCRIPTIONS][FUNNEL_METRICS][ERROR]', error);
+      res.status(500).json({ ok: false, error: 'No se pudo obtener métricas' });
+    }
+  });
+
   // GET /plans - planes activos con shape esperado por el front
   router.get('/plans', async (_req: Request, res: Response) => {
     try {
@@ -39,10 +295,16 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
           billing_period AS \`interval\`,
           COALESCE(description, '') AS description,
           COALESCE(features, '[]') AS features,
-          0 AS max_services,
-          0 AS max_bookings
+          COALESCE(max_services, 0) AS max_services,
+          COALESCE(max_bookings, 0) AS max_bookings,
+          COALESCE(commission_rate, 0) AS commission_rate,
+          plan_type,
+          duration_months,
+          COALESCE(benefits, '[]') AS benefits,
+          metadata
         FROM plans
         WHERE is_active = TRUE
+          AND plan_type IN ('paid','free')
         ORDER BY price ASC
       `);
 
@@ -56,13 +318,229 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
         features: (() => { try { const f = JSON.parse(r.features); return Array.isArray(f) ? f : []; } catch { return []; } })(),
         max_services: Number(r.max_services) || 0,
         max_bookings: Number(r.max_bookings) || 0,
-        stripe_price_id: r.stripe_price_id
+        commission_rate: Number(r.commission_rate) || 0,
+        stripe_price_id: r.stripe_price_id,
+        plan_type: r.plan_type,
+        duration_months: r.duration_months ? Number(r.duration_months) : null,
+        benefits: (() => { try { const b = JSON.parse(r.benefits); return Array.isArray(b) ? b : []; } catch { return []; } })(),
+        metadata: (() => { try { return r.metadata ? JSON.parse(r.metadata) : null; } catch { return null; } })()
       }));
 
       res.json({ ok: true, plans });
     } catch (error: any) {
       console.error('[PLANS][GET][ERROR]', error);
       res.status(500).json({ ok: false, error: 'Error al obtener planes' });
+    }
+  });
+
+  router.post('/subscriptions/promo/apply', async (req: Request, res: Response) => {
+    const pool = DatabaseConnection.getPool();
+    const { providerId, code } = (req.body || {}) as {
+      providerId?: number;
+      code?: string;
+    };
+
+    if (!providerId || Number.isNaN(Number(providerId))) {
+      return res.status(400).json({ ok: false, error: 'Debes indicar el proveedor' });
+    }
+    if (!code || !String(code).trim()) {
+      return res.status(400).json({ ok: false, error: 'Debes ingresar un código promocional.' });
+    }
+
+    const normalizedCode = String(code).trim().toUpperCase();
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+
+      const [userRows] = await connection.query(
+        `SELECT id, role, email, active_plan_id FROM users WHERE id = ? LIMIT 1 FOR UPDATE`,
+        [providerId]
+      );
+      if ((userRows as any[]).length === 0) {
+        await connection.rollback();
+        return res.status(404).json({ ok: false, error: 'Proveedor no encontrado.' });
+      }
+      const provider = (userRows as any[])[0];
+      if (provider.role !== 'provider') {
+        await connection.rollback();
+        return res.status(400).json({ ok: false, error: 'El código solo aplica a cuentas de proveedor.' });
+      }
+
+      const promo = await fetchPromoRow(connection, normalizedCode);
+      if (!promo) {
+        await connection.rollback();
+        return res.status(404).json({ ok: false, error: 'Código no válido o no disponible.' });
+      }
+
+      const now = Date.now();
+      if (!promo.is_active) {
+        await connection.rollback();
+        return res.status(400).json({ ok: false, error: 'Este código ya no está activo.' });
+      }
+      if (promo.valid_from && new Date(promo.valid_from).getTime() > now) {
+        await connection.rollback();
+        return res.status(400).json({ ok: false, error: 'Este código aún no está disponible.' });
+      }
+      if (promo.expires_at && new Date(promo.expires_at).getTime() < now) {
+        await connection.rollback();
+        return res.status(400).json({ ok: false, error: 'Este código expiró.' });
+      }
+
+      if (!promo.applies_to_existing) {
+        if (provider.active_plan_id) {
+          await connection.rollback();
+          return res.status(400).json({ ok: false, error: 'El código Fundador está limitado a cuentas nuevas.' });
+        }
+        const [subscriptionCheck] = await connection.query(
+          `SELECT id FROM subscriptions WHERE user_id = ? AND status IN ('active','warning','past_due') LIMIT 1 FOR UPDATE`,
+          [providerId]
+        );
+        if ((subscriptionCheck as any[]).length > 0) {
+          await connection.rollback();
+          return res.status(400).json({ ok: false, error: 'Ya existe una suscripción activa para este proveedor.' });
+        }
+      }
+
+      let usedCount = Number(promo.current_redemptions) || 0;
+      if (promo.max_redemptions !== null && promo.max_redemptions !== undefined) {
+        const [[usage]] = await connection.query(
+          'SELECT COUNT(*) AS used FROM subscriptions WHERE promo_code_id = ? AND status IN ("active","warning","past_due")',
+          [promo.promo_id]
+        );
+        usedCount = Math.max(usedCount, Number((usage as any).used) || 0);
+        if (promo.max_redemptions > 0 && usedCount >= promo.max_redemptions) {
+          await connection.rollback();
+          return res.status(400).json({ ok: false, error: 'Este código ya alcanzó el número máximo de usos.' });
+        }
+      }
+
+      const allowedRoles = parseJsonSafe<string[]>(promo.allowed_roles, []);
+      if (allowedRoles.length > 0 && !allowedRoles.includes('provider')) {
+        await connection.rollback();
+        return res.status(400).json({ ok: false, error: 'Este código no está disponible para este tipo de cuenta.' });
+      }
+
+      const durationMonths = Math.max(Number(promo.promo_duration_months || promo.plan_duration_months || 3), 1);
+
+      const metadataPayload = {
+        source: 'promo',
+        code: promo.code,
+        promo_plan_type: promo.promo_plan_type,
+        granted_at: new Date().toISOString()
+      };
+
+      await connection.execute(
+        `INSERT INTO subscriptions (
+            user_id,
+            plan_id,
+            stripe_subscription_id,
+            status,
+            current_period_start,
+            current_period_end,
+            cancel_at_period_end,
+            promo_code_id,
+            promo_code,
+            plan_origin,
+            promo_expires_at,
+            metadata,
+            services_used,
+            bookings_used
+          )
+          VALUES (
+            ?,
+            ?,
+            NULL,
+            'active',
+            NOW(),
+            DATE_ADD(NOW(), INTERVAL ? MONTH),
+            FALSE,
+            ?,
+            ?,
+            'promo',
+            DATE_ADD(NOW(), INTERVAL ? MONTH),
+            JSON_OBJECT('source', ?, 'code', ?, 'plan_type', ?, 'granted_at', ?),
+            0,
+            0
+          )`,
+        [
+          providerId,
+          promo.plan_id,
+          durationMonths,
+          promo.promo_id,
+          normalizedCode,
+          durationMonths,
+          metadataPayload.source,
+          normalizedCode,
+          promo.promo_plan_type || 'founder',
+          metadataPayload.granted_at
+        ]
+      );
+
+      await connection.execute(
+        'UPDATE users SET active_plan_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        [promo.plan_id, providerId]
+      );
+
+      const [promoUpdate]: any = await connection.execute(
+        `UPDATE promo_codes
+            SET current_redemptions = current_redemptions + 1,
+                updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+            AND is_active = TRUE
+            AND (max_redemptions IS NULL OR current_redemptions < max_redemptions)` ,
+        [promo.promo_id]
+      );
+
+      if (!promoUpdate || promoUpdate.affectedRows === 0) {
+        await connection.rollback();
+        return res.status(400).json({ ok: false, error: 'Ya no quedan cupos disponibles para este código.' });
+      }
+
+      const [subscriptionRow] = await connection.query(
+        `SELECT id, current_period_end FROM subscriptions WHERE user_id = ? AND promo_code = ? ORDER BY created_at DESC LIMIT 1`,
+        [providerId, normalizedCode]
+      );
+      const subscription = (subscriptionRow as any[])[0];
+
+      if (subscription?.id) {
+        await connection.execute(
+          `INSERT INTO provider_subscription_events (subscription_id, event_type, new_status, metadata)
+           VALUES (?, 'promo_applied', 'active', JSON_OBJECT('code', ?, 'plan_id', ?, 'duration_months', ?))`,
+          [subscription.id, normalizedCode, promo.plan_id, durationMonths]
+        );
+      }
+
+      await connection.commit();
+
+      await logFunnelEvent(pool, {
+        event: 'promo_activated',
+        providerId,
+        promoCode: normalizedCode,
+        metadata: {
+          subscription_id: subscription?.id || null,
+          plan_id: promo.plan_id
+        }
+      });
+
+      res.json({
+        ok: true,
+        subscription: {
+          id: subscription?.id,
+          provider_id: providerId,
+          plan_id: promo.plan_id,
+          status: 'active',
+          ends_at: subscription?.current_period_end,
+          duration_months: durationMonths,
+          promo_code: normalizedCode
+        }
+      });
+    } catch (error: any) {
+      try { await connection.rollback(); } catch {}
+      console.error('[SUBSCRIPTIONS][PROMO_APPLY][ERROR]', error);
+      res.status(500).json({ ok: false, error: 'No pudimos activar el plan Fundador. Intenta más tarde.' });
+    } finally {
+      connection.release();
     }
   });
 

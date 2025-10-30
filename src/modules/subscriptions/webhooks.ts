@@ -8,6 +8,7 @@ import express from 'express';
 import Stripe from 'stripe';
 import DatabaseConnection from '../../shared/database/connection';
 import { Logger } from '../../shared/utils/logger.util';
+import { logFunnelEvent } from '../../shared/utils/subscription.util';
 
 const MODULE = 'StripeWebhooks';
 
@@ -72,6 +73,15 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session, 
       );
       Logger.info(MODULE, 'New subscription created', { userId, subscriptionId });
     }
+
+    await logFunnelEvent(pool, {
+      event: 'converted_to_paid',
+      providerId: Number(userId),
+      metadata: {
+        plan_id: Number(planId),
+        subscription_id: subscriptionId || null
+      }
+    });
 
   } catch (error: any) {
     Logger.error(MODULE, 'Error processing checkout session', error);

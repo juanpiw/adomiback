@@ -7,6 +7,7 @@ import { Router, Request, Response } from 'express';
 import DatabaseConnection from '../../../shared/database/connection';
 import { authenticateToken, AuthUser } from '../../../shared/middleware/auth.middleware';
 import { Logger } from '../../../shared/utils/logger.util';
+import { ensureServiceLimit } from '../../../shared/utils/subscription.util';
 
 const MODULE = 'ProviderServicesRoutes';
 
@@ -106,6 +107,15 @@ export class ProviderServicesRoutes {
 
         const pool = DatabaseConnection.getPool();
         console.log('[PROVIDER_SERVICES] Conectando a la base de datos...');
+
+        try {
+          await ensureServiceLimit(user.id);
+        } catch (limitError: any) {
+          if (limitError && limitError.code === 'SERVICE_LIMIT_REACHED') {
+            return res.status(limitError.statusCode || 409).json({ success: false, error: limitError.message });
+          }
+          throw limitError;
+        }
 
         // Normalizar valores vacíos a null
         const normalizedCustomCategory = (custom_category && String(custom_category).trim().length > 0)
