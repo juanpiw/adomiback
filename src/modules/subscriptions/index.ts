@@ -121,11 +121,12 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
       // Validar redenciones
       let usedCount = Number(promo.current_redemptions) || 0;
       if (promo.max_redemptions !== null && promo.max_redemptions !== undefined) {
-        const [[usage]] = await pool.query(
+        const [usageRows] = await pool.query(
           'SELECT COUNT(*) AS used FROM subscriptions WHERE promo_code_id = ? AND status IN ("active","warning","past_due")',
           [promo.promo_id]
         );
-        usedCount = Math.max(usedCount, Number((usage as any).used) || 0);
+        const usageRow = Array.isArray(usageRows) ? (usageRows as any[])[0] : usageRows;
+        usedCount = Math.max(usedCount, Number(usageRow?.used ?? 0));
         if (promo.max_redemptions > 0 && usedCount >= promo.max_redemptions) {
           return res.status(400).json({ ok: false, error: 'Este código ya alcanzó el número máximo de usos.' });
         }
@@ -404,11 +405,12 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
 
       let usedCount = Number(promo.current_redemptions) || 0;
       if (promo.max_redemptions !== null && promo.max_redemptions !== undefined) {
-        const [[usage]] = await connection.query(
+        const [usageRows] = await connection.query(
           'SELECT COUNT(*) AS used FROM subscriptions WHERE promo_code_id = ? AND status IN ("active","warning","past_due")',
           [promo.promo_id]
         );
-        usedCount = Math.max(usedCount, Number((usage as any).used) || 0);
+        const usageRow = Array.isArray(usageRows) ? (usageRows as any[])[0] : usageRows;
+        usedCount = Math.max(usedCount, Number(usageRow?.used ?? 0));
         if (promo.max_redemptions > 0 && usedCount >= promo.max_redemptions) {
           await connection.rollback();
           return res.status(400).json({ ok: false, error: 'Este código ya alcanzó el número máximo de usos.' });
