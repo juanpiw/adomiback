@@ -701,7 +701,8 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
       await connection.beginTransaction();
 
       const [userRows] = await connection.query(
-        `SELECT id, role, email, active_plan_id FROM users WHERE id = ? LIMIT 1 FOR UPDATE`,
+        `SELECT id, role, pending_role, account_switch_in_progress, email, active_plan_id
+           FROM users WHERE id = ? LIMIT 1 FOR UPDATE`,
         [providerId]
       );
       if ((userRows as any[]).length === 0) {
@@ -709,7 +710,8 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
         return res.status(404).json({ ok: false, error: 'Proveedor no encontrado.' });
       }
       const provider = (userRows as any[])[0];
-      if (provider.role !== 'provider') {
+      const isPendingProvider = String(provider.pending_role || '').toLowerCase() === 'provider';
+      if (provider.role !== 'provider' && !isPendingProvider) {
         await connection.rollback();
         return res.status(400).json({ ok: false, error: 'El código solo aplica a cuentas de proveedor.' });
       }
