@@ -86,6 +86,27 @@ function buildRouter(): Router {
         return res.status(400).json({ success: false, error: 'Servicio inválido para el proveedor' });
       }
       const service = (sv as any[])[0];
+
+      // Construir dirección base desde perfil del cliente
+      let locationLabel: string | null = null;
+      try {
+        const [cp]: any = await pool.query(
+          'SELECT address, commune, region FROM client_profiles WHERE client_id = ? LIMIT 1',
+          [client_id]
+        );
+        if (Array.isArray(cp) && cp.length > 0) {
+          const profile = cp[0] || {};
+          const locationParts = [profile.address, profile.commune, profile.region]
+            .map((part: any) => (typeof part === 'string' ? part.trim() : ''))
+            .filter((part: string) => part.length > 0);
+          if (locationParts.length > 0) {
+            locationLabel = locationParts.join(', ');
+          }
+        }
+      } catch (profileErr) {
+        Logger.warn(MODULE, 'No se pudo obtener dirección del cliente para la cita', profileErr as any);
+      }
+
       // Validar solape simple (misma fecha)
       const [over] = await pool.query(
         `SELECT id FROM appointments
@@ -109,16 +130,35 @@ function buildRouter(): Router {
 
       // Insertar cita
       const [ins] = await pool.execute(
-        `INSERT INTO appointments (provider_id, client_id, service_id, \`date\`, \`start_time\`, \`end_time\`, price, status, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled', ?)`,
-        [provider_id, client_id, service_id, date, start_time, end_time, service.price ?? 0, notes || null]
+        `INSERT INTO appointments (provider_id, client_id, service_id, \`date\`, \`start_time\`, \`end_time\`, price, status, notes, client_location)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?)` ,
+        [
+          provider_id,
+          client_id,
+          service_id,
+          date,
+          start_time,
+          end_time,
+          service.price ?? 0,
+          notes || null,
+          locationLabel
+        ]
       );
       const id = (ins as any).insertId;
       const [row] = await pool.query(
-        `SELECT a.*, 
-                (SELECT name FROM users WHERE id = a.client_id) AS client_name,
-                (SELECT name FROM users WHERE id = a.provider_id) AS provider_name
-         FROM appointments a WHERE a.id = ?`,
+        `SELECT a.*,
+                u.name AS client_name,
+                up.name AS provider_name,
+                cp.address AS client_address,
+                cp.commune AS client_commune,
+                cp.region AS client_region,
+                cp.phone AS client_phone,
+                COALESCE(NULLIF(a.client_location, ''), TRIM(CONCAT_WS(', ', cp.address, cp.commune, cp.region))) AS client_location_label
+         FROM appointments a
+         LEFT JOIN users u ON u.id = a.client_id
+         LEFT JOIN users up ON up.id = a.provider_id
+         LEFT JOIN client_profiles cp ON cp.client_id = a.client_id
+         WHERE a.id = ?`,
         [id]
       );
       const appointment = (row as any[])[0];
@@ -150,16 +190,24 @@ function buildRouter(): Router {
       
       // Push al proveedor
       console.log('🟣 [APPOINTMENTS] ==================== ENVIANDO PUSH NOTIFICATION ====================');
+      const locationForMessage = (appointment as any).client_location_label || (appointment as any).client_location || locationLabel || '';
+      const basePushMessage = `Cliente: ${(appointment as any).client_name || ''} • ${String(start_time).slice(0,5)}`;
+      const pushMessage = locationForMessage ? `${basePushMessage} • ${locationForMessage}` : basePushMessage;
+
       console.log('🟣 [APPOINTMENTS] Provider ID para push:', provider_id);
       console.log('🟣 [APPOINTMENTS] Título:', 'Nueva cita por confirmar');
-      console.log('🟣 [APPOINTMENTS] Mensaje:', `Cliente: ${(appointment as any).client_name || ''} • ${String(start_time).slice(0,5)}`);
+      console.log('🟣 [APPOINTMENTS] Mensaje:', pushMessage);
       
       try { 
         await PushService.notifyUser(
           Number(provider_id), 
           'Nueva cita por confirmar', 
-          `Cliente: ${(appointment as any).client_name || ''} • ${String(start_time).slice(0,5)}`, 
-          { type: 'appointment', appointment_id: String(id) }
+          pushMessage,
+          {
+            type: 'appointment',
+            appointment_id: String(id),
+            location: locationForMessage || null
+          }
         );
         console.log('🟣 [APPOINTMENTS] ✅ Push notification enviada exitosamente');
       } catch (pushErr) {
@@ -183,11 +231,19 @@ function buildRouter(): Router {
       if (!month) return res.status(400).json({ success: false, error: 'month requerido (YYYY-MM)' });
       const pool = DatabaseConnection.getPool();
       const [rows] = await pool.query(
-        `SELECT a.*, 
-                (SELECT name FROM users WHERE id = a.client_id) AS client_name,
-                (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
-                (SELECT p.status FROM payments p WHERE p.appointment_id = a.id ORDER BY p.id DESC LIMIT 1) AS payment_status
+        `SELECT a.*,
+                u.name AS client_name,
+                ps.name AS service_name,
+                (SELECT p.status FROM payments p WHERE p.appointment_id = a.id ORDER BY p.id DESC LIMIT 1) AS payment_status,
+                cp.address AS client_address,
+                cp.commune AS client_commune,
+                cp.region AS client_region,
+                cp.phone AS client_phone,
+                COALESCE(NULLIF(a.client_location, ''), TRIM(CONCAT_WS(', ', cp.address, cp.commune, cp.region))) AS client_location_label
          FROM appointments a
+         LEFT JOIN users u ON u.id = a.client_id
+         LEFT JOIN provider_services ps ON ps.id = a.service_id
+         LEFT JOIN client_profiles cp ON cp.client_id = a.client_id
          WHERE a.provider_id = ? AND DATE_FORMAT(a.\`date\`, '%Y-%m') = ?
          ORDER BY a.\`date\` ASC, a.\`start_time\` ASC`,
         [user.id, month]
@@ -208,11 +264,19 @@ function buildRouter(): Router {
       const pool = DatabaseConnection.getPool();
       Logger.info(MODULE, `📅 Listando citas del día para provider=${user.id} date=${date}`);
       const [rows] = await pool.query(
-        `SELECT a.*, 
-                (SELECT name FROM users WHERE id = a.client_id) AS client_name,
-                (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
-                (SELECT p.status FROM payments p WHERE p.appointment_id = a.id ORDER BY p.id DESC LIMIT 1) AS payment_status
+        `SELECT a.*,
+                u.name AS client_name,
+                ps.name AS service_name,
+                (SELECT p.status FROM payments p WHERE p.appointment_id = a.id ORDER BY p.id DESC LIMIT 1) AS payment_status,
+                cp.address AS client_address,
+                cp.commune AS client_commune,
+                cp.region AS client_region,
+                cp.phone AS client_phone,
+                COALESCE(NULLIF(a.client_location, ''), TRIM(CONCAT_WS(', ', cp.address, cp.commune, cp.region))) AS client_location_label
          FROM appointments a
+         LEFT JOIN users u ON u.id = a.client_id
+         LEFT JOIN provider_services ps ON ps.id = a.service_id
+         LEFT JOIN client_profiles cp ON cp.client_id = a.client_id
          WHERE a.provider_id = ? AND a.\`date\` = ?
          ORDER BY a.\`start_time\` ASC`,
         [user.id, date]
@@ -270,6 +334,69 @@ function buildRouter(): Router {
     } catch (err) {
       Logger.error(MODULE, 'Error updating appointment', err as any);
       return res.status(500).json({ success: false, error: 'Error al actualizar cita' });
+    }
+  });
+
+  // PUT /appointments/:id/location - actualizar dirección de la cita (proveedor)
+  router.put('/appointments/:id/location', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ success: false, error: 'id inválido' });
+      }
+
+      const locationRaw = typeof req.body?.location === 'string' ? req.body.location : '';
+      const location = locationRaw.trim();
+
+      const pool = DatabaseConnection.getPool();
+
+      const [own] = await pool.query('SELECT id, provider_id FROM appointments WHERE id = ? LIMIT 1', [id]);
+      if (!Array.isArray(own) || (own as any[]).length === 0) {
+        return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      }
+
+      const appointmentRow = (own as any[])[0];
+      if (Number(appointmentRow.provider_id) !== Number(user.id)) {
+        return res.status(403).json({ success: false, error: 'No autorizado para actualizar esta cita' });
+      }
+
+      await pool.execute(
+        'UPDATE appointments SET client_location = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        [location.length ? location : null, id]
+      );
+
+      const [row] = await pool.query(
+        `SELECT a.*,
+                u.name AS client_name,
+                up.name AS provider_name,
+                cp.address AS client_address,
+                cp.commune AS client_commune,
+                cp.region AS client_region,
+                cp.phone AS client_phone,
+                COALESCE(NULLIF(a.client_location, ''), TRIM(CONCAT_WS(', ', cp.address, cp.commune, cp.region))) AS client_location_label
+         FROM appointments a
+         LEFT JOIN users u ON u.id = a.client_id
+         LEFT JOIN users up ON up.id = a.provider_id
+         LEFT JOIN client_profiles cp ON cp.client_id = a.client_id
+         WHERE a.id = ?
+         LIMIT 1`,
+        [id]
+      );
+
+      if (!Array.isArray(row) || (row as any[]).length === 0) {
+        return res.status(404).json({ success: false, error: 'Cita no encontrada tras actualizar' });
+      }
+
+      const appointment = (row as any[])[0];
+
+      try { emitToUser(appointment.provider_id, 'appointment:updated', appointment); } catch {}
+      try { emitToUser(appointment.client_id, 'appointment:updated', appointment); } catch {}
+
+      return res.json({ success: true, appointment });
+    } catch (err) {
+      Logger.error(MODULE, 'Error actualizando dirección de cita', err as any);
+      return res.status(500).json({ success: false, error: 'Error al actualizar dirección de la cita' });
     }
   });
 
@@ -1454,13 +1581,21 @@ function buildRouter(): Router {
       const pool = DatabaseConnection.getPool();
       
       const [rows] = await pool.query(
-        `SELECT a.*, 
-                (SELECT name FROM users WHERE id = a.client_id) AS client_name,
-                (SELECT email FROM users WHERE id = a.client_id) AS client_email,
-                (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
+        `SELECT a.*,
+                u.name AS client_name,
+                u.email AS client_email,
+                ps.name AS service_name,
                 a.price AS scheduled_price,
-                (SELECT p.status FROM payments p WHERE p.appointment_id = a.id ORDER BY p.id DESC LIMIT 1) AS payment_status
+                (SELECT p.status FROM payments p WHERE p.appointment_id = a.id ORDER BY p.id DESC LIMIT 1) AS payment_status,
+                cp.address AS client_address,
+                cp.commune AS client_commune,
+                cp.region AS client_region,
+                cp.phone AS client_phone,
+                COALESCE(NULLIF(a.client_location, ''), TRIM(CONCAT_WS(', ', cp.address, cp.commune, cp.region))) AS client_location_label
          FROM appointments a
+         LEFT JOIN users u ON u.id = a.client_id
+         LEFT JOIN provider_services ps ON ps.id = a.service_id
+         LEFT JOIN client_profiles cp ON cp.client_id = a.client_id
          WHERE a.provider_id = ? 
            AND a.status = 'confirmed'
            AND NOT EXISTS (
