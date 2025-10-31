@@ -900,6 +900,10 @@ function buildRouter(): Router {
       // Nota: aquí solo aplicamos verificación de código y tope cash
       const stored = String(appt.verification_code || '').trim();
       if (!stored || !compareVerificationCodes(String(code), stored)) {
+        Logger.warn(MODULE, '[CASH][VERIFY_CODE] Código incorrecto', {
+          expected: stored ? stored.slice(0, 2) + '**' : null,
+          received: String(code || '').slice(0, 2) + '**'
+        });
         return res.status(400).json({ success: false, error: 'Código incorrecto' });
       }
 
@@ -1194,16 +1198,27 @@ function buildRouter(): Router {
       const pool = DatabaseConnection.getPool();
       
       // Obtener la cita
-      const [rows] = await pool.query(
-        `SELECT id, provider_id, client_id, service_id, verification_code, 
-                verification_attempts, status, date, start_time,
-                (SELECT name FROM users WHERE id = client_id) AS client_name,
-                (SELECT name FROM provider_services WHERE id = service_id) AS service_name
-         FROM appointments 
-         WHERE id = ? AND provider_id = ?
-         LIMIT 1`,
-        [appointmentId, user.id]
-      );
+    const [rows] = await pool.query(
+      `SELECT a.id,
+              a.provider_id,
+              a.client_id,
+              a.service_id,
+              a.verification_code,
+              a.verification_attempts,
+              a.status,
+              a.date,
+              a.start_time,
+              a.payment_method,
+              a.cash_verified_at,
+              a.code_generated_at,
+              (SELECT name FROM users WHERE id = a.client_id) AS client_name,
+              (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
+              (SELECT status FROM payments WHERE appointment_id = a.id ORDER BY id DESC LIMIT 1) AS payment_status
+       FROM appointments a
+       WHERE a.id = ? AND a.provider_id = ?
+       LIMIT 1`,
+      [appointmentId, user.id]
+    );
       
       if ((rows as any[]).length === 0) {
         Logger.error(MODULE, '❌ Cita no encontrada o no pertenece al proveedor');
@@ -1215,19 +1230,42 @@ function buildRouter(): Router {
       
       const appointment = (rows as any[])[0];
       
-      Logger.info(MODULE, `🔐 Cita encontrada: ${JSON.stringify({
-        id: appointment.id,
-        status: appointment.status,
-        code: appointment.verification_code,
-        attempts: appointment.verification_attempts
-      })}`);
+    Logger.info(MODULE, `🔐 Cita encontrada: ${JSON.stringify({
+      id: appointment.id,
+      status: appointment.status,
+      code: appointment.verification_code,
+      attempts: appointment.verification_attempts,
+      payment_method: appointment.payment_method,
+      cash_verified_at: appointment.cash_verified_at,
+      payment_status: appointment.payment_status,
+      code_generated_at: appointment.code_generated_at
+    })}`);
       
       // Verificar que la cita tenga código (fue pagada)
       if (!appointment.verification_code) {
         Logger.error(MODULE, '❌ Cita no tiene código de verificación (no fue pagada)');
         return res.status(400).json({ 
           success: false, 
-          error: 'Esta cita no tiene código de verificación. El cliente debe pagar primero.' 
+          error: 'Esta cita no tiene código de verificación. El cliente debe pagar primero.',
+          meta: {
+            payment_method: appointment.payment_method || null,
+            payment_status: appointment.payment_status || null,
+            cash_verified_at: appointment.cash_verified_at || null,
+            code_generated_at: appointment.code_generated_at || null
+          }
+        });
+      }
+
+      if (appointment.payment_method === 'cash' && appointment.cash_verified_at) {
+        Logger.error(MODULE, '❌ Cita ya fue verificada por flujo de efectivo');
+        return res.status(400).json({
+          success: false,
+          error: 'El pago en efectivo ya fue verificado para esta cita.',
+          meta: {
+            payment_method: appointment.payment_method,
+            cash_verified_at: appointment.cash_verified_at,
+            payment_status: appointment.payment_status || null
+          }
         });
       }
       
@@ -1243,7 +1281,7 @@ function buildRouter(): Router {
       
       // Sanitizar y comparar códigos
       const inputCode = sanitizeCode(verification_code);
-      const storedCode = appointment.verification_code;
+      const storedCode = sanitizeCode(appointment.verification_code);
       
       Logger.info(MODULE, `🔐 Comparando: '${inputCode}' vs '${storedCode}'`);
       
