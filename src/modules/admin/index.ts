@@ -5,6 +5,8 @@ import DatabaseConnection from '../../shared/database/connection';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import { EmailService } from '../../shared/services/email.service';
+import { PushService } from '../notifications/services/push.service';
 
 export function setupAdminModule(app: Express) {
   const router = Router();
@@ -29,6 +31,255 @@ export function setupAdminModule(app: Express) {
   // Placeholder endpoint to validate protection
   router.get('/whoami', adminAuth, (req: any, res) => {
     res.json({ success: true, user: req.user });
+  });
+
+  router.get('/verification/requests', adminAuth, async (req, res) => {
+    try {
+      const statusParam = String(req.query.status || '').toLowerCase();
+      const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+      const offset = Math.max(0, Number(req.query.offset) || 0);
+      const pool = DatabaseConnection.getPool();
+
+      const whereClauses: string[] = [];
+      const params: any[] = [];
+      if (['pending', 'approved', 'rejected', 'expired'].includes(statusParam)) {
+        whereClauses.push('iv.status = ?');
+        params.push(statusParam);
+      }
+
+      const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
+      const query = `
+        SELECT iv.id,
+               iv.provider_id,
+               iv.document_type,
+               iv.document_number,
+               iv.front_document_url,
+               iv.back_document_url,
+               iv.selfie_url,
+               iv.status,
+               iv.rejection_reason,
+               iv.verification_notes,
+               iv.verified_at,
+               iv.created_at,
+               iv.updated_at,
+               u.email AS provider_email,
+               u.name AS provider_name,
+               pp.full_name,
+               pp.professional_title,
+               pp.verification_status,
+               pp.is_verified
+          FROM identity_verifications iv
+          LEFT JOIN users u ON u.id = iv.provider_id
+          LEFT JOIN provider_profiles pp ON pp.provider_id = iv.provider_id
+          ${whereSql}
+          ORDER BY
+            CASE WHEN iv.status = 'pending' THEN 0 ELSE 1 END,
+            iv.updated_at DESC
+          LIMIT ? OFFSET ?`;
+
+      const [rows] = await pool.query(query, [...params, limit, offset]);
+      const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
+      const normalizeUrl = (url?: string | null) => {
+        if (!url) return null;
+        if (/^https?:\/\//i.test(url)) return url;
+        return `${publicBase}${url.startsWith('/') ? url : `/${url}`}`;
+      };
+
+      const data = (rows as any[]).map(row => ({
+        ...row,
+        front_document_url: normalizeUrl(row.front_document_url),
+        back_document_url: normalizeUrl(row.back_document_url),
+        selfie_url: normalizeUrl(row.selfie_url),
+        is_verified: !!row.is_verified
+      }));
+
+      return res.json({ success: true, data, pagination: { limit, offset, returned: data.length } });
+    } catch (error) {
+      Logger.error('ADMIN_MODULE', 'Error fetching verification requests', error as any);
+      return res.status(500).json({ success: false, error: 'verification_requests_error' });
+    }
+  });
+
+  router.get('/verification/requests/:id', adminAuth, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ success: false, error: 'invalid_id' });
+      }
+      const pool = DatabaseConnection.getPool();
+      const [[row]]: any = await pool.query(
+        `SELECT iv.*, u.email AS provider_email, u.name AS provider_name,
+                pp.full_name, pp.professional_title, pp.verification_status, pp.is_verified
+           FROM identity_verifications iv
+           LEFT JOIN users u ON u.id = iv.provider_id
+           LEFT JOIN provider_profiles pp ON pp.provider_id = iv.provider_id
+          WHERE iv.id = ?
+          LIMIT 1`,
+        [id]
+      );
+      if (!row) {
+        return res.status(404).json({ success: false, error: 'verification_not_found' });
+      }
+      const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
+      const normalizeUrl = (url?: string | null) => {
+        if (!url) return null;
+        if (/^https?:\/\//i.test(url)) return url;
+        return `${publicBase}${url.startsWith('/') ? url : `/${url}`}`;
+      };
+      return res.json({
+        success: true,
+        data: {
+          ...row,
+          front_document_url: normalizeUrl(row.front_document_url),
+          back_document_url: normalizeUrl(row.back_document_url),
+          selfie_url: normalizeUrl(row.selfie_url),
+          is_verified: !!row.is_verified
+        }
+      });
+    } catch (error) {
+      Logger.error('ADMIN_MODULE', 'Error fetching verification detail', error as any);
+      return res.status(500).json({ success: false, error: 'verification_detail_error' });
+    }
+  });
+
+  router.post('/verification/requests/:id/approve', adminAuth, async (req: any, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ success: false, error: 'invalid_id' });
+      }
+
+      const notes = typeof req.body?.notes === 'string' ? req.body.notes.trim().slice(0, 500) : null;
+      const pool = DatabaseConnection.getPool();
+
+      const [[verification]]: any = await pool.query(
+        `SELECT iv.*, u.email AS provider_email, u.name AS provider_name
+           FROM identity_verifications iv
+           LEFT JOIN users u ON u.id = iv.provider_id
+          WHERE iv.id = ?
+          LIMIT 1`,
+        [id]
+      );
+
+      if (!verification) {
+        return res.status(404).json({ success: false, error: 'verification_not_found' });
+      }
+
+      await pool.execute(
+        `UPDATE identity_verifications
+            SET status = 'approved', rejection_reason = NULL,
+                verification_notes = ?, verified_at = NOW(), verified_by = ?, updated_at = NOW()
+          WHERE id = ?`,
+        [notes || null, req.user?.id || null, id]
+      );
+
+      await pool.execute(
+        `UPDATE provider_profiles
+            SET verification_status = 'approved', is_verified = TRUE, updated_at = NOW()
+          WHERE provider_id = ?`,
+        [verification.provider_id]
+      );
+
+      const appName = process.env.APP_NAME || 'Adomi';
+      if (verification.provider_email) {
+        try {
+          await EmailService.sendVerificationStatus(verification.provider_email, {
+            appName,
+            providerName: verification.provider_name || null,
+            status: 'approved'
+          });
+        } catch (emailErr) {
+          Logger.warn('ADMIN_MODULE', 'No se pudo enviar correo de verificación aprobada', emailErr as any);
+        }
+      }
+
+      try {
+        await PushService.notifyUser(verification.provider_id, '✅ Identidad verificada', 'Tu cuenta ya muestra la insignia de identidad verificada.', {
+          type: 'verification',
+          status: 'approved'
+        });
+      } catch (pushErr) {
+        Logger.warn('ADMIN_MODULE', 'No se pudo enviar notificación de verificación aprobada', pushErr as any);
+      }
+
+      return res.json({ success: true });
+    } catch (error) {
+      Logger.error('ADMIN_MODULE', 'Error approving verification', error as any);
+      return res.status(500).json({ success: false, error: 'verification_approve_error' });
+    }
+  });
+
+  router.post('/verification/requests/:id/reject', adminAuth, async (req: any, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ success: false, error: 'invalid_id' });
+      }
+
+      const reasonRaw = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+      if (!reasonRaw) {
+        return res.status(400).json({ success: false, error: 'reason_required' });
+      }
+      const reason = reasonRaw.slice(0, 255);
+      const notes = typeof req.body?.notes === 'string' ? req.body.notes.trim().slice(0, 500) : null;
+      const pool = DatabaseConnection.getPool();
+
+      const [[verification]]: any = await pool.query(
+        `SELECT iv.*, u.email AS provider_email, u.name AS provider_name
+           FROM identity_verifications iv
+           LEFT JOIN users u ON u.id = iv.provider_id
+          WHERE iv.id = ?
+          LIMIT 1`,
+        [id]
+      );
+
+      if (!verification) {
+        return res.status(404).json({ success: false, error: 'verification_not_found' });
+      }
+
+      await pool.execute(
+        `UPDATE identity_verifications
+            SET status = 'rejected', rejection_reason = ?,
+                verification_notes = ?, verified_at = NOW(), verified_by = ?, updated_at = NOW()
+          WHERE id = ?`,
+        [reason, notes || null, req.user?.id || null, id]
+      );
+
+      await pool.execute(
+        `UPDATE provider_profiles
+            SET verification_status = 'rejected', is_verified = FALSE, updated_at = NOW()
+          WHERE provider_id = ?`,
+        [verification.provider_id]
+      );
+
+      const appName = process.env.APP_NAME || 'Adomi';
+      if (verification.provider_email) {
+        try {
+          await EmailService.sendVerificationStatus(verification.provider_email, {
+            appName,
+            providerName: verification.provider_name || null,
+            status: 'rejected',
+            rejectionReason: reason
+          });
+        } catch (emailErr) {
+          Logger.warn('ADMIN_MODULE', 'No se pudo enviar correo de verificación rechazada', emailErr as any);
+        }
+      }
+
+      try {
+        await PushService.notifyUser(verification.provider_id, '⚠️ Verificación rechazada', 'Necesitamos nuevos documentos para verificar tu identidad.', {
+          type: 'verification',
+          status: 'rejected'
+        });
+      } catch (pushErr) {
+        Logger.warn('ADMIN_MODULE', 'No se pudo enviar notificación de verificación rechazada', pushErr as any);
+      }
+
+      return res.json({ success: true });
+    } catch (error) {
+      Logger.error('ADMIN_MODULE', 'Error rejecting verification', error as any);
+      return res.status(500).json({ success: false, error: 'verification_reject_error' });
+    }
   });
 
   // Ejecutar ciclo de cobro de comisiones cash (card fallback)

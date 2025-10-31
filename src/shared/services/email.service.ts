@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 import { Logger } from '../utils/logger.util';
-import { generateClientReceiptEmailHtml, generateProviderPaymentEmailHtml, generatePasswordResetEmailHtml, generateRefundDecisionEmailHtml, generateRefundReceivedEmailHtml, ClientReceiptEmailData, ProviderPaymentEmailData, PasswordResetEmailData, RefundDecisionEmailData, RefundReceivedEmailData } from './email-templates';
+import { generateClientReceiptEmailHtml, generateProviderPaymentEmailHtml, generatePasswordResetEmailHtml, generateRefundDecisionEmailHtml, generateRefundReceivedEmailHtml, generateVerificationStatusEmailHtml, ClientReceiptEmailData, ProviderPaymentEmailData, PasswordResetEmailData, RefundDecisionEmailData, RefundReceivedEmailData, VerificationStatusEmailData } from './email-templates';
 
 const MODULE = 'EMAIL_SERVICE';
 
@@ -83,6 +83,15 @@ export class EmailService {
     Logger.info(MODULE, 'sendRefundReceived called', { to, amount: data.originalAmount });
     const html = generateRefundReceivedEmailHtml(data);
     const subject = `${data.appName} – Recibimos tu solicitud de devolución`;
+    return this.sendRaw(to, subject, html);
+  }
+
+  static async sendVerificationStatus(to: string, data: VerificationStatusEmailData) {
+    Logger.info(MODULE, 'sendVerificationStatus called', { to, status: data.status });
+    const html = generateVerificationStatusEmailHtml(data);
+    const subject = data.status === 'approved'
+      ? `${data.appName} – Tu identidad ha sido verificada`
+      : `${data.appName} – Necesitamos nuevos documentos para verificar tu identidad`;
     return this.sendRaw(to, subject, html);
   }
 }

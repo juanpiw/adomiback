@@ -119,12 +119,17 @@ export class AuthController {
       }
       // Adjuntar avatar desde la tabla correspondiente
       let profilePhotoUrl: string | null = null;
+      let verificationStatus: string = 'none';
+      let isVerified = false;
       if (u.role === 'client') {
         const [rows] = await pool.query('SELECT profile_photo_url FROM client_profiles WHERE client_id = ? LIMIT 1', [u.id]);
         profilePhotoUrl = (rows as any[])[0]?.profile_photo_url || null;
       } else if (u.role === 'provider') {
-        const [rows] = await pool.query('SELECT profile_photo_url FROM provider_profiles WHERE provider_id = ? LIMIT 1', [u.id]);
-        profilePhotoUrl = (rows as any[])[0]?.profile_photo_url || null;
+        const [rows] = await pool.query('SELECT profile_photo_url, verification_status, is_verified FROM provider_profiles WHERE provider_id = ? LIMIT 1', [u.id]);
+        const profileRow = (rows as any[])[0] || {};
+        profilePhotoUrl = profileRow?.profile_photo_url || null;
+        verificationStatus = profileRow?.verification_status || 'none';
+        isVerified = !!profileRow?.is_verified;
       }
       const userOut = {
         id: u.id,
@@ -140,7 +145,9 @@ export class AuthController {
         stripe_account_id: u.stripe_account_id || null,
         stripe_payouts_enabled: u.stripe_payouts_enabled ?? null,
         stripe_onboarding_status: u.stripe_onboarding_status || null,
-        profile_photo_url: profilePhotoUrl
+        profile_photo_url: profilePhotoUrl,
+        is_verified: isVerified,
+        verification_status: verificationStatus
       } as any;
       Logger.info(MODULE, 'ME response user fields', {
         id: userOut.id,

@@ -10,6 +10,7 @@ import { PasswordResetRepository } from '../repositories/password-reset.reposito
 import { JWTUtil } from '../../../shared/utils/jwt.util';
 import { Logger } from '../../../shared/utils/logger.util';
 import { EmailService } from '../../../shared/services/email.service';
+import DatabaseConnection from '../../../shared/database/connection';
 
 const MODULE = 'AuthService';
 
@@ -31,6 +32,8 @@ export interface AuthResponse {
     email: string;
     name: string | null;
     role: 'client' | 'provider';
+    is_verified?: boolean;
+    verification_status?: string;
   };
   accessToken: string;
   refreshToken: string;
@@ -41,6 +44,23 @@ export class AuthService {
   private usersRepo = new UsersRepository();
   private refreshTokensRepo = new RefreshTokensRepository();
   private passwordResetRepo = new PasswordResetRepository();
+  private pool = DatabaseConnection.getPool();
+
+  private async getProviderVerificationState(userId: number): Promise<{ is_verified: boolean; verification_status: string }> {
+    try {
+      const [[row]]: any = await this.pool.query(
+        `SELECT is_verified, verification_status FROM provider_profiles WHERE provider_id = ? LIMIT 1`,
+        [userId]
+      );
+      return {
+        is_verified: !!row?.is_verified,
+        verification_status: row?.verification_status || 'none'
+      };
+    } catch (error: any) {
+      Logger.warn(MODULE, 'Error fetching provider verification state', { userId, error: error?.message });
+      return { is_verified: false, verification_status: 'none' };
+    }
+  }
 
   /**
    * Register new user
@@ -82,12 +102,18 @@ export class AuthService {
     const jti = decodedRt?.jti || tokens.refreshToken.split('.')[2];
     await this.refreshTokensRepo.create(userId, jti, refreshTokenExpiry);
 
+    const verification = role === 'provider'
+      ? await this.getProviderVerificationState(userId)
+      : { is_verified: false, verification_status: 'none' };
+
     return {
       user: {
         id: userId,
         email: data.email,
         name: data.name ?? null,
-        role
+        role,
+        is_verified: verification.is_verified,
+        verification_status: verification.verification_status
       },
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
@@ -120,6 +146,10 @@ export class AuthService {
     // Generar tokens JWT
     const tokens = JWTUtil.generateTokenPair(user.id, user.email, user.role);
 
+    const verification = user.role === 'provider'
+      ? await this.getProviderVerificationState(user.id)
+      : { is_verified: false, verification_status: 'none' };
+
     // Crear refresh token en la base de datos (usar jti del payload, no la firma JWT)
     const refreshTokenExpiry = new Date();
     refreshTokenExpiry.setDate(refreshTokenExpiry.getDate() + 7);
@@ -134,7 +164,9 @@ export class AuthService {
         id: user.id,
         email: user.email,
         name: user.name,
-        role: user.role
+        role: user.role,
+        is_verified: verification.is_verified,
+        verification_status: verification.verification_status
       },
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
@@ -183,6 +215,10 @@ export class AuthService {
     // Generar nuevos tokens
     const tokens = JWTUtil.generateTokenPair(user.id, user.email, user.role);
 
+    const verification = user.role === 'provider'
+      ? await this.getProviderVerificationState(user.id)
+      : { is_verified: false, verification_status: 'none' };
+
     // Crear nuevo refresh token (usar jti del payload)
     const refreshTokenExpiry = new Date();
     refreshTokenExpiry.setDate(refreshTokenExpiry.getDate() + 7);
@@ -197,7 +233,9 @@ export class AuthService {
         id: user.id,
         email: user.email,
         name: user.name,
-        role: user.role
+        role: user.role,
+        is_verified: verification.is_verified,
+        verification_status: verification.verification_status
       },
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,

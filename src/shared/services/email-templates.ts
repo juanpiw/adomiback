@@ -57,6 +57,15 @@ export interface RefundReceivedEmailData {
   brandLogoUrl?: string;
 }
 
+export interface VerificationStatusEmailData {
+  appName: string;
+  providerName?: string | null;
+  status: 'approved' | 'rejected';
+  rejectionReason?: string | null;
+  brandColorHex?: string;
+  brandLogoUrl?: string;
+}
+
 export function generateClientReceiptEmailHtml(data: ClientReceiptEmailData): string {
   const date = data.paymentDateISO ? new Date(data.paymentDateISO).toLocaleString() : '';
   const amountFormatted = `${data.currency.toUpperCase()} ${data.amount.toFixed(2)}`;
@@ -304,6 +313,59 @@ export function generateRefundReceivedEmailHtml(data: RefundReceivedEmailData): 
           </tr>
           <tr>
             <td align="center" style="padding:16px 0;color:#a3a3a3;font-size:12px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif">${data.appName}</td>
+          </tr>
+        </table>
+      </td></tr>
+    </table>
+  </div>`;
+}
+
+export function generateVerificationStatusEmailHtml(data: VerificationStatusEmailData): string {
+  const brand = data.brandColorHex || '#2563eb';
+  const logo = data.brandLogoUrl ? `<img src="${data.brandLogoUrl}" alt="${data.appName}" style="height:24px;display:block;margin:0 auto 16px" />` : '';
+  const title = data.status === 'approved' ? 'Tu identidad ha sido verificada' : 'Necesitamos nuevos documentos';
+  const greeting = data.providerName ? `Hola ${data.providerName},` : 'Hola,';
+  const bodyApproved = `
+    <p style="margin:0 0 12px;color:#374151">${greeting}</p>
+    <p style="margin:0 0 12px;color:#374151">Tu identidad ya fue verificada correctamente. A partir de ahora mostramos la insignia de confianza en tu perfil y en los resultados de búsqueda.</p>
+    <p style="margin:0 0 12px;color:#374151">Gracias por ayudarnos a mantener a Adomi como una comunidad segura.</p>
+  `;
+  const bodyRejected = `
+    <p style="margin:0 0 12px;color:#374151">${greeting}</p>
+    <p style="margin:0 0 12px;color:#374151">Revisamos tus documentos, pero necesitamos que envíes nuevamente la información para poder verificar tu identidad.</p>
+    ${data.rejectionReason ? `<p style="margin:0 0 12px;color:#b91c1c"><strong>Motivo:</strong> ${data.rejectionReason}</p>` : ''}
+    <p style="margin:0 0 12px;color:#374151">Ingresa a tu panel y carga fotos claras del anverso y reverso de tu documento. También puedes añadir una selfie sosteniéndolo.</p>
+  `;
+
+  return `
+  <div style="margin:0;padding:0;background:#0b0b0c">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#0b0b0c;padding:24px 12px">
+      <tr><td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="max-width:600px;width:100%">
+          <tr>
+            <td align="center" style="padding:16px 0;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;font-size:14px">
+              ${logo}
+              <div style="opacity:.9">${data.appName}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#fff;border-radius:12px;overflow:hidden">
+                <tr>
+                  <td style="padding:24px 24px 8px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;color:#111">
+                    <div style="font-size:18px;font-weight:600;margin:0 0 8px">${title}</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 24px 24px">
+                    <div style="border:1px solid #e5e7eb;border-radius:10px;padding:16px;color:#111;font-size:14px">
+                      ${data.status === 'approved' ? bodyApproved : bodyRejected}
+                      <p style="margin:12px 0 0;color:#6b7280;font-size:12px">Equipo ${data.appName}</p>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
           </tr>
         </table>
       </td></tr>

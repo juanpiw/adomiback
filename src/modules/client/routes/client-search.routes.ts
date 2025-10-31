@@ -290,6 +290,8 @@ export class ClientSearchRoutes {
             pp.main_commune as location,
             pp.years_experience,
             pp.is_online,
+            pp.is_verified,
+            pp.verification_status,
             COALESCE(AVG(r.rating), 0) as rating,
             COUNT(DISTINCT r.id) as review_count,
             COUNT(DISTINCT ps.id) as services_count
@@ -377,7 +379,8 @@ export class ClientSearchRoutes {
         // Agrupar
         query += `
           GROUP BY pp.provider_id, u.name, u.email, pp.professional_title, pp.bio, 
-                   pp.profile_photo_url, pp.main_region, pp.main_commune, pp.years_experience, pp.is_online
+                   pp.profile_photo_url, pp.main_region, pp.main_commune, pp.years_experience,
+                   pp.is_online, pp.is_verified, pp.verification_status
         `;
 
         // HAVING dinámico (services_count y rating mínimo)
@@ -440,6 +443,8 @@ export class ClientSearchRoutes {
             services_count: provider.services_count,
             experience_years: provider.years_experience,
             is_online: !!provider.is_online,
+            is_verified: !!provider.is_verified,
+            verification_status: provider.verification_status || 'none',
             available_for_bookings: provider.available_for_bookings,
             services: (servicesRows as any[]).map(service => ({
               id: service.id,
