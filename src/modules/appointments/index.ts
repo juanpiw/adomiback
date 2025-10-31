@@ -982,6 +982,20 @@ function buildRouter(): Router {
         );
       } catch {}
 
+      try {
+        await pool.execute(
+          `UPDATE appointments
+             SET status = 'completed',
+                 completed_at = COALESCE(completed_at, NOW()),
+                 verified_at = NOW(),
+                 verified_by_provider_id = ?
+           WHERE id = ?`,
+          [user.id, appointmentId]
+        );
+      } catch (statusErr) {
+        Logger.warn(MODULE, '[CASH][VERIFY_CODE] No se pudo marcar la cita como completada', statusErr as any);
+      }
+
       // Notificar
       try {
         await PushService.notifyUser(
@@ -1256,19 +1270,6 @@ function buildRouter(): Router {
         });
       }
 
-      if (appointment.payment_method === 'cash' && appointment.cash_verified_at) {
-        Logger.error(MODULE, '❌ Cita ya fue verificada por flujo de efectivo');
-        return res.status(400).json({
-          success: false,
-          error: 'El pago en efectivo ya fue verificado para esta cita.',
-          meta: {
-            payment_method: appointment.payment_method,
-            cash_verified_at: appointment.cash_verified_at,
-            payment_status: appointment.payment_status || null
-          }
-        });
-      }
-      
       // Verificar límite de intentos
       if (appointment.verification_attempts >= 3) {
         Logger.error(MODULE, `❌ Límite de intentos excedido (${appointment.verification_attempts})`);
