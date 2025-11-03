@@ -274,9 +274,20 @@ router.post('/providers/:id/tbk/secondary/create', authenticateToken, async (req
       return clone;
     })();
 
-    Logger.info(MODULE, 'Creando comercio secundario TBK', { providerId, payload: maskedPayload });
+    const secHeaders = getSecHeaders();
+    const maskedHeaders = {
+      ...secHeaders,
+      'Tbk-Api-Key-Secret': secHeaders['Tbk-Api-Key-Secret'] ? `${secHeaders['Tbk-Api-Key-Secret'].slice(0, 4)}****` : undefined
+    };
 
-    const { data } = await axios.post(`${base}/comercios-secundarios`, payload, { headers: getSecHeaders() });
+    Logger.info(MODULE, 'Creando comercio secundario TBK', { providerId, base, payload: maskedPayload, headers: maskedHeaders });
+    console.log('[TBK_SECONDARY] Payload', maskedPayload);
+    console.log('[TBK_SECONDARY] Headers', maskedHeaders);
+
+    const requestUrl = `${base}/comercios-secundarios`;
+    console.log('[TBK_SECONDARY] URL', requestUrl);
+
+    const { data } = await axios.post(requestUrl, payload, { headers: secHeaders });
     const codigo = String(data?.codigoComercioSecundario || '').trim();
     if (!codigo) return res.status(502).json({ success: false, error: 'Respuesta TBK inválida' });
 
@@ -293,6 +304,13 @@ router.post('/providers/:id/tbk/secondary/create', authenticateToken, async (req
     return res.status(201).json({ success: true, codigo, status: normalizedStatus, remote: data });
   } catch (err: any) {
     Logger.error(MODULE, 'Create secondary error', err);
+    console.log('[TBK_SECONDARY] Error', {
+      message: err?.message,
+      config: err?.config,
+      responseStatus: err?.response?.status,
+      responseData: err?.response?.data,
+      responseHeaders: err?.response?.headers
+    });
     const msg = err?.response?.data || err?.message || 'error';
     return res.status(500).json({ success: false, error: 'Error creando comercio secundario', details: msg });
   }
