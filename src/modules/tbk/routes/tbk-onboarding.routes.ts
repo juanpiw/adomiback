@@ -53,7 +53,8 @@ function getSecHeaders() {
   return {
     'Tbk-Api-Key-Id': apiKeyId,
     'Tbk-Api-Key-Secret': apiKeySecret,
-    'Content-Type': 'application/json'
+    'Content-Type': 'application/json',
+    'Accept': 'application/json'
   } as Record<string, string>;
 }
 
@@ -289,7 +290,15 @@ router.post('/providers/:id/tbk/secondary/create', authenticateToken, async (req
     const requestUrl = `${base}/comercios-secundarios`;
     console.log('[TBK_SECONDARY] URL', requestUrl);
 
-    const { data } = await axios.post(requestUrl, payload, { headers: secHeaders });
+    const { data, status, headers: respHeaders } = await axios.post(requestUrl, payload, { headers: secHeaders });
+    try {
+      Logger.info(MODULE, 'Respuesta TBK crear secundario', {
+        status,
+        contentType: respHeaders?.['content-type'] || respHeaders?.['Content-Type'],
+        // Evitar logs enormes: mostrar sólo un preview
+        bodyPreview: typeof data === 'string' ? (data as string).slice(0, 600) : JSON.stringify(data).slice(0, 600)
+      });
+    } catch {}
     const codigo = String(data?.codigoComercioSecundario || '').trim();
     if (!codigo) return res.status(502).json({ success: false, error: 'Respuesta TBK inválida' });
 
