@@ -176,6 +176,7 @@ router.post('/providers/:id/tbk/secondary/create', authenticateToken, async (req
       [providerId]
     );
     const provider = (prow as any[])[0];
+    console.log('[TBK_SECONDARY] Provider row', provider);
     if (!provider) return res.status(404).json({ success: false, error: 'Proveedor no encontrado' });
 
     if (provider.tbk_secondary_code) {
@@ -184,6 +185,7 @@ router.post('/providers/:id/tbk/secondary/create', authenticateToken, async (req
 
     const [profileRows] = await pool.query('SELECT * FROM provider_profiles WHERE provider_id = ? LIMIT 1', [providerId]);
     const profile = (profileRows as any[])[0] || null;
+    console.log('[TBK_SECONDARY] Provider profile', profile);
 
     const rutInfo = parseRut(profile?.account_rut || null);
     const razonSocial = (profile?.full_name || provider.name || '').trim();
