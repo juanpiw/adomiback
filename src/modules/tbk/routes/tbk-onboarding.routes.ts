@@ -16,14 +16,43 @@ function requireEnv(key: string): string {
   return v;
 }
 
+function normalizeBase(value: string | undefined | null): string {
+  const trimmed = (value || '').trim();
+  return trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed;
+}
+
 function getSecApiBase(): string {
-  return process.env.TBK_SEC_API_BASE || '';
+  const explicit = normalizeBase(process.env.TBK_SEC_API_BASE);
+  if (explicit) {
+    return explicit;
+  }
+
+  const legacy = normalizeBase(process.env.TBK_BASE_URL);
+  if (legacy) {
+    const fallback = `${legacy}/api-marketplace/v1`;
+    Logger.warn(MODULE, 'Usando fallback TBK_BASE_URL para TBK_SEC_API_BASE', { fallback });
+    return fallback;
+  }
+
+  return '';
 }
 
 function getSecHeaders() {
+  const explicitId = (process.env.TBK_SEC_API_KEY_ID || '').trim();
+  const explicitSecret = (process.env.TBK_SEC_API_KEY_SECRET || '').trim();
+  const fallbackId = (process.env.TBK_API_KEY_ID || '').trim();
+  const fallbackSecret = (process.env.TBK_API_KEY_SECRET || '').trim();
+
+  const apiKeyId = explicitId || fallbackId;
+  const apiKeySecret = explicitSecret || fallbackSecret;
+
+  if (!apiKeyId || !apiKeySecret) {
+    throw new Error('Missing env TBK_SEC_API_KEY_ID/TBK_SEC_API_KEY_SECRET');
+  }
+
   return {
-    'Tbk-Api-Key-Id': requireEnv('TBK_SEC_API_KEY_ID'),
-    'Tbk-Api-Key-Secret': requireEnv('TBK_SEC_API_KEY_SECRET'),
+    'Tbk-Api-Key-Id': apiKeyId,
+    'Tbk-Api-Key-Secret': apiKeySecret,
     'Content-Type': 'application/json'
   } as Record<string, string>;
 }
@@ -191,7 +220,17 @@ router.post('/providers/:id/tbk/secondary/create', authenticateToken, async (req
     }
 
     const base = getSecApiBase();
-    if (!base) return res.status(500).json({ success: false, error: 'TBK_SEC_API_BASE no configurado' });
+    if (!base) {
+      Logger.error(MODULE, 'TBK comercios secundarios sin configuración de base URL', {
+        tbkSecBase: process.env.TBK_SEC_API_BASE,
+        tbkBaseUrl: process.env.TBK_BASE_URL
+      });
+      return res.status(500).json({
+        success: false,
+        error: 'TBK comercios secundarios no configurado',
+        details: 'Define TBK_SEC_API_BASE o TBK_BASE_URL para continuar'
+      });
+    }
 
     const payload = cleanPayload({
       rut: rutInfo?.body,
