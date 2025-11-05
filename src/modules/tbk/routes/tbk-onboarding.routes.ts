@@ -38,21 +38,17 @@ function getSecApiBase(): string {
 }
 
 function getSecHeaders() {
-  const explicitId = (process.env.TBK_SEC_API_KEY_ID || '').trim();
-  const explicitSecret = (process.env.TBK_SEC_API_KEY_SECRET || '').trim();
-  const fallbackId = (process.env.TBK_API_KEY_ID || '').trim();
-  const fallbackSecret = (process.env.TBK_API_KEY_SECRET || '').trim();
+  // Preferir credenciales del portal de Onboarding (X-Client-*)
+  const clientId = (process.env.TBK_SEC_CLIENT_ID || process.env.TBK_SEC_API_KEY_ID || '').trim();
+  const clientSecret = (process.env.TBK_SEC_CLIENT_SECRET || process.env.TBK_SEC_API_KEY_SECRET || '').trim();
 
-  const apiKeyId = explicitId || fallbackId;
-  const apiKeySecret = explicitSecret || fallbackSecret;
-
-  if (!apiKeyId || !apiKeySecret) {
-    throw new Error('Missing env TBK_SEC_API_KEY_ID/TBK_SEC_API_KEY_SECRET');
+  if (!clientId || !clientSecret) {
+    throw new Error('Missing env TBK_SEC_CLIENT_ID/TBK_SEC_CLIENT_SECRET');
   }
 
   return {
-    'Tbk-Api-Key-Id': apiKeyId,
-    'Tbk-Api-Key-Secret': apiKeySecret,
+    'X-Client-Id': clientId,
+    'X-Client-Secret': clientSecret,
     'Content-Type': 'application/json',
     'Accept': 'application/json'
   } as Record<string, string>;
@@ -280,7 +276,7 @@ router.post('/providers/:id/tbk/secondary/create', authenticateToken, async (req
     const secHeaders = getSecHeaders();
     const maskedHeaders = {
       ...secHeaders,
-      'Tbk-Api-Key-Secret': secHeaders['Tbk-Api-Key-Secret'] ? `${secHeaders['Tbk-Api-Key-Secret'].slice(0, 4)}****` : undefined
+      'X-Client-Secret': (secHeaders as any)['X-Client-Secret'] ? `${(secHeaders as any)['X-Client-Secret'].slice(0, 4)}****` : undefined
     };
 
     Logger.info(MODULE, 'Creando comercio secundario TBK', { providerId, base, payload: maskedPayload, headers: maskedHeaders });
