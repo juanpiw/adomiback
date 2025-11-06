@@ -365,9 +365,23 @@ export class ProviderUploadRoutes {
 
           const itemId = (result as any).insertId;
           Logger.info(MODULE, 'Portfolio item finalized', { userId: user.id, itemId, key, type });
+          console.log('[PORTFOLIO_S3] Item guardado en S3 y BD', {
+            userId: user.id,
+            itemId,
+            key,
+            publicUrl: url,
+            thumbnail: thumb_url || null,
+            sizeBytes,
+            mimeType
+          });
           return res.status(201).json({ success: true, item: { id: itemId, file_url: url, file_type: type, thumbnail_url: thumb_url || null } });
         } catch (error: any) {
           Logger.error(MODULE, 'Error finalizing portfolio item', { message: error?.message, stack: error?.stack });
+          console.error('[PORTFOLIO_S3] Error guardando item', {
+            userId: (req as any)?.user?.id,
+            key: req.body?.key,
+            error: error?.message
+          });
           return res.status(500).json({ success: false, error: 'No se pudo registrar el item' });
         }
       }

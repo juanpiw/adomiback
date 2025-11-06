@@ -196,10 +196,23 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
         let signedUrl: string | null = null;
         try {
           signedUrl = await getPresignedGetUrl({ bucket, key: row.s3_key, expiresSeconds: 300 });
+          console.log('[ADMIN_VERIFICATION] URL firmada generada', {
+            verificationId: id,
+            fileId: row.id,
+            bucket,
+            key: row.s3_key
+          });
         } catch (err) {
           Logger.warn('ADMIN_MODULE', 'No se pudo generar URL firmada para verificación', {
             verificationId: id,
             fileId: row.id,
+            error: (err as any)?.message
+          });
+          console.error('[ADMIN_VERIFICATION] Error generando URL firmada', {
+            verificationId: id,
+            fileId: row.id,
+            bucket,
+            key: row.s3_key,
             error: (err as any)?.message
           });
         }

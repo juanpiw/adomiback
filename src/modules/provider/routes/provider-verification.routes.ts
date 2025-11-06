@@ -244,10 +244,27 @@ export class ProviderVerificationRoutes {
       );
 
       Logger.info(MODULE, 'Archivo de verificación registrado', { providerId: user.id, verificationId, fileType: fileTypeRaw });
+      console.log('[VERIFICATION_S3] Archivo guardado', {
+        providerId: user.id,
+        verificationId,
+        fileType: fileTypeRaw,
+        bucket,
+        key,
+        mimeType,
+        sizeBytes,
+        checksum
+      });
 
       return res.json({ success: true });
     } catch (error) {
       Logger.error(MODULE, 'Error finalizando archivo de verificación', error as any);
+      console.error('[VERIFICATION_S3] Error finalizando archivo', {
+        providerId: (req as any)?.user?.id,
+        verificationId: req.body?.verificationId || req.body?.verification_id,
+        fileType: req.body?.type,
+        key: req.body?.key,
+        error: (error as any)?.message
+      });
       return res.status(500).json({ success: false, error: 'No se pudo registrar el archivo' });
     }
   }
