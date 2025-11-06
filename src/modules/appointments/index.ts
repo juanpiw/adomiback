@@ -26,29 +26,86 @@ async function ensureCashSchema(): Promise<void> {
   ensureCashSchemaPromise = (async () => {
     try {
       const pool = DatabaseConnection.getPool();
-      const statements: string[] = [
-        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS closure_state ENUM('none','pending_close','resolved','in_review') NOT NULL DEFAULT 'none' AFTER status",
-        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS closure_due_at DATETIME(6) NULL AFTER closure_state",
-        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS closure_provider_action ENUM('none','code_entered','no_show','issue') NOT NULL DEFAULT 'none' AFTER closure_due_at",
-        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS closure_client_action ENUM('none','ok','no_show','issue') NOT NULL DEFAULT 'none' AFTER closure_provider_action",
-        'ALTER TABLE appointments ADD COLUMN IF NOT EXISTS closure_notes JSON NULL AFTER closure_client_action',
-        'ALTER TABLE appointments ADD COLUMN IF NOT EXISTS cash_verified_at DATETIME(6) NULL AFTER closure_notes',
-        'ALTER TABLE appointments ADD COLUMN IF NOT EXISTS verification_code VARCHAR(8) NULL',
-        'ALTER TABLE appointments ADD COLUMN IF NOT EXISTS code_generated_at DATETIME(6) NULL',
-        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS payment_method ENUM('card','cash') NULL"
+      const columnDefinitions: Array<{ name: string; sql: string }> = [
+        {
+          name: 'closure_state',
+          sql: "ALTER TABLE appointments ADD COLUMN closure_state ENUM('none','pending_close','resolved','in_review') NOT NULL DEFAULT 'none' AFTER status"
+        },
+        {
+          name: 'closure_due_at',
+          sql: 'ALTER TABLE appointments ADD COLUMN closure_due_at DATETIME(6) NULL AFTER closure_state'
+        },
+        {
+          name: 'closure_provider_action',
+          sql: "ALTER TABLE appointments ADD COLUMN closure_provider_action ENUM('none','code_entered','no_show','issue') NOT NULL DEFAULT 'none' AFTER closure_due_at"
+        },
+        {
+          name: 'closure_client_action',
+          sql: "ALTER TABLE appointments ADD COLUMN closure_client_action ENUM('none','ok','no_show','issue') NOT NULL DEFAULT 'none' AFTER closure_provider_action"
+        },
+        {
+          name: 'closure_notes',
+          sql: 'ALTER TABLE appointments ADD COLUMN closure_notes JSON NULL AFTER closure_client_action'
+        },
+        {
+          name: 'cash_verified_at',
+          sql: 'ALTER TABLE appointments ADD COLUMN cash_verified_at DATETIME(6) NULL AFTER closure_notes'
+        },
+        {
+          name: 'verification_code',
+          sql: 'ALTER TABLE appointments ADD COLUMN verification_code VARCHAR(8) NULL'
+        },
+        {
+          name: 'code_generated_at',
+          sql: 'ALTER TABLE appointments ADD COLUMN code_generated_at DATETIME(6) NULL'
+        },
+        {
+          name: 'payment_method',
+          sql: "ALTER TABLE appointments ADD COLUMN payment_method ENUM('card','cash') NULL"
+        }
       ];
 
-      for (const sql of statements) {
-        await pool.query(sql);
+      for (const column of columnDefinitions) {
+        const [[{ exists }]]: any = await pool.query(
+          `SELECT COUNT(*) AS exists
+             FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'appointments'
+              AND COLUMN_NAME = ?`,
+          [column.name]
+        );
+
+        if (!exists) {
+          await pool.query(column.sql);
+          Logger.info(MODULE, '[CASH_SCHEMA] Columna añadida', { column: column.name });
+        }
       }
 
-      const indexStatements: string[] = [
-        'CREATE INDEX IF NOT EXISTS idx_appointments_closure_state ON appointments (closure_state)',
-        'CREATE INDEX IF NOT EXISTS idx_appointments_closure_due_at ON appointments (closure_due_at)'
+      const indexDefinitions: Array<{ name: string; sql: string }> = [
+        {
+          name: 'idx_appointments_closure_state',
+          sql: 'CREATE INDEX idx_appointments_closure_state ON appointments (closure_state)'
+        },
+        {
+          name: 'idx_appointments_closure_due_at',
+          sql: 'CREATE INDEX idx_appointments_closure_due_at ON appointments (closure_due_at)'
+        }
       ];
 
-      for (const sql of indexStatements) {
-        await pool.query(sql);
+      for (const index of indexDefinitions) {
+        const [[{ exists }]]: any = await pool.query(
+          `SELECT COUNT(*) AS exists
+             FROM information_schema.statistics
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'appointments'
+              AND INDEX_NAME = ?`,
+          [index.name]
+        );
+
+        if (!exists) {
+          await pool.query(index.sql);
+          Logger.info(MODULE, '[CASH_SCHEMA] Índice creado', { index: index.name });
+        }
       }
 
       await pool.query(
