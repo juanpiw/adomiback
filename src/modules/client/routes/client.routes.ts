@@ -4,6 +4,25 @@ import { authenticateToken, AuthUser } from '../../../shared/middleware/auth.mid
 
 // Use shared authenticateToken which re-hydrates role from DB
 
+const CREATE_NOTIFICATION_PREFS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS notification_preferences (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL UNIQUE,
+  email_notifications BOOLEAN DEFAULT TRUE,
+  push_notifications BOOLEAN DEFAULT TRUE,
+  sms_notifications BOOLEAN DEFAULT FALSE,
+  marketing_emails BOOLEAN DEFAULT FALSE,
+  appointment_reminders BOOLEAN DEFAULT TRUE,
+  payment_notifications BOOLEAN DEFAULT TRUE,
+  review_notifications BOOLEAN DEFAULT TRUE,
+  chat_notifications BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_user (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`;
+
 export class ClientRoutes {
   private router: Router;
 
@@ -260,7 +279,204 @@ export class ClientRoutes {
         return res.status(500).json({ success: false, error: 'Error al guardar preferencia de pago', details: error.message });
       }
     });
+
+    // GET /client/notification-preferences
+    this.router.get('/client/notification-preferences', authenticateToken, async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user as AuthUser;
+        const pool = DatabaseConnection.getPool();
+
+        // Garantizar tabla
+        try {
+          await pool.query(CREATE_NOTIFICATION_PREFS_TABLE_SQL);
+        } catch (e) {
+          console.warn('[CLIENT][NOTIFICATION_PREFS] No se pudo asegurar la tabla notification_preferences', e);
+        }
+
+        const [rows]: any = await pool.query(
+          `SELECT push_notifications, marketing_emails
+             FROM notification_preferences
+            WHERE user_id = ?
+            LIMIT 1`,
+          [user.id]
+        );
+
+        const row = rows?.[0] || null;
+        const preferences = {
+          pushNotifications: row?.push_notifications !== undefined ? !!row.push_notifications : true,
+          promotionalEmails: row?.marketing_emails !== undefined ? !!row.marketing_emails : false
+        };
+
+        return res.status(200).json({
+          success: true,
+          preferences
+        });
+      } catch (error: any) {
+        console.error('[CLIENT][GET NOTIFICATION PREFS] Error:', error);
+        return res.status(500).json({ success: false, error: 'Error al obtener preferencias de notificación' });
+      }
+    });
+
+    // PUT /client/notification-preferences
+    this.router.put('/client/notification-preferences', authenticateToken, async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user as AuthUser;
+        const pool = DatabaseConnection.getPool();
+
+        try {
+          await pool.query(CREATE_NOTIFICATION_PREFS_TABLE_SQL);
+        } catch (e) {
+          console.warn('[CLIENT][NOTIFICATION_PREFS] No se pudo asegurar la tabla notification_preferences', e);
+        }
+
+        const body = req.body || {};
+        const pushNotifications = typeof body.pushNotifications === 'boolean' ? body.pushNotifications : undefined;
+        const promotionalEmails = typeof body.promotionalEmails === 'boolean' ? body.promotionalEmails : undefined;
+
+        if (pushNotifications === undefined && promotionalEmails === undefined) {
+          return res.status(400).json({ success: false, error: 'Debes enviar al menos una preferencia a actualizar' });
+        }
+
+        const [existsRows]: any = await pool.query(
+          `SELECT id FROM notification_preferences WHERE user_id = ? LIMIT 1`,
+          [user.id]
+        );
+        const exists = existsRows.length > 0;
+
+        if (exists) {
+          const updateFields: string[] = [];
+          const values: any[] = [];
+
+          if (pushNotifications !== undefined) {
+            updateFields.push('push_notifications = ?');
+            values.push(pushNotifications);
+          }
+          if (promotionalEmails !== undefined) {
+            updateFields.push('marketing_emails = ?');
+            values.push(promotionalEmails);
+          }
+          updateFields.push('updated_at = CURRENT_TIMESTAMP');
+          values.push(user.id);
+
+          await pool.query(
+            `UPDATE notification_preferences
+                SET ${updateFields.join(', ')}
+              WHERE user_id = ?`,
+            values
+          );
+        } else {
+          await pool.query(
+            `INSERT INTO notification_preferences (user_id, push_notifications, marketing_emails)
+             VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+               push_notifications = VALUES(push_notifications),
+               marketing_emails = VALUES(marketing_emails),
+               updated_at = CURRENT_TIMESTAMP`,
+            [
+              user.id,
+              pushNotifications !== undefined ? pushNotifications : true,
+              promotionalEmails !== undefined ? promotionalEmails : false
+            ]
+          );
+        }
+
+        const [rows]: any = await pool.query(
+          `SELECT push_notifications, marketing_emails
+             FROM notification_preferences
+            WHERE user_id = ?
+            LIMIT 1`,
+          [user.id]
+        );
+        const row = rows?.[0] || null;
+
+        return res.status(200).json({
+          success: true,
+          preferences: {
+            pushNotifications: row?.push_notifications !== undefined ? !!row.push_notifications : true,
+            promotionalEmails: row?.marketing_emails !== undefined ? !!row.marketing_emails : false
+          }
+        });
+      } catch (error: any) {
+        console.error('[CLIENT][UPDATE NOTIFICATION PREFS] Error:', error);
+        return res.status(500).json({ success: false, error: 'Error al guardar preferencias de notificación' });
+      }
+    });
+
+    // GET /client/payments/history
+    this.router.get('/client/payments/history', authenticateToken, async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user as AuthUser;
+        const pool = DatabaseConnection.getPool();
+
+        const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? ''), 10) || 20));
+        const offset = Math.max(0, parseInt(String(req.query.offset ?? ''), 10) || 0);
+
+        const [tableRows]: any = await pool.query(`SHOW TABLES LIKE 'payments'`);
+        if (!tableRows?.length) {
+          return res.status(200).json({ success: true, transactions: [], pagination: { total: 0, limit, offset } });
+        }
+
+        const [rows]: any = await pool.query(
+          `SELECT 
+             p.id,
+             p.appointment_id,
+             p.amount,
+             p.commission_amount,
+             p.provider_amount,
+             p.currency,
+             p.payment_method,
+             p.status,
+             p.paid_at,
+             p.created_at,
+             a.appointment_date,
+             a.start_time,
+             ps.name AS service_name,
+             pp.full_name AS provider_name
+           FROM payments p
+           LEFT JOIN appointments a ON a.id = p.appointment_id
+           LEFT JOIN provider_services ps ON ps.id = a.service_id
+           LEFT JOIN provider_profiles pp ON pp.provider_id = p.provider_id
+           WHERE p.client_id = ?
+           ORDER BY COALESCE(p.paid_at, p.created_at) DESC
+           LIMIT ?
+           OFFSET ?`,
+          [user.id, limit, offset]
+        );
+
+        const [[{ total }]]: any = await pool.query(
+          `SELECT COUNT(*) AS total FROM payments WHERE client_id = ?`,
+          [user.id]
+        );
+
+        const transactions = rows.map((row: any) => ({
+          id: row.id,
+          appointmentId: row.appointment_id,
+          service: row.service_name || 'Servicio reservado',
+          providerName: row.provider_name || null,
+          amount: Number(row.amount || 0),
+          commissionAmount: Number(row.commission_amount || 0),
+          providerAmount: Number(row.provider_amount || 0),
+          currency: row.currency || 'CLP',
+          paymentMethod: row.payment_method || 'card',
+          status: row.status || 'pending',
+          paidAt: row.paid_at || row.created_at,
+          appointmentDate: row.appointment_date || null,
+          appointmentTime: row.start_time || null
+        }));
+
+        return res.status(200).json({
+          success: true,
+          transactions,
+          pagination: {
+            total: Number(total || 0),
+            limit,
+            offset
+          }
+        });
+      } catch (error: any) {
+        console.error('[CLIENT][PAYMENT HISTORY] Error:', error);
+        return res.status(500).json({ success: false, error: 'Error al obtener historial de pagos' });
+      }
+    });
   }
 }
-
-
