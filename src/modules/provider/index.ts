@@ -15,6 +15,7 @@ import providerBillingRoutes from './routes/provider-billing.routes';
 import providerIncomeGoalsRoutes from './routes/provider-income-goals.routes';
 import providerAnalyticsRoutes from './routes/provider-analytics.routes';
 import providerVerificationRoutes from './routes/provider-verification.routes';
+import providerFaqRoutes from './routes/provider-faq.routes';
 
 /**
  * Setup function to mount provider routes
@@ -37,6 +38,10 @@ export function setupProviderModule(app: Express) {
   // Rutas de ubicaciones y disponibilidad
   app.use('/', providerLocationsRoutes);
   console.log('[PROVIDER MODULE] Provider locations & availability routes mounted');
+
+  // Rutas de preguntas frecuentes
+  app.use('/', providerFaqRoutes);
+  console.log('[PROVIDER MODULE] Provider FAQ routes mounted');
 
   // Rutas de disponibilidad (bloques y excepciones)
   app.use('/', providerAvailabilityRoutes);

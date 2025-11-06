@@ -127,6 +127,31 @@ export class ClientProviderRoutes {
         return res.status(500).json({ success: false, error: 'Error al obtener detalle de proveedor' });
       }
     });
+
+    // GET /client/providers/:id/faqs - Preguntas frecuentes públicas
+    this.router.get('/client/providers/:id/faqs', async (req: Request, res: Response) => {
+      try {
+        const providerId = parseInt(req.params.id, 10);
+        if (!providerId || Number.isNaN(providerId)) {
+          return res.status(400).json({ success: false, error: 'Provider id inválido' });
+        }
+
+        const pool = DatabaseConnection.getPool();
+        const [rows] = await pool.query(
+          `SELECT id, question, answer, order_index
+             FROM provider_faqs
+            WHERE provider_id = ? AND is_active = 1
+            ORDER BY order_index ASC, id ASC`,
+          [providerId]
+        );
+
+        console.log('[CLIENT_PROVIDER] FAQs públicas obtenidas', { providerId, count: (rows as any[]).length });
+        return res.json({ success: true, faqs: rows });
+      } catch (error: any) {
+        console.error('[CLIENT_PROVIDER] Error obteniendo FAQs de proveedor:', error);
+        return res.status(500).json({ success: false, error: 'Error al obtener preguntas frecuentes del proveedor' });
+      }
+    });
   }
 
   public getRouter(): Router {
