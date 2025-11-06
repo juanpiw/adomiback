@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { EmailService } from '../../shared/services/email.service';
 import { PushService } from '../notifications/services/push.service';
+import { getPresignedGetUrl, requireEnv } from '../../shared/utils/s3.util';
 
 export function setupAdminModule(app: Express) {
   const router = Router();
@@ -24,6 +25,35 @@ export function setupAdminModule(app: Express) {
   });
   const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } });
 
+let adminUserVerificationSyncDisabled = false;
+
+async function syncUserVerificationStatus(providerId: number, status: 'none' | 'pending' | 'approved' | 'rejected', isVerified: boolean) {
+  if (adminUserVerificationSyncDisabled) return;
+
+  try {
+    const pool = DatabaseConnection.getPool();
+    await pool.execute(
+      `UPDATE users
+          SET verification_status = ?, is_verified = ?
+        WHERE id = ?`,
+      [status, isVerified ? 1 : 0, providerId]
+    );
+  } catch (error: any) {
+    const code = error?.code;
+    if (code === 'ER_BAD_FIELD_ERROR') {
+      adminUserVerificationSyncDisabled = true;
+      Logger.warn('ADMIN_MODULE', 'users.verification_status no disponible; se desactiva sincronización', { providerId, code });
+    } else {
+      Logger.warn('ADMIN_MODULE', 'No se pudo sincronizar users.verification_status', {
+        providerId,
+        status,
+        error: error?.message,
+        code
+      });
+    }
+  }
+}
+
   router.get('/health', adminAuth, (req, res) => {
     res.json({ success: true, message: 'admin ok', ts: new Date().toISOString() });
   });
@@ -36,61 +66,89 @@ export function setupAdminModule(app: Express) {
   router.get('/verification/requests', adminAuth, async (req, res) => {
     try {
       const statusParam = String(req.query.status || '').toLowerCase();
+      const searchParam = String(req.query.q || req.query.search || '').trim();
       const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
       const offset = Math.max(0, Number(req.query.offset) || 0);
-      const pool = DatabaseConnection.getPool();
+      const from = String(req.query.from || '').trim();
+      const to = String(req.query.to || '').trim();
 
+      const pool = DatabaseConnection.getPool();
       const whereClauses: string[] = [];
       const params: any[] = [];
-      if (['pending', 'approved', 'rejected', 'expired'].includes(statusParam)) {
-        whereClauses.push('iv.status = ?');
+
+      if (['pending', 'approved', 'rejected', 'expired', 'draft'].includes(statusParam)) {
+        whereClauses.push('pv.status = ?');
         params.push(statusParam);
+      }
+
+      if (searchParam) {
+        const like = `%${searchParam}%`;
+        whereClauses.push('(u.email LIKE ? OR u.name LIKE ? OR pp.full_name LIKE ? OR pv.document_number LIKE ? )');
+        params.push(like, like, like, like);
+      }
+
+      if (from) {
+        whereClauses.push('pv.updated_at >= ?');
+        params.push(from);
+      }
+
+      if (to) {
+        whereClauses.push('pv.updated_at <= ?');
+        params.push(to);
       }
 
       const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
       const query = `
-        SELECT iv.id,
-               iv.provider_id,
-               iv.document_type,
-               iv.document_number,
-               iv.front_document_url,
-               iv.back_document_url,
-               iv.selfie_url,
-               iv.status,
-               iv.rejection_reason,
-               iv.verification_notes,
-               iv.verified_at,
-               iv.created_at,
-               iv.updated_at,
+        SELECT pv.id,
+               pv.provider_id,
+               pv.document_type,
+               pv.document_number,
+               pv.status,
+               pv.rejection_reason,
+               pv.review_notes,
+               pv.submitted_at,
+               pv.reviewed_at,
+               pv.created_at,
+               pv.updated_at,
                u.email AS provider_email,
                u.name AS provider_name,
                pp.full_name,
                pp.professional_title,
                pp.verification_status,
-               pp.is_verified
-          FROM identity_verifications iv
-          LEFT JOIN users u ON u.id = iv.provider_id
-          LEFT JOIN provider_profiles pp ON pp.provider_id = iv.provider_id
+               pp.is_verified,
+               (SELECT COUNT(*) FROM provider_verification_files pvf WHERE pvf.verification_id = pv.id) AS files_count,
+               (SELECT GROUP_CONCAT(DISTINCT pvf.file_type) FROM provider_verification_files pvf WHERE pvf.verification_id = pv.id) AS file_types
+          FROM provider_verifications pv
+          LEFT JOIN users u ON u.id = pv.provider_id
+          LEFT JOIN provider_profiles pp ON pp.provider_id = pv.provider_id
           ${whereSql}
           ORDER BY
-            CASE WHEN iv.status = 'pending' THEN 0 ELSE 1 END,
-            iv.updated_at DESC
+            CASE WHEN pv.status = 'pending' THEN 0 ELSE 1 END,
+            pv.updated_at DESC
           LIMIT ? OFFSET ?`;
 
       const [rows] = await pool.query(query, [...params, limit, offset]);
-      const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
-      const normalizeUrl = (url?: string | null) => {
-        if (!url) return null;
-        if (/^https?:\/\//i.test(url)) return url;
-        return `${publicBase}${url.startsWith('/') ? url : `/${url}`}`;
-      };
 
       const data = (rows as any[]).map(row => ({
-        ...row,
-        front_document_url: normalizeUrl(row.front_document_url),
-        back_document_url: normalizeUrl(row.back_document_url),
-        selfie_url: normalizeUrl(row.selfie_url),
-        is_verified: !!row.is_verified
+        id: row.id,
+        provider_id: row.provider_id,
+        document_type: row.document_type,
+        document_number: row.document_number,
+        status: row.status,
+        rejection_reason: row.rejection_reason,
+        review_notes: row.review_notes,
+        submitted_at: row.submitted_at,
+        reviewed_at: row.reviewed_at,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        provider_email: row.provider_email,
+        provider_name: row.provider_name,
+        full_name: row.full_name,
+        professional_title: row.professional_title,
+        verification_status: row.verification_status,
+        is_verified: !!row.is_verified,
+        files_count: Number(row.files_count || 0),
+        file_types: row.file_types ? String(row.file_types).split(',') : []
       }));
 
       return res.json({ success: true, data, pagination: { limit, offset, returned: data.length } });
@@ -106,34 +164,65 @@ export function setupAdminModule(app: Express) {
       if (!Number.isFinite(id)) {
         return res.status(400).json({ success: false, error: 'invalid_id' });
       }
+
       const pool = DatabaseConnection.getPool();
-      const [[row]]: any = await pool.query(
-        `SELECT iv.*, u.email AS provider_email, u.name AS provider_name,
+      const [[verification]]: any = await pool.query(
+        `SELECT pv.*, u.email AS provider_email, u.name AS provider_name,
                 pp.full_name, pp.professional_title, pp.verification_status, pp.is_verified
-           FROM identity_verifications iv
-           LEFT JOIN users u ON u.id = iv.provider_id
-           LEFT JOIN provider_profiles pp ON pp.provider_id = iv.provider_id
-          WHERE iv.id = ?
+           FROM provider_verifications pv
+           LEFT JOIN users u ON u.id = pv.provider_id
+           LEFT JOIN provider_profiles pp ON pp.provider_id = pv.provider_id
+          WHERE pv.id = ?
           LIMIT 1`,
         [id]
       );
-      if (!row) {
+
+      if (!verification) {
         return res.status(404).json({ success: false, error: 'verification_not_found' });
       }
-      const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
-      const normalizeUrl = (url?: string | null) => {
-        if (!url) return null;
-        if (/^https?:\/\//i.test(url)) return url;
-        return `${publicBase}${url.startsWith('/') ? url : `/${url}`}`;
-      };
+
+      const [fileRows]: any = await pool.query(
+        `SELECT id, file_type, s3_bucket, s3_key, mime_type, size_bytes, checksum_sha256,
+                uploaded_at, updated_at
+           FROM provider_verification_files
+          WHERE verification_id = ?
+          ORDER BY FIELD(file_type, 'front', 'back', 'selfie', 'extra'), uploaded_at ASC`,
+        [id]
+      );
+
+      const defaultBucket = requireEnv('AWS_S3_BUCKET');
+      const files = await Promise.all((fileRows || []).map(async (row: any) => {
+        const bucket = row.s3_bucket || defaultBucket;
+        let signedUrl: string | null = null;
+        try {
+          signedUrl = await getPresignedGetUrl({ bucket, key: row.s3_key, expiresSeconds: 300 });
+        } catch (err) {
+          Logger.warn('ADMIN_MODULE', 'No se pudo generar URL firmada para verificación', {
+            verificationId: id,
+            fileId: row.id,
+            error: (err as any)?.message
+          });
+        }
+        return {
+          id: row.id,
+          type: row.file_type,
+          bucket,
+          key: row.s3_key,
+          mimeType: row.mime_type,
+          sizeBytes: row.size_bytes,
+          checksum: row.checksum_sha256,
+          uploadedAt: row.uploaded_at,
+          updatedAt: row.updated_at,
+          url: signedUrl
+        };
+      }));
+
       return res.json({
         success: true,
         data: {
-          ...row,
-          front_document_url: normalizeUrl(row.front_document_url),
-          back_document_url: normalizeUrl(row.back_document_url),
-          selfie_url: normalizeUrl(row.selfie_url),
-          is_verified: !!row.is_verified
+          ...verification,
+          is_verified: !!verification.is_verified,
+          files
         }
       });
     } catch (error) {
@@ -153,10 +242,10 @@ export function setupAdminModule(app: Express) {
       const pool = DatabaseConnection.getPool();
 
       const [[verification]]: any = await pool.query(
-        `SELECT iv.*, u.email AS provider_email, u.name AS provider_name
-           FROM identity_verifications iv
-           LEFT JOIN users u ON u.id = iv.provider_id
-          WHERE iv.id = ?
+        `SELECT pv.*, u.email AS provider_email, u.name AS provider_name
+           FROM provider_verifications pv
+           LEFT JOIN users u ON u.id = pv.provider_id
+          WHERE pv.id = ?
           LIMIT 1`,
         [id]
       );
@@ -166,9 +255,9 @@ export function setupAdminModule(app: Express) {
       }
 
       await pool.execute(
-        `UPDATE identity_verifications
+        `UPDATE provider_verifications
             SET status = 'approved', rejection_reason = NULL,
-                verification_notes = ?, verified_at = NOW(), verified_by = ?, updated_at = NOW()
+                review_notes = ?, reviewed_at = NOW(), reviewed_by_admin_id = ?, updated_at = NOW()
           WHERE id = ?`,
         [notes || null, req.user?.id || null, id]
       );
@@ -179,6 +268,8 @@ export function setupAdminModule(app: Express) {
           WHERE provider_id = ?`,
         [verification.provider_id]
       );
+
+      await syncUserVerificationStatus(verification.provider_id, 'approved', true);
 
       const appName = process.env.APP_NAME || 'Adomi';
       if (verification.provider_email) {
@@ -201,6 +292,8 @@ export function setupAdminModule(app: Express) {
       } catch (pushErr) {
         Logger.warn('ADMIN_MODULE', 'No se pudo enviar notificación de verificación aprobada', pushErr as any);
       }
+
+      Logger.info('ADMIN_MODULE', 'Verificación aprobada', { verificationId: id, adminId: req.user?.id });
 
       return res.json({ success: true });
     } catch (error) {
@@ -225,10 +318,10 @@ export function setupAdminModule(app: Express) {
       const pool = DatabaseConnection.getPool();
 
       const [[verification]]: any = await pool.query(
-        `SELECT iv.*, u.email AS provider_email, u.name AS provider_name
-           FROM identity_verifications iv
-           LEFT JOIN users u ON u.id = iv.provider_id
-          WHERE iv.id = ?
+        `SELECT pv.*, u.email AS provider_email, u.name AS provider_name
+           FROM provider_verifications pv
+           LEFT JOIN users u ON u.id = pv.provider_id
+          WHERE pv.id = ?
           LIMIT 1`,
         [id]
       );
@@ -238,9 +331,9 @@ export function setupAdminModule(app: Express) {
       }
 
       await pool.execute(
-        `UPDATE identity_verifications
+        `UPDATE provider_verifications
             SET status = 'rejected', rejection_reason = ?,
-                verification_notes = ?, verified_at = NOW(), verified_by = ?, updated_at = NOW()
+                review_notes = ?, reviewed_at = NOW(), reviewed_by_admin_id = ?, updated_at = NOW()
           WHERE id = ?`,
         [reason, notes || null, req.user?.id || null, id]
       );
@@ -251,6 +344,8 @@ export function setupAdminModule(app: Express) {
           WHERE provider_id = ?`,
         [verification.provider_id]
       );
+
+      await syncUserVerificationStatus(verification.provider_id, 'rejected', false);
 
       const appName = process.env.APP_NAME || 'Adomi';
       if (verification.provider_email) {
@@ -274,6 +369,8 @@ export function setupAdminModule(app: Express) {
       } catch (pushErr) {
         Logger.warn('ADMIN_MODULE', 'No se pudo enviar notificación de verificación rechazada', pushErr as any);
       }
+
+      Logger.info('ADMIN_MODULE', 'Verificación rechazada', { verificationId: id, adminId: req.user?.id });
 
       return res.json({ success: true });
     } catch (error) {
