@@ -66,6 +66,40 @@ export interface VerificationStatusEmailData {
   brandLogoUrl?: string;
 }
 
+export interface AppointmentClientEmailData {
+  appName: string;
+  clientName?: string | null;
+  providerName?: string | null;
+  serviceName?: string | null;
+  appointmentDateISO: string;
+  appointmentEndISO?: string | null;
+  locationLabel?: string | null;
+  price?: number | null;
+  currency?: string;
+  notes?: string | null;
+  dashboardUrl?: string | null;
+  brandColorHex?: string;
+  brandLogoUrl?: string;
+}
+
+export interface AppointmentProviderEmailData {
+  appName: string;
+  providerName?: string | null;
+  clientName?: string | null;
+  clientEmail?: string | null;
+  clientPhone?: string | null;
+  serviceName?: string | null;
+  appointmentDateISO: string;
+  appointmentEndISO?: string | null;
+  locationLabel?: string | null;
+  price?: number | null;
+  currency?: string;
+  notes?: string | null;
+  dashboardUrl?: string | null;
+  brandColorHex?: string;
+  brandLogoUrl?: string;
+}
+
 export function generateClientReceiptEmailHtml(data: ClientReceiptEmailData): string {
   const date = data.paymentDateISO ? new Date(data.paymentDateISO).toLocaleString() : '';
   const amountFormatted = `${data.currency.toUpperCase()} ${data.amount.toFixed(2)}`;
@@ -365,6 +399,152 @@ export function generateVerificationStatusEmailHtml(data: VerificationStatusEmai
                   </td>
                 </tr>
               </table>
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+    </table>
+  </div>`;
+}
+
+function formatDateTimeRange(startISO: string, endISO?: string | null) {
+  try {
+    const start = new Date(startISO);
+    const locales: Intl.DateTimeFormatOptions = { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' };
+    const datePart = start.toLocaleDateString('es-CL', locales);
+    const timePart = start.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+
+    let range = `${timePart}`;
+    if (endISO) {
+      const end = new Date(endISO);
+      const endTime = end.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+      range = `${timePart} - ${endTime}`;
+    }
+
+    return { datePart, timeRange: range };
+  } catch (err) {
+    return { datePart: '', timeRange: '' };
+  }
+}
+
+function formatCurrency(amount?: number | null, currency?: string) {
+  if (typeof amount !== 'number') return '';
+  const curr = currency || 'CLP';
+  try {
+    return new Intl.NumberFormat('es-CL', { style: 'currency', currency: curr }).format(amount);
+  } catch {
+    return `${curr.toUpperCase()} ${amount.toFixed(0)}`;
+  }
+}
+
+export function generateAppointmentClientEmailHtml(data: AppointmentClientEmailData): string {
+  const brand = data.brandColorHex || '#6366f1';
+  const logo = data.brandLogoUrl ? `<img src="${data.brandLogoUrl}" alt="${data.appName}" style="height:24px;display:block;margin:0 auto 16px" />` : '';
+  const priceFormatted = formatCurrency(data.price, data.currency);
+  const { datePart, timeRange } = formatDateTimeRange(data.appointmentDateISO, data.appointmentEndISO || undefined);
+  const greeting = data.clientName ? `Hola ${data.clientName},` : 'Hola,';
+
+  return `
+  <div style="margin:0;padding:0;background:#0b0b0c">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#0b0b0c;padding:24px 12px">
+      <tr><td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="max-width:600px;width:100%">
+          <tr>
+            <td align="center" style="padding:16px 0;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;font-size:14px">
+              ${logo}
+              <div style="opacity:.9">${data.appName}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#fff;border-radius:12px;overflow:hidden">
+                <tr>
+                  <td style="padding:24px 24px 8px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;color:#0f172a">
+                    <div style="font-size:20px;font-weight:700;margin:0 0 8px">Tu cita está confirmada</div>
+                    <div style="color:#475569;font-size:13px">${greeting}</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 24px 24px">
+                    <div style="border:1px solid #e2e8f0;border-radius:14px;padding:18px">
+                      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="font-size:13px;color:#0f172a">
+                        ${data.providerName ? `<tr><td style="padding:6px 0;font-weight:600">Profesional</td><td style="padding:6px 0;text-align:right">${data.providerName}</td></tr>` : ''}
+                        ${data.serviceName ? `<tr><td style="padding:6px 0;font-weight:600">Servicio</td><td style="padding:6px 0;text-align:right">${data.serviceName}</td></tr>` : ''}
+                        ${datePart ? `<tr><td style="padding:6px 0;font-weight:600">Fecha</td><td style="padding:6px 0;text-align:right;text-transform:capitalize">${datePart}</td></tr>` : ''}
+                        ${timeRange ? `<tr><td style="padding:6px 0;font-weight:600">Horario</td><td style="padding:6px 0;text-align:right">${timeRange}</td></tr>` : ''}
+                        ${data.locationLabel ? `<tr><td style="padding:6px 0;font-weight:600">Dirección</td><td style="padding:6px 0;text-align:right">${data.locationLabel}</td></tr>` : ''}
+                        ${priceFormatted ? `<tr><td style="padding:6px 0;font-weight:600">Precio estimado</td><td style="padding:6px 0;text-align:right;color:${brand};font-weight:700">${priceFormatted}</td></tr>` : ''}
+                      </table>
+                      ${data.notes ? `<div style="margin-top:16px;padding:14px;background:rgba(99,102,241,0.08);border-radius:10px;color:#4338ca;font-size:13px;line-height:1.5"><strong>Notas para el proveedor:</strong><br/>${data.notes}</div>` : ''}
+                      ${data.dashboardUrl ? `<div style="margin-top:20px;text-align:center"><a href="${data.dashboardUrl}" style="display:inline-block;background:${brand};color:#fff;text-decoration:none;padding:10px 18px;border-radius:999px;font-size:13px;font-weight:600">Ver mi agenda</a></div>` : ''}
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:16px 0;color:#a3a3a3;font-size:12px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif">
+              Revisa y gestiona tus citas desde ${data.appName}.
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+    </table>
+  </div>`;
+}
+
+export function generateAppointmentProviderEmailHtml(data: AppointmentProviderEmailData): string {
+  const brand = data.brandColorHex || '#2563eb';
+  const logo = data.brandLogoUrl ? `<img src="${data.brandLogoUrl}" alt="${data.appName}" style="height:24px;display:block;margin:0 auto 16px" />` : '';
+  const priceFormatted = formatCurrency(data.price, data.currency);
+  const { datePart, timeRange } = formatDateTimeRange(data.appointmentDateISO, data.appointmentEndISO || undefined);
+  const greeting = data.providerName ? `Hola ${data.providerName},` : 'Hola,';
+
+  return `
+  <div style="margin:0;padding:0;background:#0b0b0c">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#0b0b0c;padding:24px 12px">
+      <tr><td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="max-width:600px;width:100%">
+          <tr>
+            <td align="center" style="padding:16px 0;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;font-size:14px">
+              ${logo}
+              <div style="opacity:.9">${data.appName}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#fff;border-radius:12px;overflow:hidden">
+                <tr>
+                  <td style="padding:24px 24px 8px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;color:#0f172a">
+                    <div style="font-size:20px;font-weight:700;margin:0 0 8px">Tienes una nueva cita</div>
+                    <div style="color:#475569;font-size:13px">${greeting}</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 24px 24px">
+                    <div style="border:1px solid #e2e8f0;border-radius:14px;padding:18px">
+                      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="font-size:13px;color:#0f172a">
+                        ${data.clientName ? `<tr><td style="padding:6px 0;font-weight:600">Cliente</td><td style="padding:6px 0;text-align:right">${data.clientName}</td></tr>` : ''}
+                        ${data.clientEmail ? `<tr><td style="padding:6px 0;font-weight:600">Correo</td><td style="padding:6px 0;text-align:right">${data.clientEmail}</td></tr>` : ''}
+                        ${data.clientPhone ? `<tr><td style="padding:6px 0;font-weight:600">Teléfono</td><td style="padding:6px 0;text-align:right">${data.clientPhone}</td></tr>` : ''}
+                        ${data.serviceName ? `<tr><td style="padding:6px 0;font-weight:600">Servicio</td><td style="padding:6px 0;text-align:right">${data.serviceName}</td></tr>` : ''}
+                        ${datePart ? `<tr><td style="padding:6px 0;font-weight:600">Fecha</td><td style="padding:6px 0;text-align:right;text-transform:capitalize">${datePart}</td></tr>` : ''}
+                        ${timeRange ? `<tr><td style="padding:6px 0;font-weight:600">Horario</td><td style="padding:6px 0;text-align:right">${timeRange}</td></tr>` : ''}
+                        ${data.locationLabel ? `<tr><td style="padding:6px 0;font-weight:600">Lugar</td><td style="padding:6px 0;text-align:right">${data.locationLabel}</td></tr>` : ''}
+                        ${priceFormatted ? `<tr><td style="padding:6px 0;font-weight:600">Precio programado</td><td style="padding:6px 0;text-align:right;color:${brand};font-weight:700">${priceFormatted}</td></tr>` : ''}
+                      </table>
+                      ${data.notes ? `<div style="margin-top:16px;padding:14px;background:rgba(37,99,235,0.08);border-radius:10px;color:#1d4ed8;font-size:13px;line-height:1.5"><strong>Notas del cliente:</strong><br/>${data.notes}</div>` : ''}
+                      ${data.dashboardUrl ? `<div style="margin-top:20px;text-align:center"><a href="${data.dashboardUrl}" style="display:inline-block;background:${brand};color:#fff;text-decoration:none;padding:10px 18px;border-radius:999px;font-size:13px;font-weight:600">Gestionar cita</a></div>` : ''}
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:16px 0;color:#a3a3a3;font-size:12px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif">
+              Recuerda confirmar la cita desde tu panel de ${data.appName}.
             </td>
           </tr>
         </table>

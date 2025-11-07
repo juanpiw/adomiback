@@ -13,6 +13,7 @@ import { PushService } from '../notifications/services/push.service';
 import { validateCodeFormat, compareVerificationCodes, sanitizeCode, generateVerificationCode } from '../../shared/utils/verification-code.util';
 import { cashClosureGate } from '../../shared/middleware/cash-closure-gate';
 import { buildCashCapErrorMessage, loadCashSettings } from './utils/cash-settings.util';
+import { EmailService } from '../../shared/services/email.service';
 
 const MODULE = 'APPOINTMENTS';
 
@@ -138,7 +139,7 @@ function buildRouter(): Router {
       }
       const pool = DatabaseConnection.getPool();
       // Validar service -> provider y obtener precio/duración
-      const [sv] = await pool.query('SELECT id, provider_id, duration_minutes, price FROM provider_services WHERE id = ? LIMIT 1', [service_id]);
+      const [sv] = await pool.query('SELECT id, provider_id, duration_minutes, price, name FROM provider_services WHERE id = ? LIMIT 1', [service_id]);
       if ((sv as any[]).length === 0 || (sv as any[])[0].provider_id !== Number(provider_id)) {
         return res.status(400).json({ success: false, error: 'Servicio inválido para el proveedor' });
       }
@@ -205,16 +206,20 @@ function buildRouter(): Router {
       const [row] = await pool.query(
         `SELECT a.*,
                 u.name AS client_name,
+                u.email AS client_email,
                 up.name AS provider_name,
+                up.email AS provider_email,
                 cp.address AS client_address,
                 cp.commune AS client_commune,
                 cp.region AS client_region,
                 cp.phone AS client_phone,
-                COALESCE(NULLIF(a.client_location, ''), TRIM(CONCAT_WS(', ', cp.address, cp.commune, cp.region))) AS client_location_label
+                COALESCE(NULLIF(a.client_location, ''), TRIM(CONCAT_WS(', ', cp.address, cp.commune, cp.region))) AS client_location_label,
+                ps.name AS service_name
          FROM appointments a
          LEFT JOIN users u ON u.id = a.client_id
          LEFT JOIN users up ON up.id = a.provider_id
          LEFT JOIN client_profiles cp ON cp.client_id = a.client_id
+         LEFT JOIN provider_services ps ON ps.id = a.service_id
          WHERE a.id = ?`,
         [id]
       );
@@ -270,6 +275,106 @@ function buildRouter(): Router {
       } catch (pushErr) {
         console.error('🔴 [APPOINTMENTS] ❌ Error enviando push notification:', pushErr);
         console.error('🔴 [APPOINTMENTS] Error stack:', (pushErr as Error).stack);
+      }
+
+      const toTimeString = (value: any) => {
+        if (!value && value !== 0) return '';
+        const raw = String(value);
+        if (raw.includes(':')) return raw.slice(0,5);
+        if (raw.length === 4) return `${raw.slice(0, 2)}:${raw.slice(2)}`;
+        return raw;
+      };
+
+      const sendEmailSafely = async (handler: () => Promise<any>, context: string) => {
+        try {
+          await handler();
+        } catch (emailErr: any) {
+          const message = emailErr?.message || emailErr?.toString?.() || 'Unknown error';
+          Logger.warn(MODULE, 'Email dispatch skipped', { context, error: message });
+        }
+      };
+
+      const startTimeStr = toTimeString(start_time);
+      const endTimeStr = toTimeString(end_time);
+      const appointmentStartISO = startTimeStr ? `${date}T${startTimeStr}` : `${date}T00:00`;
+      const appointmentEndISO = endTimeStr ? `${date}T${endTimeStr}` : undefined;
+      const appointmentPrice = Number(service.price ?? appointment?.price ?? 0) || null;
+
+      const appName = process.env.APP_NAME || 'Adomi';
+      const brandColor = process.env.BRAND_COLOR_HEX || '#6366f1';
+      const brandLogo = process.env.BRAND_LOGO_URL || undefined;
+      const publicAppUrlRaw =
+        process.env.PUBLIC_APP_URL ||
+        process.env.APP_BASE_URL ||
+        process.env.CLIENT_APP_URL ||
+        process.env.PUBLIC_BASE_URL ||
+        '';
+      const publicAppUrl = publicAppUrlRaw ? publicAppUrlRaw.replace(/\/$/, '') : '';
+      const clientDashboardUrl = publicAppUrl ? `${publicAppUrl}/client/agenda` : null;
+      const providerDashboardUrl = publicAppUrl ? `${publicAppUrl}/dash/agenda` : null;
+      const currency = process.env.APP_CURRENCY || 'CLP';
+      const appointmentNotes = typeof notes === 'string' && notes.trim().length ? notes.trim() : null;
+      const locationLabel =
+        (appointment as any).client_location_label ||
+        (appointment as any).client_location ||
+        locationForMessage ||
+        null;
+      const clientEmail = String((appointment as any).client_email || '').trim();
+      const providerEmail = String((appointment as any).provider_email || '').trim();
+      const emailTasks: Array<Promise<void>> = [];
+
+      if (clientEmail) {
+        emailTasks.push(
+          sendEmailSafely(
+            () =>
+              EmailService.sendAppointmentBookedClient(clientEmail, {
+                appName,
+                clientName: (appointment as any).client_name || null,
+                providerName: (appointment as any).provider_name || null,
+                serviceName: (appointment as any).service_name || service?.name || null,
+                appointmentDateISO: appointmentStartISO,
+                appointmentEndISO,
+                locationLabel,
+                price: appointmentPrice,
+                currency,
+                notes: appointmentNotes,
+                dashboardUrl: clientDashboardUrl,
+                brandColorHex: brandColor,
+                brandLogoUrl: brandLogo
+              }),
+            'appointment_client_confirmation'
+          )
+        );
+      }
+
+      if (providerEmail) {
+        emailTasks.push(
+          sendEmailSafely(
+            () =>
+              EmailService.sendAppointmentBookedProvider(providerEmail, {
+                appName,
+                providerName: (appointment as any).provider_name || null,
+                clientName: (appointment as any).client_name || null,
+                clientEmail: clientEmail || null,
+                clientPhone: (appointment as any).client_phone || null,
+                serviceName: (appointment as any).service_name || service?.name || null,
+                appointmentDateISO: appointmentStartISO,
+                appointmentEndISO,
+                locationLabel,
+                price: appointmentPrice,
+                currency,
+                notes: appointmentNotes,
+                dashboardUrl: providerDashboardUrl,
+                brandColorHex: brandColor,
+                brandLogoUrl: brandLogo
+              }),
+            'appointment_provider_notification'
+          )
+        );
+      }
+
+      if (emailTasks.length > 0) {
+        await Promise.all(emailTasks);
       }
       
       console.log('🟢 [APPOINTMENTS] ==================== FIN CREACIÓN CITA ====================');

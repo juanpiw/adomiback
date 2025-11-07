@@ -1,6 +1,23 @@
 import nodemailer from 'nodemailer';
 import { Logger } from '../utils/logger.util';
-import { generateClientReceiptEmailHtml, generateProviderPaymentEmailHtml, generatePasswordResetEmailHtml, generateRefundDecisionEmailHtml, generateRefundReceivedEmailHtml, generateVerificationStatusEmailHtml, ClientReceiptEmailData, ProviderPaymentEmailData, PasswordResetEmailData, RefundDecisionEmailData, RefundReceivedEmailData, VerificationStatusEmailData } from './email-templates';
+import {
+  generateClientReceiptEmailHtml,
+  generateProviderPaymentEmailHtml,
+  generatePasswordResetEmailHtml,
+  generateRefundDecisionEmailHtml,
+  generateRefundReceivedEmailHtml,
+  generateVerificationStatusEmailHtml,
+  generateAppointmentClientEmailHtml,
+  generateAppointmentProviderEmailHtml,
+  ClientReceiptEmailData,
+  ProviderPaymentEmailData,
+  PasswordResetEmailData,
+  RefundDecisionEmailData,
+  RefundReceivedEmailData,
+  VerificationStatusEmailData,
+  AppointmentClientEmailData,
+  AppointmentProviderEmailData
+} from './email-templates';
 
 const MODULE = 'EMAIL_SERVICE';
 
@@ -92,6 +109,28 @@ export class EmailService {
     const subject = data.status === 'approved'
       ? `${data.appName} – Tu identidad ha sido verificada`
       : `${data.appName} – Necesitamos nuevos documentos para verificar tu identidad`;
+    return this.sendRaw(to, subject, html);
+  }
+
+  static async sendAppointmentBookedClient(to: string, data: AppointmentClientEmailData) {
+    Logger.info(MODULE, 'sendAppointmentBookedClient called', {
+      to,
+      service: data.serviceName,
+      provider: data.providerName
+    });
+    const html = generateAppointmentClientEmailHtml(data);
+    const subject = `${data.appName} – Tu cita con ${data.providerName || 'tu profesional'} está agendada`;
+    return this.sendRaw(to, subject, html);
+  }
+
+  static async sendAppointmentBookedProvider(to: string, data: AppointmentProviderEmailData) {
+    Logger.info(MODULE, 'sendAppointmentBookedProvider called', {
+      to,
+      service: data.serviceName,
+      client: data.clientName
+    });
+    const html = generateAppointmentProviderEmailHtml(data);
+    const subject = `${data.appName} – Nueva cita con ${data.clientName || 'un cliente'}`;
     return this.sendRaw(to, subject, html);
   }
 }
