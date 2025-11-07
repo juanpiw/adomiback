@@ -7,8 +7,11 @@ import { Router, Request, Response } from 'express';
 import DatabaseConnection from '../../../shared/database/connection';
 import { authenticateToken, AuthUser, requireRole } from '../../../shared/middleware/auth.middleware';
 import { Logger } from '../../../shared/utils/logger.util';
+import { getSocketServer } from '../../../shared/realtime/socket';
 
 const MODULE = 'ProviderLocationsRoutes';
+const LOCATION_RATE_LIMIT_MS = 5000;
+const locationRateLimitCache = new Map<number, number>();
 
 export class ProviderLocationsRoutes {
   public router: Router;
@@ -272,10 +275,17 @@ export class ProviderLocationsRoutes {
         }
 
         const { is_online, share_real_time_location } = req.body as any;
-
         const pool = DatabaseConnection.getPool();
 
-        // Actualizar campos de disponibilidad
+        const [[currentProfile]]: any = await pool.query(
+          'SELECT share_real_time_location FROM provider_profiles WHERE provider_id = ? LIMIT 1',
+          [user.id]
+        );
+
+        if (!currentProfile) {
+          return res.status(404).json({ success: false, error: 'Perfil de proveedor no encontrado' });
+        }
+
         await pool.execute(
           `UPDATE provider_profiles 
            SET is_online = COALESCE(?, is_online),
@@ -285,15 +295,37 @@ export class ProviderLocationsRoutes {
           [is_online, share_real_time_location, user.id]
         );
 
-        // Obtener perfil actualizado
+        if (share_real_time_location === false && currentProfile.share_real_time_location) {
+          Logger.info(MODULE, 'Share real time turned off, clearing last known coordinates', { userId: user.id });
+          await pool.execute(
+            `UPDATE provider_profiles
+             SET current_lat = NULL,
+                 current_lng = NULL,
+                 current_location_accuracy = NULL,
+                 current_location_speed = NULL,
+                 current_location_heading = NULL,
+                 current_location_updated_at = NULL,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE provider_id = ?`,
+            [user.id]
+          );
+          locationRateLimitCache.delete(user.id);
+        }
+
         const [rows] = await pool.query(
-          'SELECT is_online, share_real_time_location FROM provider_profiles WHERE provider_id = ?',
+          `SELECT is_online,
+                  share_real_time_location,
+                  current_lat,
+                  current_lng,
+                  current_location_updated_at
+             FROM provider_profiles
+            WHERE provider_id = ?`,
           [user.id]
         );
 
         const availability = (rows as any[])[0];
 
-        Logger.info(MODULE, 'Availability updated', { userId: user.id });
+        Logger.info(MODULE, 'Availability updated', { userId: user.id, shareRealTime: availability?.share_real_time_location });
         return res.json({ success: true, availability });
       } catch (error: any) {
         Logger.error(MODULE, 'Error updating availability', error);
@@ -311,6 +343,7 @@ export class ProviderLocationsRoutes {
           return res.status(403).json({ success: false, error: 'Solo providers pueden acceder' });
         }
 
+        const providerId = Number(user.id);
         const { lat, lng } = req.body as any;
 
         const latNum = Number(lat);
@@ -323,20 +356,99 @@ export class ProviderLocationsRoutes {
           return res.status(400).json({ success: false, error: 'lat/lng inválidos' });
         }
 
+        const now = Date.now();
+        const lastUpdate = locationRateLimitCache.get(providerId) || 0;
+        if (now - lastUpdate < LOCATION_RATE_LIMIT_MS) {
+          return res.status(429).json({ success: false, error: 'Ubicación actualizada demasiado seguido' });
+        }
+
         const pool = DatabaseConnection.getPool();
+        const [[profile]]: any = await pool.query(
+          'SELECT share_real_time_location FROM provider_profiles WHERE provider_id = ? LIMIT 1',
+          [providerId]
+        );
+
+        if (!profile) {
+          return res.status(404).json({ success: false, error: 'Perfil de proveedor no encontrado' });
+        }
+
+        if (!profile.share_real_time_location) {
+          return res.status(409).json({ success: false, error: 'Debes activar compartir ubicación en tiempo real' });
+        }
+
+        const accuracyRaw = req.body?.accuracy ?? req.body?.precision ?? null;
+        const speedRaw = req.body?.speed ?? null;
+        const headingRaw = req.body?.heading ?? null;
+
+        const accuracy = accuracyRaw !== null && accuracyRaw !== undefined ? Number(accuracyRaw) : null;
+        const speed = speedRaw !== null && speedRaw !== undefined ? Number(speedRaw) : null;
+        const heading = headingRaw !== null && headingRaw !== undefined ? Number(headingRaw) : null;
+
+        const safeAccuracy = typeof accuracy === 'number' && Number.isFinite(accuracy) && accuracy >= 0 ? accuracy : null;
+        const safeSpeed = typeof speed === 'number' && Number.isFinite(speed) && speed >= 0 ? speed : null;
+        const safeHeading = typeof heading === 'number' && Number.isFinite(heading)
+          ? ((heading % 360) + 360) % 360
+          : null;
+
         await pool.execute(
           `UPDATE provider_profiles
-           SET current_lat = ?, current_lng = ?, current_location_updated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+             SET current_lat = ?,
+                 current_lng = ?,
+                 current_location_accuracy = ?,
+                 current_location_speed = ?,
+                 current_location_heading = ?,
+                 current_location_updated_at = CURRENT_TIMESTAMP,
+                 updated_at = CURRENT_TIMESTAMP
            WHERE provider_id = ?`,
-          [latNum, lngNum, user.id]
+          [latNum, lngNum, safeAccuracy, safeSpeed, safeHeading, providerId]
         );
 
         const [rows] = await pool.query(
-          'SELECT current_lat, current_lng, current_location_updated_at, share_real_time_location FROM provider_profiles WHERE provider_id = ?',
-          [user.id]
+          `SELECT current_lat,
+                  current_lng,
+                  current_location_accuracy,
+                  current_location_speed,
+                  current_location_heading,
+                  current_location_updated_at,
+                  share_real_time_location
+             FROM provider_profiles
+            WHERE provider_id = ?`,
+          [providerId]
         );
 
-        return res.json({ success: true, location: (rows as any[])[0] });
+        const location = (rows as any[])[0];
+        if (location) {
+          location.current_lat = location.current_lat !== null ? Number(location.current_lat) : null;
+          location.current_lng = location.current_lng !== null ? Number(location.current_lng) : null;
+          location.current_location_accuracy = location.current_location_accuracy !== null ? Number(location.current_location_accuracy) : null;
+          location.current_location_speed = location.current_location_speed !== null ? Number(location.current_location_speed) : null;
+          location.current_location_heading = location.current_location_heading !== null ? Number(location.current_location_heading) : null;
+        }
+        locationRateLimitCache.set(providerId, now);
+
+        const io = getSocketServer();
+        if (io) {
+          io.emit('provider-location:update', {
+            providerId,
+            lat: location.current_lat,
+            lng: location.current_lng,
+            accuracy: location.current_location_accuracy,
+            speed: location.current_location_speed,
+            heading: location.current_location_heading,
+            updatedAt: location.current_location_updated_at
+          });
+        }
+
+        Logger.info(MODULE, 'Live location stored', {
+          providerId,
+          lat: location.current_lat,
+          lng: location.current_lng,
+          accuracy: location.current_location_accuracy,
+          speed: location.current_location_speed,
+          heading: location.current_location_heading
+        });
+
+        return res.json({ success: true, location });
       } catch (error: any) {
         Logger.error(MODULE, 'Error updating current location', error);
         return res.status(500).json({ success: false, error: 'Error al actualizar ubicación actual' });
