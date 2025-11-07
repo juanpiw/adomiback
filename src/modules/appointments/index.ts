@@ -926,7 +926,7 @@ function buildRouter(): Router {
       // Insertar payment en efectivo
       const [ins]: any = await pool.execute(
         `INSERT INTO payments (appointment_id, client_id, provider_id, amount, tax_amount, commission_amount, provider_amount, currency, payment_method, status, paid_at, can_release, release_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'CLP', 'cash', 'completed', NOW(), TRUE, 'eligible')`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'CLP', 'cash', 'completed', NOW(), TRUE, 'pending')`,
         [appointmentId, appt.client_id, appt.provider_id, amount, taxAmount, commissionAmount, providerAmount]
       );
       const paymentId = ins.insertId;
@@ -1157,7 +1157,7 @@ function buildRouter(): Router {
       // Insert payment cash
       const [ins]: any = await pool.execute(
         `INSERT INTO payments (appointment_id, client_id, provider_id, amount, tax_amount, commission_amount, provider_amount, currency, payment_method, status, paid_at, can_release, release_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'CLP', 'cash', 'completed', NOW(), TRUE, 'eligible')`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'CLP', 'cash', 'completed', NOW(), TRUE, 'pending')`,
         [appointmentId, appt.client_id, appt.provider_id, amount, taxAmount, commissionAmount, providerAmount]
       );
       const paymentId = ins.insertId;
@@ -1263,7 +1263,7 @@ function buildRouter(): Router {
 
       const [ins]: any = await pool.execute(
         `INSERT INTO payments (appointment_id, client_id, provider_id, amount, tax_amount, commission_amount, provider_amount, currency, payment_method, status, paid_at, can_release, release_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'CLP', 'cash', 'completed', NOW(), TRUE, 'eligible')`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'CLP', 'cash', 'completed', NOW(), TRUE, 'pending')`,
         [appointmentId, appt.client_id, appt.provider_id, amount, taxAmount, commissionAmount, providerAmount]
       );
       const paymentId = ins.insertId;

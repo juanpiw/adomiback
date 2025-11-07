@@ -101,7 +101,7 @@ async function autoResolveClose() {
         const clientId = Number(ids?.client_id || 0);
         const [ins]: any = await pool.execute(
           `INSERT INTO payments (appointment_id, client_id, provider_id, amount, tax_amount, commission_amount, provider_amount, currency, payment_method, status, paid_at, can_release, release_status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'CLP', 'cash', 'completed', NOW(), TRUE, 'eligible')`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'CLP', 'cash', 'completed', NOW(), TRUE, 'pending')`,
           [a.id, clientId, providerId, amount, taxAmount, commissionAmount, providerAmount]
         );
         const paymentId = ins.insertId;
