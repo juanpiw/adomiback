@@ -16,7 +16,11 @@ import {
   RefundReceivedEmailData,
   VerificationStatusEmailData,
   AppointmentClientEmailData,
-  AppointmentProviderEmailData
+  AppointmentProviderEmailData,
+  ManualCashReceiptEmailData,
+  ManualCashReceiptAdminEmailData,
+  generateManualCashReceiptProviderEmailHtml,
+  generateManualCashReceiptAdminEmailHtml
 } from './email-templates';
 
 const MODULE = 'EMAIL_SERVICE';
@@ -131,6 +135,28 @@ export class EmailService {
     });
     const html = generateAppointmentProviderEmailHtml(data);
     const subject = `${data.appName} – Nueva cita con ${data.clientName || 'un cliente'}`;
+    return this.sendRaw(to, subject, html);
+  }
+
+  static async sendManualCashReceiptProvider(to: string, data: ManualCashReceiptEmailData) {
+    Logger.info(MODULE, 'sendManualCashReceiptProvider called', {
+      to,
+      amount: data.amount,
+      currency: data.currency
+    });
+    const html = generateManualCashReceiptProviderEmailHtml(data);
+    const subject = `${data.appName} – Recibimos tu comprobante de pago`; 
+    return this.sendRaw(to, subject, html);
+  }
+
+  static async sendManualCashReceiptAdmin(to: string, data: ManualCashReceiptAdminEmailData) {
+    Logger.info(MODULE, 'sendManualCashReceiptAdmin called', {
+      to,
+      paymentId: data.paymentId,
+      providerId: data.providerId
+    });
+    const html = generateManualCashReceiptAdminEmailHtml(data);
+    const subject = `${data.appName} – Nuevo comprobante manual #${data.paymentId}`;
     return this.sendRaw(to, subject, html);
   }
 }

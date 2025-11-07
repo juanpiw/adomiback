@@ -5,6 +5,7 @@ import { Logger } from '../../../shared/utils/logger.util';
 import { getPresignedPutUrl, getPublicUrlForKey, requireEnv } from '../../../shared/utils/s3.util';
 import { v4 as uuidv4 } from 'uuid';
 import mime from 'mime-types';
+import { EmailService } from '../../../shared/services/email.service';
 
 const MODULE = 'PROVIDER_FINANCES';
 
@@ -435,6 +436,9 @@ export function buildProviderFinancesRoutes(): Router {
       await conn.commit();
       conn.release();
 
+      const difference = Number((amountNumber - totalDue).toFixed(2));
+      const totalDueRounded = Number(totalDue.toFixed(2));
+
       Logger.info(MODULE, 'Manual cash payment submitted', {
         providerId,
         paymentId,
@@ -442,6 +446,91 @@ export function buildProviderFinancesRoutes(): Router {
         amount: amountNumber,
         currency: currencyCode
       });
+
+      try {
+        const pool = DatabaseConnection.getPool();
+        let providerName: string | null = null;
+        if (pool) {
+          try {
+            const [[profile]]: any = await pool.query(
+              'SELECT full_name FROM provider_profiles WHERE provider_id = ? LIMIT 1',
+              [providerId]
+            );
+            providerName = profile?.full_name || null;
+          } catch (profileErr) {
+            Logger.warn(MODULE, 'No se pudo obtener nombre de proveedor para email', {
+              providerId,
+              error: (profileErr as any)?.message
+            });
+          }
+        }
+
+        const providerEmail = (user.email || '').trim();
+        const appName = process.env.APP_NAME || 'AdomiApp';
+        const notifyEmail = [
+          process.env.CASH_PAYMENT_NOTIFICATION_EMAIL,
+          process.env.CASH_BANK_NOTIFICATION_EMAIL,
+          process.env.FINANCE_NOTIFICATIONS_EMAIL
+        ].map(v => (v || '').trim()).find(Boolean);
+        const adminPanelUrl = (process.env.CASH_PAYMENT_ADMIN_URL || process.env.ADMIN_PANEL_URL || '').trim() ||
+          'https://adomiapp.com/dash/admin-pagos?panel=cash';
+
+        const emailTasks: Promise<any>[] = [];
+        const emailPayload = {
+          appName,
+          providerName,
+          providerEmail,
+          amount: amountNumber,
+          currency: currencyCode,
+          reference: reference ? String(reference).trim() : null,
+          difference,
+          debtTotal: totalDueRounded,
+          uploadDateISO: new Date().toISOString(),
+          receiptUrl,
+          adminPanelUrl
+        };
+
+        if (providerEmail) {
+          emailTasks.push(EmailService.sendManualCashReceiptProvider(providerEmail, emailPayload));
+        }
+
+        if (notifyEmail) {
+          emailTasks.push(EmailService.sendManualCashReceiptAdmin(notifyEmail, {
+            ...emailPayload,
+            providerId,
+            paymentId,
+            providerEmail,
+            providerName,
+            receiptUrl
+          }));
+        }
+
+        if (emailTasks.length) {
+          Promise.allSettled(emailTasks).then(results => {
+            results.forEach(result => {
+              if (result.status === 'rejected') {
+                Logger.warn(MODULE, 'Error enviando email de comprobante manual', {
+                  providerId,
+                  paymentId,
+                  error: (result.reason as any)?.message || result.reason
+                });
+              }
+            });
+          }).catch(err => {
+            Logger.error(MODULE, 'Fallo global enviando emails de comprobante manual', {
+              providerId,
+              paymentId,
+              error: err?.message || err
+            });
+          });
+        }
+      } catch (emailErr: any) {
+        Logger.error(MODULE, 'Error inesperado preparando emails de comprobante manual', {
+          providerId,
+          paymentId,
+          error: emailErr?.message || emailErr
+        });
+      }
 
       return res.status(201).json({
         success: true,
@@ -455,8 +544,8 @@ export function buildProviderFinancesRoutes(): Router {
           receiptUrl
         },
         appliedDebtIds: debtIds,
-        totalDue,
-        difference: Number((amountNumber - totalDue).toFixed(2))
+        totalDue: totalDueRounded,
+        difference
       });
     } catch (error) {
       try {

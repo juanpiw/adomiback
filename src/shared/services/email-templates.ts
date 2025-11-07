@@ -100,6 +100,26 @@ export interface AppointmentProviderEmailData {
   brandLogoUrl?: string;
 }
 
+export interface ManualCashReceiptEmailData {
+  appName: string;
+  providerName?: string | null;
+  providerEmail?: string | null;
+  amount: number;
+  currency: string;
+  reference?: string | null;
+  difference?: number;
+  debtTotal?: number;
+  uploadDateISO?: string | null;
+  receiptUrl?: string | null;
+  adminPanelUrl?: string | null;
+}
+
+export interface ManualCashReceiptAdminEmailData extends ManualCashReceiptEmailData {
+  providerId: number;
+  paymentId: number;
+  receiptUrl?: string | null;
+}
+
 export function generateClientReceiptEmailHtml(data: ClientReceiptEmailData): string {
   const date = data.paymentDateISO ? new Date(data.paymentDateISO).toLocaleString() : '';
   const amountFormatted = `${data.currency.toUpperCase()} ${data.amount.toFixed(2)}`;
@@ -545,6 +565,114 @@ export function generateAppointmentProviderEmailHtml(data: AppointmentProviderEm
           <tr>
             <td align="center" style="padding:16px 0;color:#a3a3a3;font-size:12px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif">
               Recuerda confirmar la cita desde tu panel de ${data.appName}.
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+    </table>
+  </div>`;
+}
+
+export function generateManualCashReceiptProviderEmailHtml(data: ManualCashReceiptEmailData): string {
+  const amountFormatted = `${data.currency.toUpperCase()} ${Number(data.amount || 0).toLocaleString('es-CL')}`;
+  const debtFormatted = data.debtTotal === undefined || data.debtTotal === null
+    ? null
+    : `${data.currency.toUpperCase()} ${Number(data.debtTotal || 0).toLocaleString('es-CL')}`;
+  const difference = Number(data.difference || 0);
+  const differenceFormatted = Math.abs(difference) > 0.009
+    ? `${data.currency.toUpperCase()} ${Number(difference).toLocaleString('es-CL')}`
+    : null;
+  const uploadedAt = data.uploadDateISO ? new Date(data.uploadDateISO).toLocaleString('es-CL') : null;
+  const greeting = data.providerName ? `Hola ${data.providerName.split(' ')[0]},` : 'Hola,';
+
+  return `
+  <div style="margin:0;padding:0;background:#0b0b0c">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#0b0b0c;padding:24px 12px">
+      <tr><td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="max-width:600px;width:100%">
+          <tr>
+            <td align="center" style="padding:16px 0;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;font-size:14px">
+              ${data.appName}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#fff;border-radius:16px;overflow:hidden">
+                <tr>
+                  <td style="padding:28px 28px 16px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;color:#0f172a">
+                    <div style="font-size:18px;font-weight:700;margin:0 0 8px">Recibimos tu comprobante</div>
+                    <div style="color:#475569;font-size:14px">${greeting}</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:0 28px 28px">
+                    <div style="border:1px solid #e2e8f0;border-radius:14px;padding:18px;color:#0f172a;font-size:14px;line-height:1.55">
+                      <p style="margin:0 0 12px">Registramos tu comprobante por <strong>${amountFormatted}</strong>. Nuestro equipo revisará el pago y te avisará cuando esté aprobado.</p>
+                      ${debtFormatted ? `<p style="margin:0 0 12px;color:#334155">Monto pendiente registrado: <strong>${debtFormatted}</strong>.</p>` : ''}
+                      ${differenceFormatted ? `<p style="margin:0 0 12px;color:#b45309">Diferencia registrada: <strong>${differenceFormatted}</strong>. Si transferiste un monto distinto, lo consideraremos durante la revisión.</p>` : ''}
+                      ${uploadedAt ? `<p style="margin:0;color:#64748b;font-size:12px">Enviado el ${uploadedAt}.</p>` : ''}
+                    </div>
+                    <div style="margin-top:18px;color:#475569;font-size:13px">
+                      <p style="margin:0 0 6px">Si necesitas corregir el comprobante, puedes volver a subirlo desde tu panel.</p>
+                      <p style="margin:0">Gracias por mantener tus comisiones al día.</p>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+    </table>
+  </div>`;
+}
+
+export function generateManualCashReceiptAdminEmailHtml(data: ManualCashReceiptAdminEmailData): string {
+  const amountFormatted = `${data.currency.toUpperCase()} ${Number(data.amount || 0).toLocaleString('es-CL')}`;
+  const debtFormatted = data.debtTotal === undefined || data.debtTotal === null
+    ? null
+    : `${data.currency.toUpperCase()} ${Number(data.debtTotal || 0).toLocaleString('es-CL')}`;
+  const difference = Number(data.difference || 0);
+  const differenceFormatted = Math.abs(difference) > 0.009
+    ? `${data.currency.toUpperCase()} ${Number(difference).toLocaleString('es-CL')}`
+    : null;
+  const uploadedAt = data.uploadDateISO ? new Date(data.uploadDateISO).toLocaleString('es-CL') : null;
+  const receiptLink = data.receiptUrl ? `<a href="${data.receiptUrl}" style="display:inline-block;margin-right:12px;font-weight:600;color:#2563eb;text-decoration:none">Ver comprobante</a>` : '';
+  const panelLink = data.adminPanelUrl ? `<a href="${data.adminPanelUrl}" style="display:inline-block;font-weight:600;color:#2563eb;text-decoration:none">Abrir panel</a>` : '';
+
+  return `
+  <div style="margin:0;padding:0;background:#0b0b0c">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#0b0b0c;padding:24px 12px">
+      <tr><td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="max-width:600px;width:100%">
+          <tr>
+            <td align="center" style="padding:16px 0;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;font-size:14px">
+              ${data.appName}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#fff;border-radius:16px;overflow:hidden">
+                <tr>
+                  <td style="padding:26px 28px 16px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;color:#0f172a">
+                    <div style="font-size:18px;font-weight:700;margin:0 0 6px">Nuevo comprobante manual #${data.paymentId}</div>
+                    <div style="color:#475569;font-size:13px">Proveedor #${data.providerId} · ${data.providerName || data.providerEmail || ''}</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:0 28px 28px">
+                    <div style="border:1px solid #e2e8f0;border-radius:14px;padding:18px;color:#0f172a;font-size:14px;line-height:1.55">
+                      <p style="margin:0 0 10px"><strong>Monto transferido:</strong> ${amountFormatted}</p>
+                      ${debtFormatted ? `<p style="margin:0 0 10px"><strong>Deuda registrada:</strong> ${debtFormatted}</p>` : ''}
+                      ${differenceFormatted ? `<p style="margin:0 0 10px;color:#b91c1c"><strong>Diferencia detectada:</strong> ${differenceFormatted}</p>` : ''}
+                      <p style="margin:0 0 10px"><strong>Referencia:</strong> ${data.reference || '—'}</p>
+                      <p style="margin:0 0 4px"><strong>Email proveedor:</strong> ${data.providerEmail || '—'}</p>
+                      ${uploadedAt ? `<p style="margin:0;color:#64748b;font-size:12px">Enviado el ${uploadedAt}</p>` : ''}
+                    </div>
+                    <div style="margin-top:16px;display:flex;flex-wrap:wrap;gap:12px">${receiptLink}${panelLink}</div>
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>
         </table>
