@@ -314,7 +314,7 @@ function buildRouter(): Router {
       const providerDashboardUrl = publicAppUrl ? `${publicAppUrl}/dash/agenda` : null;
       const currency = process.env.APP_CURRENCY || 'CLP';
       const appointmentNotes = typeof notes === 'string' && notes.trim().length ? notes.trim() : null;
-      const locationLabel =
+      const emailLocationLabel =
         (appointment as any).client_location_label ||
         (appointment as any).client_location ||
         locationForMessage ||
@@ -334,7 +334,7 @@ function buildRouter(): Router {
                 serviceName: (appointment as any).service_name || service?.name || null,
                 appointmentDateISO: appointmentStartISO,
                 appointmentEndISO,
-                locationLabel,
+                locationLabel: emailLocationLabel,
                 price: appointmentPrice,
                 currency,
                 notes: appointmentNotes,
@@ -360,7 +360,7 @@ function buildRouter(): Router {
                 serviceName: (appointment as any).service_name || service?.name || null,
                 appointmentDateISO: appointmentStartISO,
                 appointmentEndISO,
-                locationLabel,
+                locationLabel: emailLocationLabel,
                 price: appointmentPrice,
                 currency,
                 notes: appointmentNotes,
@@ -868,7 +868,10 @@ function buildRouter(): Router {
     try {
       const user = (req as any).user || {};
       const appointmentId = Number(req.params.id);
-      if (!Number.isFinite(appointmentId)) return res.status(400).json({ success: false, error: 'id inválido' });
+      if (!Number.isFinite(appointmentId)) {
+        Logger.warn(MODULE, '[CASH][SELECT] id inválido recibido', { rawId: req.params.id });
+        return res.status(400).json({ success: false, error: 'id inválido' });
+      }
 
       Logger.info(MODULE, '[TRACE][COLLECT] Solicitud registrar cobro cash', {
         appointmentId,
@@ -993,13 +996,25 @@ function buildRouter(): Router {
 
       const pool = DatabaseConnection.getPool();
       const [[appt]]: any = await pool.query('SELECT * FROM appointments WHERE id = ? LIMIT 1', [appointmentId]);
-      if (!appt) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      if (!appt) {
+        Logger.warn(MODULE, '[CASH][SELECT] cita no encontrada', { appointmentId });
+        return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      }
       if (Number(appt.client_id) !== Number(user.id) && Number(appt.provider_id) !== Number(user.id)) {
+        Logger.warn(MODULE, '[CASH][SELECT] usuario no autorizado para la cita', {
+          appointmentId,
+          requesterId: user.id,
+          clientId: appt.client_id,
+          providerId: appt.provider_id
+        });
         return res.status(403).json({ success: false, error: 'No autorizado' });
       }
 
       const amount = Number(appt.price || 0);
-      if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Precio inválido para la cita' });
+      if (!(amount > 0)) {
+        Logger.warn(MODULE, '[CASH][SELECT] precio inválido para la cita', { appointmentId, amount });
+        return res.status(400).json({ success: false, error: 'Precio inválido para la cita' });
+      }
 
       const cashSettings = await loadCashSettings(pool, MODULE);
       if (amount > cashSettings.cashCap) {
@@ -1057,10 +1072,14 @@ function buildRouter(): Router {
       const user = (req as any).user || {};
       const appointmentId = Number(req.params.id);
       const { code } = req.body || {};
-      if (!Number.isFinite(appointmentId)) return res.status(400).json({ success: false, error: 'id inválido' });
+      if (!Number.isFinite(appointmentId)) {
+        Logger.warn(MODULE, '[CASH][VERIFY] id inválido recibido', { rawId: req.params.id });
+        return res.status(400).json({ success: false, error: 'id inválido' });
+      }
 
       const cleanCode = sanitizeCode(String(code ?? ''));
       if (!validateCodeFormat(cleanCode)) {
+        Logger.warn(MODULE, '[CASH][VERIFY] formato de código inválido', { appointmentId, cleanCode });
         return res.status(400).json({ success: false, error: 'Código inválido' });
       }
 
@@ -1072,10 +1091,18 @@ function buildRouter(): Router {
 
       const pool = DatabaseConnection.getPool();
       const [[appt]]: any = await pool.query('SELECT * FROM appointments WHERE id = ? LIMIT 1', [appointmentId]);
-      if (!appt) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      if (!appt) {
+        Logger.warn(MODULE, '[CASH][VERIFY] cita no encontrada', { appointmentId });
+        return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      }
 
       // Solo proveedor puede validar para registrar cobro
       if (Number(appt.provider_id) !== Number(user.id)) {
+        Logger.warn(MODULE, '[CASH][VERIFY] usuario no autorizado para validar', {
+          appointmentId,
+          requesterId: user.id,
+          providerId: appt.provider_id
+        });
         return res.status(403).json({ success: false, error: 'Solo el proveedor puede validar el código' });
       }
 
@@ -1102,7 +1129,10 @@ function buildRouter(): Router {
         'SELECT id FROM payments WHERE appointment_id = ? AND status = "completed" LIMIT 1',
         [appointmentId]
       );
-      if (existing) return res.status(400).json({ success: false, error: 'El pago ya fue registrado' });
+      if (existing) {
+        Logger.warn(MODULE, '[CASH][VERIFY] pago ya registrado anteriormente', { appointmentId, paymentId: existing.id });
+        return res.status(400).json({ success: false, error: 'El pago ya fue registrado' });
+      }
 
       // Calcular impuestos/comisión
       const taxRate = cashSettings.taxRate;
