@@ -1008,6 +1008,23 @@ function buildRouter(): Router {
 
       // Generar/asegurar código de verificación
       let verificationCode = String(appt.verification_code || '').trim();
+      const normalizedExistingCode = sanitizeCode(verificationCode);
+      if (normalizedExistingCode && normalizedExistingCode !== verificationCode) {
+        try {
+          await pool.execute(
+            `UPDATE appointments SET verification_code = ?, updated_at = NOW() WHERE id = ?`,
+            [normalizedExistingCode, appointmentId]
+          );
+          verificationCode = normalizedExistingCode;
+        } catch (err) {
+          Logger.warn(MODULE, '[CASH] No se pudo normalizar verification_code existente', {
+            appointmentId,
+            error: (err as any)?.message
+          });
+        }
+      } else if (normalizedExistingCode) {
+        verificationCode = normalizedExistingCode;
+      }
       if (!verificationCode) {
         verificationCode = generateVerificationCode();
         try {
@@ -1041,12 +1058,16 @@ function buildRouter(): Router {
       const appointmentId = Number(req.params.id);
       const { code } = req.body || {};
       if (!Number.isFinite(appointmentId)) return res.status(400).json({ success: false, error: 'id inválido' });
-      if (!validateCodeFormat(String(code || ''))) return res.status(400).json({ success: false, error: 'Código inválido' });
+
+      const cleanCode = sanitizeCode(String(code ?? ''));
+      if (!validateCodeFormat(cleanCode)) {
+        return res.status(400).json({ success: false, error: 'Código inválido' });
+      }
 
       Logger.info(MODULE, '[TRACE][VERIFY] Solicitud validar código cash', {
         appointmentId,
         providerRequestId: user.id,
-        codeLength: String(code || '').length
+        codeLength: cleanCode.length
       });
 
       const pool = DatabaseConnection.getPool();
@@ -1060,11 +1081,12 @@ function buildRouter(): Router {
 
       // Ventana de validación: desde inicio hasta fin + 90min (configurable posteriormente)
       // Nota: aquí solo aplicamos verificación de código y tope cash
-      const stored = String(appt.verification_code || '').trim();
-      if (!stored || !compareVerificationCodes(String(code), stored)) {
+      const storedRaw = String(appt.verification_code || '');
+      const stored = sanitizeCode(storedRaw);
+      if (!stored || !compareVerificationCodes(cleanCode, stored)) {
         Logger.warn(MODULE, '[CASH][VERIFY_CODE] Código incorrecto', {
           expected: stored ? stored.slice(0, 2) + '**' : null,
-          received: String(code || '').slice(0, 2) + '**'
+          received: cleanCode ? cleanCode.slice(0, 2) + '**' : null
         });
         return res.status(400).json({ success: false, error: 'Código incorrecto' });
       }
@@ -1139,7 +1161,7 @@ function buildRouter(): Router {
       // Marcar cash_verified_at y preparar cierre
       try {
         await pool.execute(
-          `UPDATE appointments SET cash_verified_at = NOW(), payment_method = 'cash', updated_at = NOW() WHERE id = ?`,
+          `UPDATE appointments SET cash_verified_at = NOW(), payment_method = 'cash', verification_code = NULL, updated_at = NOW() WHERE id = ?`,
           [appointmentId]
         );
       } catch {}
@@ -1150,7 +1172,8 @@ function buildRouter(): Router {
              SET status = 'completed',
                  completed_at = COALESCE(completed_at, NOW()),
                  verified_at = NOW(),
-                 verified_by_provider_id = ?
+                 verified_by_provider_id = ?,
+                 verification_code = NULL
            WHERE id = ?`,
           [user.id, appointmentId]
         );

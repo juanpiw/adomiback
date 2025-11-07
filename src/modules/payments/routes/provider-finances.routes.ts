@@ -128,7 +128,8 @@ export function buildProviderFinancesRoutes(): Router {
            COALESCE(SUM(CASE WHEN status = 'overdue' THEN commission_amount ELSE 0 END), 0) AS overdue_due,
            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
            SUM(CASE WHEN status = 'overdue' THEN 1 ELSE 0 END) AS overdue_count,
-           SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) AS paid_count
+           SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) AS paid_count,
+           MIN(CASE WHEN status IN ('pending','overdue') THEN due_date END) AS next_due_date
          FROM provider_commission_debts
          WHERE provider_id = ?`,
         [providerId]
@@ -163,6 +164,7 @@ export function buildProviderFinancesRoutes(): Router {
           pending_count: Number(sum?.pending_count || 0),
           overdue_count: Number(sum?.overdue_count || 0),
           paid_count: Number(sum?.paid_count || 0),
+          next_due_date: sum?.next_due_date || null,
           last_debt: last ? {
             id: last.id,
             commission_amount: Number(last.commission_amount || 0),
