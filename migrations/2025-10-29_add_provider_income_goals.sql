@@ -12,3 +12,4 @@ CREATE TABLE IF NOT EXISTS provider_income_goals (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 
+

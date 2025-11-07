@@ -29,3 +29,4 @@ ALTER TABLE subscription_funnel_events
 COMMIT;
 
 
+

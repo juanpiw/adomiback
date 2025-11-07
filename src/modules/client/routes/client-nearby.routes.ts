@@ -56,14 +56,23 @@ class ClientNearbySearchRoutes {
             pp.main_region,
             pp.main_commune AS location,
             pp.is_online,
-            pl.lat AS lat,
-            pl.lng AS lng,
+            pp.share_real_time_location,
+            pp.current_lat,
+            pp.current_lng,
+            pp.current_location_accuracy,
+            pp.current_location_speed,
+            pp.current_location_heading,
+            pp.current_location_updated_at,
+            pl.lat AS base_lat,
+            pl.lng AS base_lng,
+            pl.commune AS base_commune,
+            pl.region AS base_region,
             COALESCE(AVG(r.rating), 0) AS rating,
             COUNT(DISTINCT r.id) AS review_count,
             COUNT(DISTINCT ps.id) AS services_count,
             MIN(111.045 * DEGREES(ACOS(
-              COS(RADIANS(?)) * COS(RADIANS(pl.lat)) * COS(RADIANS(pl.lng) - RADIANS(?)) +
-              SIN(RADIANS(?)) * SIN(RADIANS(pl.lat))
+              COS(RADIANS(?)) * COS(RADIANS(COALESCE(pp.current_lat, pl.lat))) * COS(RADIANS(COALESCE(pp.current_lng, pl.lng)) - RADIANS(?)) +
+              SIN(RADIANS(?)) * SIN(RADIANS(COALESCE(pp.current_lat, pl.lat)))
             ))) AS distance_km
           FROM users u
           JOIN provider_profiles pp ON pp.provider_id = u.id
@@ -102,7 +111,26 @@ class ClientNearbySearchRoutes {
         }
 
         query += `
-          GROUP BY u.id, u.name, pp.professional_title, pp.bio, pp.profile_photo_url, pp.main_region, pp.main_commune, pp.is_online, pl.lat, pl.lng
+          GROUP BY 
+            u.id, 
+            u.name, 
+            pp.professional_title, 
+            pp.bio, 
+            pp.profile_photo_url, 
+            pp.main_region, 
+            pp.main_commune, 
+            pp.is_online,
+            pp.share_real_time_location,
+            pp.current_lat,
+            pp.current_lng,
+            pp.current_location_accuracy,
+            pp.current_location_speed,
+            pp.current_location_heading,
+            pp.current_location_updated_at,
+            pl.lat, 
+            pl.lng,
+            pl.commune,
+            pl.region
           HAVING distance_km <= ? AND services_count > 0
         `;
         params.push(radiusNum);
@@ -164,20 +192,74 @@ class ClientNearbySearchRoutes {
         const [rows] = await pool.query(query, params);
 
         const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || 'http://localhost:3000';
-        const providers = (rows as any[]).map(row => ({
-          id: row.provider_id,
-          name: row.provider_name,
-          profession: row.profession || 'Profesional',
-          description: row.description || 'Sin descripción disponible',
-          rating: Math.round(Number(row.rating || 0) * 10) / 10,
-          reviews: Number(row.review_count || 0),
-          avatar_url: row.avatar_url ? `${publicBase}${row.avatar_url}` : null,
-          location: row.location || row.main_region,
-          is_online: !!row.is_online,
-          distance_km: Math.round(Number(row.distance_km || 0) * 10) / 10,
-          lat: row.lat !== null && row.lat !== undefined ? Number(row.lat) : null,
-          lng: row.lng !== null && row.lng !== undefined ? Number(row.lng) : null
-        }));
+        const providers = (rows as any[]).map(row => {
+          const parseNullableNumber = (val: any): number | null => {
+            if (val === null || val === undefined) return null;
+            const num = Number(val);
+            return Number.isFinite(num) ? num : null;
+          };
+
+          const shareRealTime = row.share_real_time_location === 1 || row.share_real_time_location === true;
+          const currentLat = parseNullableNumber(row.current_lat);
+          const currentLng = parseNullableNumber(row.current_lng);
+          const currentAccuracy = parseNullableNumber(row.current_location_accuracy);
+          const currentSpeed = parseNullableNumber(row.current_location_speed);
+          const currentHeading = parseNullableNumber(row.current_location_heading);
+          const baseLat = parseNullableNumber(row.base_lat);
+          const baseLng = parseNullableNumber(row.base_lng);
+
+          const lat = shareRealTime && currentLat !== null ? currentLat : baseLat;
+          const lng = shareRealTime && currentLng !== null ? currentLng : baseLng;
+
+          const liveLocation = shareRealTime && currentLat !== null && currentLng !== null ? {
+            lat: currentLat,
+            lng: currentLng,
+            accuracy: currentAccuracy,
+            speed: currentSpeed,
+            heading: currentHeading,
+            updated_at: row.current_location_updated_at
+          } : null;
+
+          const baseCommune = row.base_commune || null;
+          const baseRegion = row.base_region || null;
+
+          const primaryLocation = baseLat !== null && baseLng !== null ? {
+            lat: baseLat,
+            lng: baseLng,
+            commune: baseCommune,
+            region: baseRegion
+          } : null;
+
+          return {
+            id: row.provider_id,
+            name: row.provider_name,
+            profession: row.profession || 'Profesional',
+            description: row.description || 'Sin descripción disponible',
+            rating: Math.round(Number(row.rating || 0) * 10) / 10,
+            reviews: Number(row.review_count || 0),
+            avatar_url: row.avatar_url ? `${publicBase}${row.avatar_url}` : null,
+            location: row.location || row.main_region,
+            is_online: !!row.is_online,
+            distance_km: row.distance_km !== null && row.distance_km !== undefined
+              ? Math.round(Number(row.distance_km) * 10) / 10
+              : null,
+            lat,
+            lng,
+            share_real_time_location: shareRealTime,
+            current_lat: currentLat,
+            current_lng: currentLng,
+            current_location_accuracy: currentAccuracy,
+            current_location_speed: currentSpeed,
+            current_location_heading: currentHeading,
+            current_location_updated_at: row.current_location_updated_at || null,
+            primary_lat: baseLat,
+            primary_lng: baseLng,
+            primary_commune: baseCommune,
+            primary_region: baseRegion,
+            live_location: liveLocation,
+            primary_location: primaryLocation
+          };
+        });
 
         return res.json({
           success: true,

@@ -292,11 +292,24 @@ export class ClientSearchRoutes {
             pp.is_online,
             pp.is_verified,
             pp.verification_status,
+            MAX(pp.available_for_bookings) as available_for_bookings,
+            MAX(pp.share_real_time_location) as share_real_time_location,
+            MAX(pp.current_lat) as current_lat,
+            MAX(pp.current_lng) as current_lng,
+            MAX(pp.current_location_accuracy) as current_location_accuracy,
+            MAX(pp.current_location_speed) as current_location_speed,
+            MAX(pp.current_location_heading) as current_location_heading,
+            MAX(pp.current_location_updated_at) as current_location_updated_at,
+            MAX(primary_loc.lat) as primary_lat,
+            MAX(primary_loc.lng) as primary_lng,
+            MAX(primary_loc.commune) as primary_commune,
+            MAX(primary_loc.region) as primary_region,
             COALESCE(AVG(r.rating), 0) as rating,
             COUNT(DISTINCT r.id) as review_count,
             COUNT(DISTINCT ps.id) as services_count
           FROM provider_profiles pp
           JOIN users u ON pp.provider_id = u.id
+          LEFT JOIN provider_locations primary_loc ON primary_loc.provider_id = pp.provider_id AND primary_loc.is_primary = TRUE
           LEFT JOIN provider_services ps ON pp.provider_id = ps.provider_id AND ps.is_active = true
           LEFT JOIN reviews r ON pp.provider_id = r.provider_id
           WHERE u.role = 'provider' AND u.is_active = true
@@ -430,6 +443,40 @@ export class ClientSearchRoutes {
           const ratingNumber = Number(provider.rating ?? 0);
           const ratingRounded = Math.round(ratingNumber * 10) / 10;
 
+          const parseNullableNumber = (val: any): number | null => {
+            if (val === null || val === undefined) return null;
+            const num = Number(val);
+            return Number.isFinite(num) ? num : null;
+          };
+
+          const shareRealTime = provider.share_real_time_location === 1 || provider.share_real_time_location === true;
+          const currentLat = parseNullableNumber(provider.current_lat);
+          const currentLng = parseNullableNumber(provider.current_lng);
+          const currentAccuracy = parseNullableNumber(provider.current_location_accuracy);
+          const currentSpeed = parseNullableNumber(provider.current_location_speed);
+          const currentHeading = parseNullableNumber(provider.current_location_heading);
+          const primaryLat = parseNullableNumber(provider.primary_lat);
+          const primaryLng = parseNullableNumber(provider.primary_lng);
+          const availableForBookings = provider.available_for_bookings === null || provider.available_for_bookings === undefined
+            ? null
+            : provider.available_for_bookings === true || provider.available_for_bookings === 1;
+
+          const liveLocation = shareRealTime && currentLat !== null && currentLng !== null ? {
+            lat: currentLat,
+            lng: currentLng,
+            accuracy: currentAccuracy,
+            speed: currentSpeed,
+            heading: currentHeading,
+            updated_at: provider.current_location_updated_at
+          } : null;
+
+          const primaryLocation = primaryLat !== null && primaryLng !== null ? {
+            lat: primaryLat,
+            lng: primaryLng,
+            commune: provider.primary_commune || null,
+            region: provider.primary_region || null
+          } : null;
+
           return {
             id: provider.provider_id,
             name: provider.provider_name,
@@ -445,7 +492,20 @@ export class ClientSearchRoutes {
             is_online: !!provider.is_online,
             is_verified: !!provider.is_verified,
             verification_status: provider.verification_status || 'none',
-            available_for_bookings: provider.available_for_bookings,
+            available_for_bookings: availableForBookings,
+            share_real_time_location: shareRealTime,
+            current_lat: currentLat,
+            current_lng: currentLng,
+            current_location_accuracy: currentAccuracy,
+            current_location_speed: currentSpeed,
+            current_location_heading: currentHeading,
+            current_location_updated_at: provider.current_location_updated_at || null,
+            primary_lat: primaryLat,
+            primary_lng: primaryLng,
+            primary_commune: provider.primary_commune || null,
+            primary_region: provider.primary_region || null,
+            live_location: liveLocation,
+            primary_location: primaryLocation,
             services: (servicesRows as any[]).map(service => ({
               id: service.id,
               name: service.name,
@@ -528,11 +588,23 @@ export class ClientSearchRoutes {
             pp.profile_photo_url as provider_avatar_url,
             pp.main_region,
             pp.main_commune as provider_location,
+            MAX(pp.share_real_time_location) as share_real_time_location,
+            MAX(pp.current_lat) as current_lat,
+            MAX(pp.current_lng) as current_lng,
+            MAX(pp.current_location_accuracy) as current_location_accuracy,
+            MAX(pp.current_location_speed) as current_location_speed,
+            MAX(pp.current_location_heading) as current_location_heading,
+            MAX(pp.current_location_updated_at) as current_location_updated_at,
+            MAX(primary_loc.lat) as primary_lat,
+            MAX(primary_loc.lng) as primary_lng,
+            MAX(primary_loc.commune) as primary_commune,
+            MAX(primary_loc.region) as primary_region,
             COALESCE(AVG(r.rating), 0) as provider_rating,
             COUNT(DISTINCT r.id) as provider_review_count
           FROM provider_services ps
           JOIN provider_profiles pp ON ps.provider_id = pp.provider_id
           JOIN users u ON pp.provider_id = u.id
+          LEFT JOIN provider_locations primary_loc ON primary_loc.provider_id = pp.provider_id AND primary_loc.is_primary = TRUE
           LEFT JOIN reviews r ON pp.provider_id = r.provider_id
           WHERE ps.is_active = true AND u.role = 'provider' AND u.is_active = true
         `;
@@ -620,9 +692,42 @@ export class ClientSearchRoutes {
 
         const [rows] = await pool.execute(query, params);
         
+        const publicBaseServices = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
+
         const services = (rows as any[]).map(service => {
           const providerRatingNumber = Number(service.provider_rating ?? 0);
           const providerRatingRounded = Math.round(providerRatingNumber * 10) / 10;
+
+          const parseNullableNumber = (val: any): number | null => {
+            if (val === null || val === undefined) return null;
+            const num = Number(val);
+            return Number.isFinite(num) ? num : null;
+          };
+
+          const shareRealTime = service.share_real_time_location === 1 || service.share_real_time_location === true;
+          const currentLat = parseNullableNumber(service.current_lat);
+          const currentLng = parseNullableNumber(service.current_lng);
+          const currentAccuracy = parseNullableNumber(service.current_location_accuracy);
+          const currentSpeed = parseNullableNumber(service.current_location_speed);
+          const currentHeading = parseNullableNumber(service.current_location_heading);
+          const primaryLat = parseNullableNumber(service.primary_lat);
+          const primaryLng = parseNullableNumber(service.primary_lng);
+
+          const liveLocation = shareRealTime && currentLat !== null && currentLng !== null ? {
+            lat: currentLat,
+            lng: currentLng,
+            accuracy: currentAccuracy,
+            speed: currentSpeed,
+            heading: currentHeading,
+            updated_at: service.current_location_updated_at
+          } : null;
+
+          const primaryLocation = primaryLat !== null && primaryLng !== null ? {
+            lat: primaryLat,
+            lng: primaryLng,
+            commune: service.primary_commune || null,
+            region: service.primary_region || null
+          } : null;
 
           return {
             id: service.id,
@@ -631,16 +736,29 @@ export class ClientSearchRoutes {
             price: service.price,
             duration_minutes: service.duration_minutes,
             category: service.custom_category,
-            image_url: service.service_image_url ? `${process.env.API_BASE_URL || 'http://localhost:3000'}${service.service_image_url}` : null,
+            image_url: service.service_image_url ? `${publicBaseServices}${service.service_image_url}` : null,
             is_featured: service.is_featured,
             provider: {
               id: service.provider_id,
               name: service.provider_name,
               profession: service.provider_profession,
-              avatar_url: service.provider_avatar_url ? `${process.env.API_BASE_URL || 'http://localhost:3000'}${service.provider_avatar_url}` : null,
+              avatar_url: service.provider_avatar_url ? `${publicBaseServices}${service.provider_avatar_url}` : null,
               location: service.provider_location || service.main_region,
               rating: providerRatingRounded,
-              review_count: service.provider_review_count
+              review_count: service.provider_review_count,
+              share_real_time_location: shareRealTime,
+              current_lat: currentLat,
+              current_lng: currentLng,
+              current_location_accuracy: currentAccuracy,
+              current_location_speed: currentSpeed,
+              current_location_heading: currentHeading,
+              current_location_updated_at: service.current_location_updated_at || null,
+              primary_lat: primaryLat,
+              primary_lng: primaryLng,
+              primary_commune: service.primary_commune || null,
+              primary_region: service.primary_region || null,
+              live_location: liveLocation,
+              primary_location: primaryLocation
             }
           };
         });
