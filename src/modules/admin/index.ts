@@ -7,7 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { EmailService } from '../../shared/services/email.service';
 import { PushService } from '../notifications/services/push.service';
-import { getPresignedGetUrl, requireEnv } from '../../shared/utils/s3.util';
+import { getPresignedGetUrl, getPublicUrlForKey, requireEnv } from '../../shared/utils/s3.util';
 
 export function setupAdminModule(app: Express) {
   const router = Router();
@@ -409,11 +409,13 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
       const pool = DatabaseConnection.getPool();
       const [[row]]: any = await pool.query(
         `SELECT 
-           COALESCE(SUM(CASE WHEN status IN ('pending','overdue') THEN commission_amount ELSE 0 END), 0) AS total_due,
+           COALESCE(SUM(CASE WHEN status IN ('pending','overdue','under_review','rejected') THEN commission_amount ELSE 0 END), 0) AS total_due,
            COALESCE(SUM(CASE WHEN status = 'overdue' THEN commission_amount ELSE 0 END), 0) AS overdue_due,
            COUNT(*) AS total_count,
            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
            SUM(CASE WHEN status = 'overdue' THEN 1 ELSE 0 END) AS overdue_count,
+           SUM(CASE WHEN status = 'under_review' THEN 1 ELSE 0 END) AS under_review_count,
+           SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected_count,
            SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) AS paid_count
          FROM provider_commission_debts`
       );
@@ -425,7 +427,9 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
           total_count: Number(row?.total_count || 0),
           pending_count: Number(row?.pending_count || 0),
           overdue_count: Number(row?.overdue_count || 0),
-          paid_count: Number(row?.paid_count || 0)
+          paid_count: Number(row?.paid_count || 0),
+          under_review_count: Number(row?.under_review_count || 0),
+          rejected_count: Number(row?.rejected_count || 0)
         }
       });
     } catch (e: any) {
@@ -444,7 +448,7 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
       const pool = DatabaseConnection.getPool();
       const params: any[] = [];
       const where: string[] = [];
-      if (['pending','overdue','paid','cancelled'].includes(status)) {
+      if (['pending','overdue','under_review','rejected','paid','cancelled'].includes(status)) {
         where.push('d.status = ?');
         params.push(status);
       }
@@ -469,6 +473,13 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
                 d.due_date,
                 d.settlement_reference,
                 d.voucher_url,
+                d.manual_payment_id,
+                mp.status AS manual_payment_status,
+                mp.reference AS manual_payment_reference,
+                mp.receipt_bucket AS manual_payment_bucket,
+                mp.receipt_key AS manual_payment_key,
+                mp.receipt_file_name AS manual_payment_filename,
+                mp.updated_at AS manual_payment_updated_at,
                 uc.email AS client_email,
                 cp.full_name AS client_name
          FROM provider_commission_debts d
@@ -477,6 +488,7 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
          LEFT JOIN client_profiles cp ON cp.client_id = a.client_id
          LEFT JOIN users up ON up.id = d.provider_id
          LEFT JOIN provider_profiles pr ON pr.provider_id = d.provider_id
+         LEFT JOIN provider_cash_payments mp ON mp.id = d.manual_payment_id
          ${whereSql}
          ORDER BY d.due_date ASC, d.id DESC
          LIMIT ? OFFSET ?`,
@@ -487,6 +499,322 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
     } catch (e: any) {
       Logger.error('ADMIN_MODULE', 'Error fetching admin cash commissions', e);
       return res.status(500).json({ success: false, error: 'cash_commissions_error' });
+    }
+  });
+
+  router.get('/cash/manual-payments', adminAuth, async (req, res) => {
+    try {
+      const status = String(req.query.status || '').trim().toLowerCase();
+      const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 200);
+      const offset = Math.max(Number(req.query.offset || 0), 0);
+
+      const pool = DatabaseConnection.getPool();
+      const params: any[] = [];
+      const where: string[] = [];
+      if (['under_review','paid','rejected'].includes(status)) {
+        where.push('mp.status = ?');
+        params.push(status);
+      }
+      const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+      const [rows]: any = await pool.query(
+        `SELECT mp.id,
+                mp.provider_id,
+                up.email AS provider_email,
+                pr.full_name AS provider_name,
+                mp.amount,
+                mp.currency,
+                mp.status,
+                mp.reference,
+                mp.notes,
+                mp.receipt_bucket,
+                mp.receipt_key,
+                mp.receipt_file_name,
+                mp.receipt_uploaded_at,
+                mp.reviewed_by_admin_id,
+                mp.reviewed_at,
+                mp.review_notes,
+                mp.created_at,
+                mp.updated_at,
+                mp.metadata,
+                GROUP_CONCAT(d.id ORDER BY d.id) AS debt_ids,
+                COUNT(d.id) AS debt_count,
+                COALESCE(SUM(d.commission_amount), 0) AS debt_total
+         FROM provider_cash_payments mp
+         LEFT JOIN provider_cash_payment_debts rel ON rel.payment_id = mp.id
+         LEFT JOIN provider_commission_debts d ON d.id = rel.debt_id
+         LEFT JOIN users up ON up.id = mp.provider_id
+         LEFT JOIN provider_profiles pr ON pr.provider_id = mp.provider_id
+         ${whereSql}
+         GROUP BY mp.id
+         ORDER BY mp.created_at DESC
+         LIMIT ? OFFSET ?`,
+        [...params, limit, offset]
+      );
+
+      const formatted = (rows || []).map((row: any) => ({
+        ...row,
+        debt_ids: row.debt_ids ? String(row.debt_ids).split(',').map((id: string) => Number(id)) : [],
+        debt_total: Number(row.debt_total || 0),
+        amount: Number(row.amount || 0),
+        public_receipt_url: row.receipt_key ? getPublicUrlForKey(row.receipt_key) : null
+      }));
+
+      return res.json({ success: true, data: formatted, pagination: { limit, offset, returned: formatted.length } });
+    } catch (error) {
+      Logger.error('ADMIN_MODULE', 'Error listing manual cash payments', error as any);
+      return res.status(500).json({ success: false, error: 'manual_payments_list_error' });
+    }
+  });
+
+  router.get('/cash/manual-payments/:id', adminAuth, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!id) {
+        return res.status(400).json({ success: false, error: 'ID inválido' });
+      }
+      const pool = DatabaseConnection.getPool();
+      const [[payment]]: any = await pool.query(
+        `SELECT mp.*, up.email AS provider_email, pr.full_name AS provider_name
+           FROM provider_cash_payments mp
+           LEFT JOIN users up ON up.id = mp.provider_id
+           LEFT JOIN provider_profiles pr ON pr.provider_id = mp.provider_id
+          WHERE mp.id = ?`,
+        [id]
+      );
+      if (!payment) {
+        return res.status(404).json({ success: false, error: 'Pago manual no encontrado' });
+      }
+
+      const [debts]: any = await pool.query(
+        `SELECT d.id, d.provider_id, d.appointment_id, d.commission_amount, d.currency, d.status, d.due_date,
+                d.settlement_reference, d.voucher_url
+           FROM provider_commission_debts d
+           JOIN provider_cash_payment_debts rel ON rel.debt_id = d.id
+          WHERE rel.payment_id = ?
+          ORDER BY d.due_date ASC, d.id ASC`,
+        [id]
+      );
+
+      let receiptUrl: string | null = null;
+      if (payment.receipt_key) {
+        const bucket = (payment.receipt_bucket || process.env.AWS_S3_BUCKET || '').trim();
+        if (bucket) {
+          try {
+            receiptUrl = await getPresignedGetUrl({ bucket, key: payment.receipt_key, expiresSeconds: 300 });
+          } catch (err) {
+            Logger.warn('ADMIN_MODULE', 'No se pudo generar URL firmada para comprobante manual', {
+              paymentId: id,
+              bucket,
+              key: payment.receipt_key,
+              error: (err as any)?.message || err
+            });
+            receiptUrl = getPublicUrlForKey(payment.receipt_key);
+          }
+        } else {
+          receiptUrl = getPublicUrlForKey(payment.receipt_key);
+        }
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          ...payment,
+          amount: Number(payment.amount || 0),
+          debts,
+          debt_total: debts.reduce((sum: number, row: any) => sum + Number(row.commission_amount || 0), 0),
+          public_receipt_url: receiptUrl
+        }
+      });
+    } catch (error) {
+      Logger.error('ADMIN_MODULE', 'Error obteniendo detalle de pago manual', error as any);
+      return res.status(500).json({ success: false, error: 'manual_payment_detail_error' });
+    }
+  });
+
+  router.post('/cash/manual-payments/:id/approve', adminAuth, async (req: any, res) => {
+    const pool = DatabaseConnection.getPool();
+    const conn = await pool.getConnection();
+    try {
+      const id = Number(req.params.id);
+      if (!id) {
+        conn.release();
+        return res.status(400).json({ success: false, error: 'ID inválido' });
+      }
+      const { reference, notes } = req.body || {};
+      await conn.beginTransaction();
+
+      const [[payment]]: any = await conn.query(
+        `SELECT * FROM provider_cash_payments WHERE id = ? FOR UPDATE`,
+        [id]
+      );
+      if (!payment) {
+        await conn.rollback();
+        conn.release();
+        return res.status(404).json({ success: false, error: 'Pago manual no encontrado' });
+      }
+      if (payment.status !== 'under_review') {
+        await conn.rollback();
+        conn.release();
+        return res.status(400).json({ success: false, error: 'El pago ya fue procesado' });
+      }
+
+      const [debts]: any = await conn.query(
+        `SELECT d.id, d.provider_id, d.appointment_id, d.commission_amount, d.currency
+           FROM provider_commission_debts d
+           JOIN provider_cash_payment_debts rel ON rel.debt_id = d.id
+          WHERE rel.payment_id = ?
+          FOR UPDATE`,
+        [id]
+      );
+      if (!debts.length) {
+        await conn.rollback();
+        conn.release();
+        return res.status(400).json({ success: false, error: 'El pago no tiene deudas asociadas' });
+      }
+
+      const debtIds = debts.map((d: any) => Number(d.id));
+      const receiptUrl = payment.receipt_key ? getPublicUrlForKey(payment.receipt_key) : null;
+      const finalReference = reference ? String(reference).trim() : payment.reference;
+      const reviewNotes = notes ? String(notes).trim() : null;
+
+      const debtPlaceholders = debtIds.map(() => '?').join(',');
+      const updateParams: any[] = [finalReference || null, receiptUrl, ...debtIds];
+      await conn.query(
+        `UPDATE provider_commission_debts
+            SET status = 'paid',
+                settlement_method = 'manual',
+                settlement_reference = ?,
+                voucher_url = COALESCE(?, voucher_url),
+                settled_amount = commission_amount,
+                updated_at = NOW()
+          WHERE id IN (${debtPlaceholders})`,
+        updateParams
+      );
+
+      const settlementsPlaceholders = debts.map(() => '(?, ?, NULL, ?, ?, ?)').join(',');
+      const settlementsParams: any[] = [];
+      debts.forEach((d: any) => {
+        settlementsParams.push(d.id, d.provider_id, d.appointment_id || null, Number(d.commission_amount || 0), 'manual');
+      });
+      await conn.query(
+        `INSERT INTO provider_commission_settlements (debt_id, provider_id, payment_id, appointment_id, settled_amount, method)
+         VALUES ${settlementsPlaceholders}`,
+        settlementsParams
+      );
+
+      await conn.query(
+        `UPDATE provider_cash_payments
+            SET status = 'paid',
+                reference = ?,
+                review_notes = ?,
+                reviewed_by_admin_id = ?,
+                reviewed_at = NOW(),
+                updated_at = NOW()
+          WHERE id = ?`,
+        [finalReference || null, reviewNotes, req.user?.id || null, id]
+      );
+
+      await conn.commit();
+      conn.release();
+
+      Logger.info('ADMIN_MODULE', 'Manual cash payment approved', {
+        paymentId: id,
+        debtIds,
+        adminId: req.user?.id || null,
+        reference: finalReference || null
+      });
+
+      return res.json({ success: true, paymentId: id, debtIds });
+    } catch (error) {
+      try { await conn.rollback(); } catch {}
+      conn.release();
+      Logger.error('ADMIN_MODULE', 'Error approving manual cash payment', error as any);
+      return res.status(500).json({ success: false, error: 'manual_payment_approve_error' });
+    }
+  });
+
+  router.post('/cash/manual-payments/:id/reject', adminAuth, async (req: any, res) => {
+    const pool = DatabaseConnection.getPool();
+    const conn = await pool.getConnection();
+    try {
+      const id = Number(req.params.id);
+      if (!id) {
+        conn.release();
+        return res.status(400).json({ success: false, error: 'ID inválido' });
+      }
+      const { reason, notes } = req.body || {};
+      if (!reason || !String(reason).trim()) {
+        conn.release();
+        return res.status(400).json({ success: false, error: 'Debes indicar un motivo de rechazo.' });
+      }
+
+      await conn.beginTransaction();
+
+      const [[payment]]: any = await conn.query(
+        `SELECT * FROM provider_cash_payments WHERE id = ? FOR UPDATE`,
+        [id]
+      );
+      if (!payment) {
+        await conn.rollback();
+        conn.release();
+        return res.status(404).json({ success: false, error: 'Pago manual no encontrado' });
+      }
+      if (payment.status !== 'under_review') {
+        await conn.rollback();
+        conn.release();
+        return res.status(400).json({ success: false, error: 'El pago ya fue procesado' });
+      }
+
+      const [debts]: any = await conn.query(
+        `SELECT d.id
+           FROM provider_commission_debts d
+           JOIN provider_cash_payment_debts rel ON rel.debt_id = d.id
+          WHERE rel.payment_id = ?
+          FOR UPDATE`,
+        [id]
+      );
+
+      const debtIds = debts.map((d: any) => Number(d.id));
+      if (debtIds.length) {
+        const placeholders = debtIds.map(() => '?').join(',');
+        await conn.query(
+          `UPDATE provider_commission_debts
+              SET status = 'rejected',
+                  updated_at = NOW()
+            WHERE id IN (${placeholders})`,
+          debtIds
+        );
+      }
+
+      await conn.query(
+        `UPDATE provider_cash_payments
+            SET status = 'rejected',
+                review_notes = ?,
+                metadata = JSON_SET(COALESCE(metadata, '{}'), '$.rejection_reason', ?, '$.rejected_at', NOW()),
+                reviewed_by_admin_id = ?,
+                reviewed_at = NOW(),
+                updated_at = NOW()
+          WHERE id = ?`,
+        [notes ? String(notes).trim() : null, String(reason).trim(), req.user?.id || null, id]
+      );
+
+      await conn.commit();
+      conn.release();
+
+      Logger.info('ADMIN_MODULE', 'Manual cash payment rejected', {
+        paymentId: id,
+        debtIds,
+        adminId: req.user?.id || null,
+        reason: String(reason).trim()
+      });
+
+      return res.json({ success: true, paymentId: id, debtIds });
+    } catch (error) {
+      try { await conn.rollback(); } catch {}
+      conn.release();
+      Logger.error('ADMIN_MODULE', 'Error rejecting manual cash payment', error as any);
+      return res.status(500).json({ success: false, error: 'manual_payment_reject_error' });
     }
   });
 
