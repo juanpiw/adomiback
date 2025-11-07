@@ -235,3 +235,4 @@ class ProviderFaqRoutes {
 
 export default new ProviderFaqRoutes().router;
 
+

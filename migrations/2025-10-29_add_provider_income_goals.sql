@@ -11,3 +11,4 @@ CREATE TABLE IF NOT EXISTS provider_income_goals (
   INDEX idx_provider_period (provider_id, period, set_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+
