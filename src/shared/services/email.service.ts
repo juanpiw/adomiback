@@ -20,7 +20,9 @@ import {
   ManualCashReceiptEmailData,
   ManualCashReceiptAdminEmailData,
   generateManualCashReceiptProviderEmailHtml,
-  generateManualCashReceiptAdminEmailHtml
+  generateManualCashReceiptAdminEmailHtml,
+  ManualCashDecisionEmailData,
+  generateManualCashDecisionEmailHtml
 } from './email-templates';
 
 const MODULE = 'EMAIL_SERVICE';
@@ -157,6 +159,23 @@ export class EmailService {
     });
     const html = generateManualCashReceiptAdminEmailHtml(data);
     const subject = `${data.appName} – Nuevo comprobante manual #${data.paymentId}`;
+    return this.sendRaw(to, subject, html);
+  }
+
+  static async sendManualCashDecision(to: string, data: ManualCashDecisionEmailData) {
+    Logger.info(MODULE, 'sendManualCashDecision called', {
+      to,
+      status: data.status,
+      amount: data.amount,
+      currency: data.currency
+    });
+    const html = generateManualCashDecisionEmailHtml(data);
+    const statusSubjectMap: Record<ManualCashDecisionEmailData['status'], string> = {
+      approved: `${data.appName} – Comprobante aprobado`,
+      rejected: `${data.appName} – Debes subir un nuevo comprobante`,
+      resubmission_requested: `${data.appName} – Necesitamos un nuevo comprobante`
+    };
+    const subject = statusSubjectMap[data.status] || `${data.appName} – Actualización comprobante`;
     return this.sendRaw(to, subject, html);
   }
 }

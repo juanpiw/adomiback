@@ -8,6 +8,7 @@ import fs from 'fs';
 import { EmailService } from '../../shared/services/email.service';
 import { PushService } from '../notifications/services/push.service';
 import { getPresignedGetUrl, getPublicUrlForKey, requireEnv } from '../../shared/utils/s3.util';
+import { ManualCashHistoryService } from '../../shared/services/manual-cash-history.service';
 
 export function setupAdminModule(app: Express) {
   const router = Router();
@@ -56,6 +57,189 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
 
   router.get('/health', adminAuth, (req, res) => {
     res.json({ success: true, message: 'admin ok', ts: new Date().toISOString() });
+  });
+
+  router.post('/cash/manual-payments/:id/request-resubmission', adminAuth, async (req: any, res) => {
+    const pool = DatabaseConnection.getPool();
+    const conn = await pool.getConnection();
+    try {
+      const id = Number(req.params.id);
+      if (!id) {
+        conn.release();
+        return res.status(400).json({ success: false, error: 'ID inválido' });
+      }
+      const { reason, notes } = req.body || {};
+      if (!reason || !String(reason).trim()) {
+        conn.release();
+        return res.status(400).json({ success: false, error: 'Debes indicar un motivo de la solicitud.' });
+      }
+
+      await conn.beginTransaction();
+
+      const [[payment]]: any = await conn.query(
+        `SELECT * FROM provider_cash_payments WHERE id = ? FOR UPDATE`,
+        [id]
+      );
+      if (!payment) {
+        await conn.rollback();
+        conn.release();
+        return res.status(404).json({ success: false, error: 'Pago manual no encontrado' });
+      }
+      if (payment.status !== 'under_review') {
+        await conn.rollback();
+        conn.release();
+        return res.status(400).json({ success: false, error: 'El pago ya fue procesado' });
+      }
+
+      const [debts]: any = await conn.query(
+        `SELECT d.id
+           FROM provider_commission_debts d
+           JOIN provider_cash_payment_debts rel ON rel.debt_id = d.id
+          WHERE rel.payment_id = ?
+          FOR UPDATE`,
+        [id]
+      );
+
+      const [[providerInfo]]: any = await conn.query(
+        `SELECT u.email AS email, pr.full_name AS full_name
+           FROM users u
+           LEFT JOIN provider_profiles pr ON pr.provider_id = u.id
+          WHERE u.id = ?
+          LIMIT 1`,
+        [payment.provider_id]
+      );
+
+      const debtIds = debts.map((d: any) => Number(d.id));
+      if (debtIds.length) {
+        await conn.query(
+          `DELETE FROM provider_cash_payment_debts WHERE payment_id = ?`,
+          [id]
+        );
+        const placeholders = debtIds.map(() => '?').join(',');
+        await conn.query(
+          `UPDATE provider_commission_debts
+              SET status = 'pending',
+                  manual_payment_id = NULL,
+                  settlement_method = NULL,
+                  settlement_reference = NULL,
+                  voucher_url = NULL,
+                  updated_at = NOW()
+            WHERE id IN (${placeholders})`,
+          debtIds
+        );
+      }
+
+      await conn.query(
+        `UPDATE provider_cash_payments
+            SET status = 'rejected',
+                review_notes = ?,
+                metadata = JSON_SET(
+                  COALESCE(metadata, '{}'),
+                  '$.rejection_reason', ?,
+                  '$.requested_resubmission', TRUE,
+                  '$.resubmission_requested_at', NOW()
+                ),
+                reviewed_by_admin_id = ?,
+                reviewed_at = NOW(),
+                updated_at = NOW()
+          WHERE id = ?`,
+        [notes ? String(notes).trim() : null, String(reason).trim(), req.user?.id || null, id]
+      );
+
+      await ManualCashHistoryService.record(conn, {
+        paymentId: id,
+        action: 'resubmission_requested',
+        actorType: 'admin',
+        actorId: req.user?.id || null,
+        notes: notes ? String(notes).trim() : null,
+        metadata: {
+          reason: String(reason).trim(),
+          debt_ids: debtIds
+        }
+      });
+
+      await conn.commit();
+      conn.release();
+
+      Logger.info('ADMIN_MODULE', 'Manual cash payment resubmission requested', {
+        paymentId: id,
+        debtIds,
+        adminId: req.user?.id || null,
+        reason: String(reason).trim()
+      });
+
+      const providerEmail = providerInfo?.email ? String(providerInfo.email).trim() : null;
+      const providerName = providerInfo?.full_name || null;
+      const appName = process.env.APP_NAME || 'AdomiApp';
+      const adminPanelUrl =
+        (process.env.CASH_PAYMENT_ADMIN_URL || process.env.ADMIN_PANEL_URL || '').trim() ||
+        'https://adomiapp.com/dash/admin-pagos?panel=cash';
+      const notifyEmail = [
+        process.env.CASH_PAYMENT_NOTIFICATION_EMAIL,
+        process.env.CASH_BANK_NOTIFICATION_EMAIL,
+        process.env.FINANCE_NOTIFICATIONS_EMAIL
+      ]
+        .map((v) => (v || '').trim())
+        .find(Boolean);
+
+      const paymentAmount = Number(payment.amount || 0);
+      const combinedNotes = [String(reason).trim(), notes ? String(notes).trim() : '']
+        .filter(Boolean)
+        .join(' — ');
+
+      if (providerEmail) {
+        EmailService.sendManualCashDecision(providerEmail, {
+          appName,
+          providerName,
+          status: 'resubmission_requested',
+          amount: paymentAmount,
+          currency: payment.currency || 'CLP',
+          notes: combinedNotes || null,
+          receiptUrl: payment.receipt_key ? getPublicUrlForKey(payment.receipt_key) : null,
+          adminPanelUrl,
+          supportEmail: notifyEmail || null,
+          reviewedAtISO: new Date().toISOString()
+        }).catch((err) => {
+          Logger.warn('ADMIN_MODULE', 'No se pudo enviar email de reenvío (proveedor)', {
+            paymentId: id,
+            providerEmail,
+            error: err?.message || err
+          });
+        });
+      }
+
+      if (notifyEmail) {
+        const financeHtml = `
+          <p style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;margin:0 0 12px">
+            Se solicitó un nuevo comprobante para el pago manual #${id} de ${providerName || `ID ${payment.provider_id}`}.
+          </p>
+          <p style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:13px;margin:0">
+            Motivo: ${String(reason).trim()}
+            ${notes ? `<br/>Notas: ${String(notes).trim()}` : ''}
+          </p>
+        `;
+        EmailService.sendRaw(
+          notifyEmail,
+          `${appName} – Pago manual #${id} requiere nuevo comprobante`,
+          financeHtml
+        ).catch((err) => {
+          Logger.warn('ADMIN_MODULE', 'No se pudo enviar email de reenvío (finanzas)', {
+            paymentId: id,
+            notifyEmail,
+            error: err?.message || err
+          });
+        });
+      }
+
+      return res.json({ success: true, paymentId: id, debtIds });
+    } catch (error) {
+      try {
+        await conn.rollback();
+      } catch {}
+      conn.release();
+      Logger.error('ADMIN_MODULE', 'Error solicitando nuevo comprobante manual', error as any);
+      return res.status(500).json({ success: false, error: 'manual_payment_resubmit_error' });
+    }
   });
 
   // Placeholder endpoint to validate protection
@@ -616,14 +800,27 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
         }
       }
 
+      let metadata = payment.metadata;
+      if (metadata && typeof metadata === 'string') {
+        try {
+          metadata = JSON.parse(metadata);
+        } catch {
+          metadata = payment.metadata;
+        }
+      }
+
+      const history = await ManualCashHistoryService.list(id);
+
       return res.json({
         success: true,
         data: {
           ...payment,
+          metadata,
           amount: Number(payment.amount || 0),
           debts,
           debt_total: debts.reduce((sum: number, row: any) => sum + Number(row.commission_amount || 0), 0),
-          public_receipt_url: receiptUrl
+          public_receipt_url: receiptUrl,
+          history
         }
       });
     } catch (error) {
@@ -673,13 +870,28 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
         return res.status(400).json({ success: false, error: 'El pago no tiene deudas asociadas' });
       }
 
+      const [[providerInfo]]: any = await conn.query(
+        `SELECT u.email AS email, pr.full_name AS full_name
+           FROM users u
+           LEFT JOIN provider_profiles pr ON pr.provider_id = u.id
+          WHERE u.id = ?
+          LIMIT 1`,
+        [payment.provider_id]
+      );
+
       const debtIds = debts.map((d: any) => Number(d.id));
-      const receiptUrl = payment.receipt_key ? getPublicUrlForKey(payment.receipt_key) : null;
+      const totalDebt = debts.reduce(
+        (sum: number, d: any) => sum + Number(d.commission_amount || 0),
+        0
+      );
+      const receiptUrlPublic = payment.receipt_key ? getPublicUrlForKey(payment.receipt_key) : null;
       const finalReference = reference ? String(reference).trim() : payment.reference;
       const reviewNotes = notes ? String(notes).trim() : null;
+      const paymentAmount = Number(payment.amount || 0);
+      const difference = Number((paymentAmount - totalDebt).toFixed(2));
 
       const debtPlaceholders = debtIds.map(() => '?').join(',');
-      const updateParams: any[] = [finalReference || null, receiptUrl, ...debtIds];
+      const updateParams: any[] = [finalReference || null, receiptUrlPublic, ...debtIds];
       await conn.query(
         `UPDATE provider_commission_debts
             SET status = 'paid',
@@ -695,7 +907,13 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
       const settlementsPlaceholders = debts.map(() => '(?, ?, NULL, ?, ?, ?)').join(',');
       const settlementsParams: any[] = [];
       debts.forEach((d: any) => {
-        settlementsParams.push(d.id, d.provider_id, d.appointment_id || null, Number(d.commission_amount || 0), 'manual');
+        settlementsParams.push(
+          d.id,
+          d.provider_id,
+          d.appointment_id || null,
+          Number(d.commission_amount || 0),
+          'manual'
+        );
       });
       await conn.query(
         `INSERT INTO provider_commission_settlements (debt_id, provider_id, payment_id, appointment_id, settled_amount, method)
@@ -715,6 +933,18 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
         [finalReference || null, reviewNotes, req.user?.id || null, id]
       );
 
+      await ManualCashHistoryService.record(conn, {
+        paymentId: id,
+        action: 'approved',
+        actorType: 'admin',
+        actorId: req.user?.id || null,
+        notes: reviewNotes || null,
+        metadata: {
+          reference: finalReference || null,
+          debt_ids: debtIds
+        }
+      });
+
       await conn.commit();
       conn.release();
 
@@ -725,9 +955,76 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
         reference: finalReference || null
       });
 
+      const providerEmail = providerInfo?.email ? String(providerInfo.email).trim() : null;
+      const providerName = providerInfo?.full_name || null;
+      const appName = process.env.APP_NAME || 'AdomiApp';
+      const adminPanelUrl =
+        (process.env.CASH_PAYMENT_ADMIN_URL || process.env.ADMIN_PANEL_URL || '').trim() ||
+        'https://adomiapp.com/dash/admin-pagos?panel=cash';
+      const notifyEmail = [
+        process.env.CASH_PAYMENT_NOTIFICATION_EMAIL,
+        process.env.CASH_BANK_NOTIFICATION_EMAIL,
+        process.env.FINANCE_NOTIFICATIONS_EMAIL
+      ]
+        .map((v) => (v || '').trim())
+        .find(Boolean);
+
+      const decisionPayload = {
+        appName,
+        providerName,
+        status: 'approved' as const,
+        amount: paymentAmount,
+        currency: payment.currency || 'CLP',
+        reference: finalReference || null,
+        notes: reviewNotes || null,
+        difference,
+        debtTotal: totalDebt,
+        receiptUrl: receiptUrlPublic,
+        adminPanelUrl,
+        supportEmail: notifyEmail || null,
+        reviewedAtISO: new Date().toISOString()
+      };
+
+      if (providerEmail) {
+        EmailService.sendManualCashDecision(providerEmail, decisionPayload).catch((err) => {
+          Logger.warn('ADMIN_MODULE', 'No se pudo enviar email de aprobación (proveedor)', {
+            paymentId: id,
+            providerEmail,
+            error: err?.message || err
+          });
+        });
+      }
+
+      if (notifyEmail) {
+        const financeHtml = `
+          <p style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;margin:0 0 12px">
+            Se aprobó el pago manual #${id} para ${providerName || `ID ${payment.provider_id}`}.
+          </p>
+          <p style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:13px;margin:0">
+            Monto declarado: <strong>${paymentAmount.toFixed(2)} ${decisionPayload.currency}</strong><br/>
+            Deuda aplicada: <strong>${totalDebt.toFixed(2)} ${decisionPayload.currency}</strong><br/>
+            Diferencia: <strong>${difference.toFixed(2)} ${decisionPayload.currency}</strong>
+          </p>
+          ${reviewNotes ? `<p style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:13px;margin:12px 0 0">Notas: ${reviewNotes}</p>` : ''}
+        `;
+        EmailService.sendRaw(
+          notifyEmail,
+          `${appName} – Pago manual #${id} aprobado`,
+          financeHtml
+        ).catch((err) => {
+          Logger.warn('ADMIN_MODULE', 'No se pudo enviar email de aprobación (finanzas)', {
+            paymentId: id,
+            notifyEmail,
+            error: err?.message || err
+          });
+        });
+      }
+
       return res.json({ success: true, paymentId: id, debtIds });
     } catch (error) {
-      try { await conn.rollback(); } catch {}
+      try {
+        await conn.rollback();
+      } catch {}
       conn.release();
       Logger.error('ADMIN_MODULE', 'Error approving manual cash payment', error as any);
       return res.status(500).json({ success: false, error: 'manual_payment_approve_error' });
@@ -775,6 +1072,15 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
         [id]
       );
 
+      const [[providerInfo]]: any = await conn.query(
+        `SELECT u.email AS email, pr.full_name AS full_name
+           FROM users u
+           LEFT JOIN provider_profiles pr ON pr.provider_id = u.id
+          WHERE u.id = ?
+          LIMIT 1`,
+        [payment.provider_id]
+      );
+
       const debtIds = debts.map((d: any) => Number(d.id));
       if (debtIds.length) {
         const placeholders = debtIds.map(() => '?').join(',');
@@ -799,6 +1105,18 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
         [notes ? String(notes).trim() : null, String(reason).trim(), req.user?.id || null, id]
       );
 
+      await ManualCashHistoryService.record(conn, {
+        paymentId: id,
+        action: 'rejected',
+        actorType: 'admin',
+        actorId: req.user?.id || null,
+        notes: notes ? String(notes).trim() : null,
+        metadata: {
+          reason: String(reason).trim(),
+          debt_ids: debtIds
+        }
+      });
+
       await conn.commit();
       conn.release();
 
@@ -808,6 +1126,69 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
         adminId: req.user?.id || null,
         reason: String(reason).trim()
       });
+
+      const providerEmail = providerInfo?.email ? String(providerInfo.email).trim() : null;
+      const providerName = providerInfo?.full_name || null;
+      const appName = process.env.APP_NAME || 'AdomiApp';
+      const adminPanelUrl =
+        (process.env.CASH_PAYMENT_ADMIN_URL || process.env.ADMIN_PANEL_URL || '').trim() ||
+        'https://adomiapp.com/dash/admin-pagos?panel=cash';
+      const notifyEmail = [
+        process.env.CASH_PAYMENT_NOTIFICATION_EMAIL,
+        process.env.CASH_BANK_NOTIFICATION_EMAIL,
+        process.env.FINANCE_NOTIFICATIONS_EMAIL
+      ]
+        .map((v) => (v || '').trim())
+        .find(Boolean);
+
+      const paymentAmount = Number(payment.amount || 0);
+      const rejectionNotes = [String(reason).trim(), notes ? String(notes).trim() : '']
+        .filter(Boolean)
+        .join(' — ');
+
+      if (providerEmail) {
+        EmailService.sendManualCashDecision(providerEmail, {
+          appName,
+          providerName,
+          status: 'rejected',
+          amount: paymentAmount,
+          currency: payment.currency || 'CLP',
+          notes: rejectionNotes || null,
+          receiptUrl: payment.receipt_key ? getPublicUrlForKey(payment.receipt_key) : null,
+          adminPanelUrl,
+          supportEmail: notifyEmail || null,
+          reviewedAtISO: new Date().toISOString()
+        }).catch((err) => {
+          Logger.warn('ADMIN_MODULE', 'No se pudo enviar email de rechazo (proveedor)', {
+            paymentId: id,
+            providerEmail,
+            error: err?.message || err
+          });
+        });
+      }
+
+      if (notifyEmail) {
+        const financeHtml = `
+          <p style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;margin:0 0 12px">
+            Se rechazó el pago manual #${id} para ${providerName || `ID ${payment.provider_id}`}.
+          </p>
+          <p style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:13px;margin:0">
+            Motivo: ${String(reason).trim()}
+            ${notes ? `<br/>Notas: ${String(notes).trim()}` : ''}
+          </p>
+        `;
+        EmailService.sendRaw(
+          notifyEmail,
+          `${appName} – Pago manual #${id} rechazado`,
+          financeHtml
+        ).catch((err) => {
+          Logger.warn('ADMIN_MODULE', 'No se pudo enviar email de rechazo (finanzas)', {
+            paymentId: id,
+            notifyEmail,
+            error: err?.message || err
+          });
+        });
+      }
 
       return res.json({ success: true, paymentId: id, debtIds });
     } catch (error) {

@@ -120,6 +120,24 @@ export interface ManualCashReceiptAdminEmailData extends ManualCashReceiptEmailD
   receiptUrl?: string | null;
 }
 
+export interface ManualCashDecisionEmailData {
+  appName: string;
+  providerName?: string | null;
+  status: 'approved' | 'rejected' | 'resubmission_requested';
+  amount: number;
+  currency: string;
+  reference?: string | null;
+  notes?: string | null;
+  difference?: number | null;
+  debtTotal?: number | null;
+  receiptUrl?: string | null;
+  adminPanelUrl?: string | null;
+  supportEmail?: string | null;
+  reviewedAtISO?: string | null;
+  brandColorHex?: string;
+  brandLogoUrl?: string;
+}
+
 export function generateClientReceiptEmailHtml(data: ClientReceiptEmailData): string {
   const date = data.paymentDateISO ? new Date(data.paymentDateISO).toLocaleString() : '';
   const amountFormatted = `${data.currency.toUpperCase()} ${data.amount.toFixed(2)}`;
@@ -177,6 +195,129 @@ export function generateClientReceiptEmailHtml(data: ClientReceiptEmailData): st
           </table>
         </td>
       </tr>
+    </table>
+  </div>`;
+}
+
+export function generateManualCashDecisionEmailHtml(data: ManualCashDecisionEmailData): string {
+  const brand = data.brandColorHex || '#f97316';
+  const logo = data.brandLogoUrl
+    ? `<img src="${data.brandLogoUrl}" alt="${data.appName}" style="height:24px;display:block;margin:0 auto 16px" />`
+    : '';
+  const amountFmt = `${data.currency.toUpperCase()} ${Number(data.amount || 0).toFixed(2)}`;
+  const debtFmt =
+    typeof data.debtTotal === 'number'
+      ? `${data.currency.toUpperCase()} ${Number(data.debtTotal || 0).toFixed(2)}`
+      : null;
+  const diffFmt =
+    typeof data.difference === 'number'
+      ? `${data.currency.toUpperCase()} ${Number(data.difference || 0).toFixed(2)}`
+      : null;
+  const reviewedAtLabel = data.reviewedAtISO
+    ? new Date(data.reviewedAtISO).toLocaleString()
+    : '';
+
+  const titleMap = {
+    approved: 'Comprobante aprobado',
+    rejected: 'Comprobante rechazado',
+    resubmission_requested: 'Se requiere nuevo comprobante'
+  } as const;
+
+  const helperTextMap = {
+    approved:
+      'El pago manual fue validado y se aplicará a las comisiones asociadas. Puedes revisar el detalle en el panel de saldos.',
+    rejected:
+      'El comprobante evaluado no cumple los criterios requeridos. Revisa los detalles y carga uno nuevo para continuar con la conciliación.',
+    resubmission_requested:
+      'Se solicitó un nuevo comprobante para validar el pago. Revisa los detalles y sube un archivo actualizado desde el panel.'
+  } as const;
+
+  const adminLink = data.adminPanelUrl
+    ? `<a href="${data.adminPanelUrl}" style="display:inline-block;background:${brand};color:#fff;text-decoration:none;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600;margin-top:12px">Ir al panel</a>`
+    : '';
+
+  const receiptLink = data.receiptUrl
+    ? `<a href="${data.receiptUrl}" style="display:inline-block;margin-top:8px;color:${brand};font-weight:600;text-decoration:none;font-size:12px">Ver comprobante enviado</a>`
+    : '';
+
+  return `
+  <div style="margin:0;padding:0;background:#0b0b0c">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#0b0b0c;padding:24px 12px">
+      <tr><td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="max-width:600px;width:100%">
+          <tr>
+            <td align="center" style="padding:16px 0;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;font-size:14px">
+              ${logo}
+              <div style="opacity:.9">${data.appName}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#fff;border-radius:12px;overflow:hidden">
+                <tr>
+                  <td style="padding:24px 24px 8px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;color:#111">
+                    <div style="font-size:18px;font-weight:600;margin:0 0 8px">${titleMap[data.status]}</div>
+                    ${
+                      data.providerName
+                        ? `<div style="color:#6b7280;font-size:12px;margin-bottom:4px">${data.providerName}</div>`
+                        : ''
+                    }
+                    ${
+                      reviewedAtLabel
+                        ? `<div style="color:#6b7280;font-size:12px">Revisión ${reviewedAtLabel}</div>`
+                        : ''
+                    }
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 24px 24px">
+                    <div style="border:1px solid #e5e7eb;border-radius:10px;padding:16px;font-size:13px;color:#111">
+                      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="font-size:13px;color:#111">
+                        <tr><td style="padding:4px 0">Monto declarado</td><td style="padding:4px 0;text-align:right;font-weight:600">${amountFmt}</td></tr>
+                        ${
+                          debtFmt
+                            ? `<tr><td style="padding:4px 0">Deuda aplicada</td><td style="padding:4px 0;text-align:right">${debtFmt}</td></tr>`
+                            : ''
+                        }
+                        ${
+                          diffFmt
+                            ? `<tr><td style="padding:4px 0">Diferencia</td><td style="padding:4px 0;text-align:right">${diffFmt}</td></tr>`
+                            : ''
+                        }
+                        ${
+                          data.reference
+                            ? `<tr><td style="padding:4px 0">Referencia</td><td style="padding:4px 0;text-align:right">${data.reference}</td></tr>`
+                            : ''
+                        }
+                      </table>
+                      <p style="margin:12px 0 0;color:#374151;font-size:13px;line-height:1.45">
+                        ${helperTextMap[data.status]}
+                      </p>
+                      ${
+                        data.notes
+                          ? `<div style="margin-top:12px;padding:12px;border-radius:8px;background:rgba(249, 115, 22, 0.08);color:#92400e;font-size:13px">${data.notes}</div>`
+                          : ''
+                      }
+                      ${receiptLink}
+                      ${adminLink}
+                    </div>
+                    ${
+                      data.supportEmail
+                        ? `<p style="margin:16px 0 0;color:#6b7280;font-size:12px">Si tienes dudas, escríbenos a <a href="mailto:${data.supportEmail}" style="color:${brand};text-decoration:none">${data.supportEmail}</a>.</p>`
+                        : ''
+                    }
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:16px 0;color:#a3a3a3;font-size:12px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif">
+              ${data.appName}
+            </td>
+          </tr>
+        </table>
+      </td></tr>
     </table>
   </div>`;
 }

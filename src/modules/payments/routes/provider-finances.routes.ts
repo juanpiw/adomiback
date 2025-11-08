@@ -6,6 +6,7 @@ import { getPresignedPutUrl, getPublicUrlForKey, requireEnv } from '../../../sha
 import { v4 as uuidv4 } from 'uuid';
 import mime from 'mime-types';
 import { EmailService } from '../../../shared/services/email.service';
+import { ManualCashHistoryService } from '../../../shared/services/manual-cash-history.service';
 
 const MODULE = 'PROVIDER_FINANCES';
 
@@ -432,6 +433,19 @@ export function buildProviderFinancesRoutes(): Router {
           updateParams
         );
       }
+
+      await ManualCashHistoryService.record(conn, {
+        paymentId,
+        action: 'submitted',
+        actorType: 'provider',
+        actorId: providerId,
+        notes: notes ? String(notes).trim() : null,
+        metadata: {
+          amount: amountNumber,
+          total_due: totalDueRounded,
+          currency: currencyCode
+        }
+      });
 
       await conn.commit();
       conn.release();
