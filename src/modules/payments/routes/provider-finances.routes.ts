@@ -434,6 +434,9 @@ export function buildProviderFinancesRoutes(): Router {
         );
       }
 
+      const totalDueRounded = Number(totalDue.toFixed(2));
+      const difference = Number((amountNumber - totalDue).toFixed(2));
+
       await ManualCashHistoryService.record(conn, {
         paymentId,
         action: 'submitted',
@@ -449,9 +452,6 @@ export function buildProviderFinancesRoutes(): Router {
 
       await conn.commit();
       conn.release();
-
-      const difference = Number((amountNumber - totalDue).toFixed(2));
-      const totalDueRounded = Number(totalDue.toFixed(2));
 
       Logger.info(MODULE, 'Manual cash payment submitted', {
         providerId,
