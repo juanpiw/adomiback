@@ -812,7 +812,29 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
         baseUrl
       });
 
-      const payload = {
+      const planParentCommerceCode = (process.env.TBK_PLAN_COMMERCE_CODE || process.env.TBK_API_KEY_ID || '').trim();
+      const planChildCommerceCode = (process.env.TBK_PLAN_CHILD_COMMERCE_CODE || process.env.TBK_PLATFORM_CHILD_CODE || '').trim();
+      const isMallIntegration = !!planParentCommerceCode && !!planChildCommerceCode && planParentCommerceCode !== planChildCommerceCode;
+
+      if (isMallIntegration && !planChildCommerceCode) {
+        Logger.error(MODULE, 'TBK plan init abortado: falta código de comercio hijo para mall');
+        return res.status(500).json({ ok: false, error: 'tbk_plan_child_missing' });
+      }
+
+      const detailBuyOrder = `${buyOrder}-P`;
+
+      const payload = isMallIntegration ? {
+        buy_order: buyOrder,
+        session_id: sessionId,
+        return_url: returnUrl,
+        details: [
+          {
+            amount,
+            commerce_code: planChildCommerceCode,
+            buy_order: detailBuyOrder
+          }
+        ]
+      } : {
         buy_order: buyOrder,
         session_id: sessionId,
         amount,
@@ -838,7 +860,10 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
         billing_period: planRow.billing_period,
         duration_months: planRow.duration_months,
         initiated_by: userRow.email || null,
-        currency
+        currency,
+        commerce_parent: planParentCommerceCode || null,
+        commerce_child: isMallIntegration ? planChildCommerceCode : null,
+        is_mall: isMallIntegration
       };
 
       const [insertResult]: any = await pool.execute(
