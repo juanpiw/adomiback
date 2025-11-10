@@ -6,6 +6,7 @@
 import { Express, Router, Request, Response } from 'express';
 import DatabaseConnection from '../../shared/database/connection';
 import Stripe from 'stripe';
+import axios from 'axios';
 import crypto from 'crypto';
 import { JWTUtil } from '../../shared/utils/jwt.util';
 import { setupStripeWebhooks } from './webhooks';
@@ -183,6 +184,74 @@ function buildFounderEmailHtml(params: { name?: string | null; code: string; exp
     </table>
   </div>
   `;
+}
+
+function normalizeBaseUrl(value?: string | null): string {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return '';
+  return trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed;
+}
+
+function requireEnvAny(keys: string[]): string {
+  for (const key of keys) {
+    const value = (process.env[key] || '').trim();
+    if (value) return value;
+  }
+  throw new Error(`Missing environment variable: ${keys.join(' or ')}`);
+}
+
+function getPlanTbkBase(): string {
+  const explicit = normalizeBaseUrl(process.env.TBK_PLANS_BASE_URL);
+  if (explicit) return explicit;
+  const fallback = normalizeBaseUrl(process.env.TBK_BASE_URL);
+  if (fallback) return fallback;
+  throw new Error('TBK_PLANS_BASE_URL or TBK_BASE_URL must be configured');
+}
+
+function getPlanTbkHeaders() {
+  return {
+    'Tbk-Api-Key-Id': requireEnvAny(['TBK_PLAN_API_KEY_ID', 'TBK_API_KEY_ID']),
+    'Tbk-Api-Key-Secret': requireEnvAny(['TBK_PLAN_API_KEY_SECRET', 'TBK_API_KEY_SECRET']),
+    'Content-Type': 'application/json'
+  } as Record<string, string>;
+}
+
+function getPlanReturnUrl(): string {
+  const explicit = (process.env.TBK_PLANS_RETURN_URL || '').trim();
+  if (explicit) return explicit;
+  const generic = (process.env.TBK_RETURN_URL || '').trim();
+  if (generic) return generic;
+  const base = normalizeBaseUrl(process.env.FRONTEND_BASE_URL || process.env.PUBLIC_BASE_URL || 'https://adomiapp.com');
+  return `${base}/tbk/plan-return`;
+}
+
+function generatePlanBuyOrder(providerId: number, planId: number): string {
+  const timestamp = Date.now().toString(36).toUpperCase();
+  const random = crypto.randomBytes(4).toString('hex').toUpperCase();
+  const base = `PL${planId.toString(36).toUpperCase()}${providerId.toString(36).toUpperCase()}${timestamp}${random}`;
+  return base.slice(0, 26);
+}
+
+function generatePlanSessionId(providerId: number): string {
+  const random = crypto.randomBytes(3).toString('hex').toUpperCase();
+  return `PLAN-${providerId}-${random}-${Date.now()}`.slice(0, 40);
+}
+
+function computePlanPeriodMonths(plan: any): number {
+  if (Number(plan?.duration_months) > 0) {
+    return Math.max(1, Number(plan.duration_months));
+  }
+  const raw = String(plan?.billing_period || plan?.interval || '').toLowerCase();
+  if (['year', 'yearly', 'anual', 'annual'].includes(raw)) return 12;
+  if (['semester', 'semiannual', 'semestre'].includes(raw)) return 6;
+  if (['quarter', 'quarterly', 'trimestral'].includes(raw)) return 3;
+  return 1;
+}
+
+function addMonthsSafe(date: Date, months: number): Date {
+  const result = new Date(date);
+  result.setMonth(result.getMonth() + months);
+  return result;
 }
 
 
@@ -677,6 +746,390 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
     } catch (error: any) {
       console.error('[PLANS][GET][ERROR]', error);
       res.status(500).json({ ok: false, error: 'Error al obtener planes' });
+    }
+  });
+
+  router.post('/plans/tbk/init', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const authUser = (req as any)?.user;
+      if (!authUser?.id) {
+        return res.status(401).json({ ok: false, error: 'auth_required' });
+      }
+
+      const rawPlanId = (req.body || {}).planId;
+      const planId = Number(rawPlanId);
+      if (!Number.isFinite(planId) || planId <= 0) {
+        return res.status(400).json({ ok: false, error: 'plan_invalid' });
+      }
+
+      const pool = DatabaseConnection.getPool();
+      const [[userRow]]: any = await pool.query(
+        'SELECT id, role, pending_role, email FROM users WHERE id = ? LIMIT 1',
+        [authUser.id]
+      );
+      if (!userRow) {
+        return res.status(404).json({ ok: false, error: 'user_not_found' });
+      }
+
+      const role = String(userRow.role || '').toLowerCase();
+      const pendingRole = String(userRow.pending_role || '').toLowerCase();
+      if (role !== 'provider' && pendingRole !== 'provider') {
+        return res.status(403).json({ ok: false, error: 'not_provider' });
+      }
+
+      const [[planRow]]: any = await pool.query(
+        `SELECT id, name, price, currency, billing_period, plan_type, duration_months
+           FROM plans
+          WHERE id = ? AND is_active = TRUE
+          LIMIT 1`,
+        [planId]
+      );
+      if (!planRow) {
+        return res.status(404).json({ ok: false, error: 'plan_not_found' });
+      }
+
+      const planPrice = Number(planRow.price || 0);
+      if (!(planPrice > 0)) {
+        return res.status(400).json({ ok: false, error: 'plan_amount_invalid' });
+      }
+
+      const currency = String(planRow.currency || 'CLP').toUpperCase();
+      const amount = Math.round(planPrice);
+      const buyOrder = generatePlanBuyOrder(userRow.id, planRow.id);
+      const sessionId = generatePlanSessionId(userRow.id);
+      const returnUrl = getPlanReturnUrl();
+      const baseUrl = getPlanTbkBase();
+      const headers = getPlanTbkHeaders();
+
+      Logger.info(MODULE, 'TBK plan init', {
+        providerId: userRow.id,
+        planId,
+        amount,
+        currency,
+        buyOrder,
+        sessionId,
+        returnUrl,
+        baseUrl
+      });
+
+      const payload = {
+        buy_order: buyOrder,
+        session_id: sessionId,
+        amount,
+        return_url: returnUrl
+      };
+
+      const { data } = await axios.post(
+        `${baseUrl}/rswebpaytransaction/api/webpay/v1.2/transactions`,
+        payload,
+        { headers }
+      );
+
+      const token = (data as any)?.token;
+      const url = (data as any)?.url;
+
+      if (!token || !url) {
+        Logger.error(MODULE, 'TBK plan init invalid response', { data });
+        return res.status(502).json({ ok: false, error: 'tbk_init_invalid_response' });
+      }
+
+      const metadata = {
+        plan_name: planRow.name,
+        billing_period: planRow.billing_period,
+        duration_months: planRow.duration_months,
+        initiated_by: userRow.email || null,
+        currency
+      };
+
+      const [insertResult]: any = await pool.execute(
+        `INSERT INTO provider_plan_payments (
+            provider_id,
+            plan_id,
+            gateway,
+            status,
+            amount,
+            currency,
+            tbk_token,
+            tbk_buy_order,
+            tbk_session_id,
+            redirect_url,
+            return_url,
+            metadata
+          )
+          VALUES (?, ?, 'tbk', 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userRow.id,
+          planRow.id,
+          amount,
+          currency,
+          token,
+          buyOrder,
+          sessionId,
+          url,
+          returnUrl,
+          JSON.stringify(metadata)
+        ]
+      );
+
+      const paymentId = insertResult?.insertId || null;
+
+      return res.status(201).json({
+        ok: true,
+        token,
+        url,
+        paymentId,
+        buy_order: buyOrder
+      });
+    } catch (error: any) {
+      const status = error?.response?.status;
+      const details = error?.response?.data || error?.message || 'error';
+      Logger.error(MODULE, 'TBK plan init error', { message: error?.message, status, details });
+      return res.status(status && status >= 400 ? status : 500).json({
+        ok: false,
+        error: 'tbk_init_failed',
+        details
+      });
+    }
+  });
+
+  router.post('/plans/tbk/commit', async (req: Request, res: Response) => {
+    const token = String(
+      (req.body as any)?.token_ws ||
+      (req.query as any)?.token_ws ||
+      (req.body as any)?.token ||
+      (req.query as any)?.token ||
+      ''
+    ).trim();
+
+    if (!token) {
+      return res.status(400).json({ ok: false, error: 'token_ws_required' });
+    }
+
+    let conn: any;
+    try {
+      const baseUrl = getPlanTbkBase();
+      const headers = getPlanTbkHeaders();
+      Logger.info(MODULE, 'TBK plan commit', { token, baseUrl });
+
+      const { data } = await axios.put(
+        `${baseUrl}/rswebpaytransaction/api/webpay/v1.2/transactions/${token}`,
+        {},
+        { headers }
+      );
+
+      const pool = DatabaseConnection.getPool();
+      conn = await pool.getConnection();
+      try {
+        await conn.beginTransaction();
+
+        const [rows]: any = await conn.query(
+          'SELECT * FROM provider_plan_payments WHERE tbk_token = ? LIMIT 1 FOR UPDATE',
+          [token]
+        );
+        if (!Array.isArray(rows) || rows.length === 0) {
+          await conn.rollback();
+          conn.release();
+          return res.status(404).json({ ok: false, error: 'payment_not_found' });
+        }
+
+        const payment = rows[0];
+        const alreadyPaid = String(payment.status || '').toLowerCase() === 'paid';
+
+        const detailSource: any = Array.isArray((data as any)?.details) && (data as any).details.length
+          ? (data as any).details[0]
+          : data;
+
+        const tbkStatus = String(detailSource?.status || data?.status || '').toUpperCase();
+        const tbkResponseCode = Number(detailSource?.response_code ?? (data as any)?.response_code ?? -1);
+        const tbkAuthorization = detailSource?.authorization_code || (data as any)?.authorization_code || null;
+        const tbkPaymentType = detailSource?.payment_type_code || (data as any)?.payment_type_code || null;
+        const tbkInstallments = Number(detailSource?.installments_number ?? (data as any)?.installments_number ?? null);
+
+        const isAuthorized = tbkStatus === 'AUTHORIZED' && tbkResponseCode === 0;
+        const finalStatus = isAuthorized ? 'paid' : (alreadyPaid ? 'paid' : 'failed');
+
+        await conn.execute(
+          `UPDATE provider_plan_payments
+              SET status = ?,
+                  tbk_authorization_code = ?,
+                  tbk_response_code = ?,
+                  tbk_installments_number = ?,
+                  tbk_payment_type_code = ?,
+                  tbk_details = ?,
+                  error_message = ?,
+                  paid_at = CASE WHEN ? = 'paid' THEN NOW() ELSE paid_at END,
+                  updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?`,
+          [
+            finalStatus,
+            tbkAuthorization,
+            Number.isFinite(tbkResponseCode) ? tbkResponseCode : null,
+            Number.isFinite(tbkInstallments) ? tbkInstallments : null,
+            tbkPaymentType,
+            JSON.stringify(data),
+            isAuthorized || alreadyPaid ? null : (detailSource?.status || data?.status || 'authorization_failed'),
+            finalStatus,
+            payment.id
+          ]
+        );
+
+        let subscriptionPayload: any = null;
+
+        if (isAuthorized && !alreadyPaid) {
+          const [[provider]]: any = await conn.query(
+            'SELECT id, role, pending_role FROM users WHERE id = ? LIMIT 1 FOR UPDATE',
+            [payment.provider_id]
+          );
+          if (!provider) {
+            await conn.rollback();
+            conn.release();
+            return res.status(404).json({ ok: false, error: 'provider_not_found' });
+          }
+
+          const [[planRow]]: any = await conn.query(
+            'SELECT id, name, billing_period, duration_months FROM plans WHERE id = ? LIMIT 1 FOR UPDATE',
+            [payment.plan_id]
+          );
+          if (!planRow) {
+            await conn.rollback();
+            conn.release();
+            return res.status(404).json({ ok: false, error: 'plan_not_found' });
+          }
+
+          const months = computePlanPeriodMonths(planRow);
+          const now = new Date();
+          const periodEnd = addMonthsSafe(now, months);
+
+          const metadata = {
+            source: 'tbk',
+            gateway: 'tbk',
+            payment_id: payment.id,
+            buy_order: payment.tbk_buy_order,
+            token_ws: token,
+            authorization_code: tbkAuthorization,
+            payment_type_code: tbkPaymentType,
+            installments_number: Number.isFinite(tbkInstallments) ? tbkInstallments : null,
+            response_code: Number.isFinite(tbkResponseCode) ? tbkResponseCode : null,
+            amount: payment.amount,
+            currency: payment.currency
+          };
+
+          await conn.execute(
+            `UPDATE subscriptions
+                SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+             WHERE user_id = ? AND status IN ('active','warning','past_due','pending')`,
+            [payment.provider_id]
+          );
+
+          const [insertResult]: any = await conn.execute(
+            `INSERT INTO subscriptions (
+                user_id,
+                plan_id,
+                stripe_subscription_id,
+                status,
+                current_period_start,
+                current_period_end,
+                cancel_at_period_end,
+                plan_origin,
+                metadata
+              )
+              VALUES (?, ?, NULL, 'active', ?, ?, FALSE, 'tbk', ?)`,
+            [
+              payment.provider_id,
+              payment.plan_id,
+              toMySqlDatetime(now),
+              toMySqlDatetime(periodEnd),
+              JSON.stringify(metadata)
+            ]
+          );
+
+          const subscriptionId = insertResult?.insertId || null;
+
+          if (subscriptionId) {
+            await conn.execute(
+              `INSERT INTO provider_subscription_events (subscription_id, event_type, new_status, metadata)
+               VALUES (?, 'created', 'active', JSON_OBJECT('gateway','tbk','payment_id', ?, 'buy_order', ?, 'amount', ?, 'currency', ?))`,
+              [subscriptionId, payment.id, payment.tbk_buy_order, payment.amount, payment.currency]
+            );
+          }
+
+          const shouldSwitch = String(provider.pending_role || '').toLowerCase() === 'provider' ? 1 : 0;
+
+          await conn.execute(
+            `UPDATE users
+                SET active_plan_id = ?,
+                    role = CASE WHEN ? = 1 THEN 'provider' ELSE role END,
+                    pending_role = CASE WHEN ? = 1 THEN NULL ELSE pending_role END,
+                    pending_plan_id = NULL,
+                    pending_started_at = NULL,
+                    account_switch_in_progress = 0,
+                    account_switched_at = CASE WHEN ? = 1 THEN NOW() ELSE account_switched_at END,
+                    account_switch_source = CASE WHEN ? = 1 THEN COALESCE(account_switch_source, 'tbk') ELSE account_switch_source END,
+                    updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+            [payment.plan_id, shouldSwitch, shouldSwitch, shouldSwitch, shouldSwitch, payment.provider_id]
+          );
+
+          subscriptionPayload = {
+            id: subscriptionId,
+            provider_id: payment.provider_id,
+            plan_id: payment.plan_id,
+            status: 'active',
+            current_period_start: toMySqlDatetime(now),
+            current_period_end: toMySqlDatetime(periodEnd)
+          };
+        }
+
+        await conn.commit();
+        conn.release();
+        conn = null;
+
+        if (isAuthorized && !alreadyPaid) {
+          try {
+            await logFunnelEvent(pool, {
+              event: 'converted_to_paid',
+              providerId: Number(payment.provider_id),
+              metadata: {
+                plan_id: Number(payment.plan_id),
+                gateway: 'tbk',
+                payment_id: Number(payment.id),
+                buy_order: payment.tbk_buy_order
+              }
+            });
+          } catch (logErr: any) {
+            Logger.warn(MODULE, 'Unable to log TBK converted_to_paid', { error: logErr?.message });
+          }
+        }
+
+        return res.json({
+          ok: isAuthorized || alreadyPaid,
+          status: finalStatus,
+          paymentId: payment.id,
+          subscription: subscriptionPayload,
+          commit: data
+        });
+      } catch (dbError: any) {
+        if (conn) {
+          try { await conn.rollback(); } catch {}
+          try { conn.release(); } catch {}
+          conn = null;
+        }
+        Logger.error(MODULE, 'TBK plan commit DB error', { error: dbError?.message });
+        return res.status(500).json({ ok: false, error: 'tbk_commit_failed', details: dbError?.message });
+      }
+    } catch (error: any) {
+      if (conn) {
+        try { conn.release(); } catch {}
+        conn = null;
+      }
+      const status = error?.response?.status;
+      const details = error?.response?.data || error?.message || 'error';
+      Logger.error(MODULE, 'TBK plan commit error', { message: error?.message, status, details });
+      return res.status(status && status >= 400 ? status : 500).json({
+        ok: false,
+        error: 'tbk_commit_failed',
+        details
+      });
     }
   });
 
