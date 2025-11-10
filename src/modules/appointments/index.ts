@@ -616,12 +616,10 @@ function buildRouter(): Router {
         [provider_id, dayOfWeek]
       );
       
-      let blocks = (weekly as any[]).length > 0 
-        ? (weekly as any[]).map((w: any) => ({ 
-            start: String(w.start_time).slice(0, 5), 
-            end: String(w.end_time).slice(0, 5) 
-          }))
-        : [{ start: '09:00', end: '18:00' }]; // Default si no hay configuración
+      let blocks = (weekly as any[]).map((w: any) => ({ 
+        start: String(w.start_time).slice(0, 5), 
+        end: String(w.end_time).slice(0, 5) 
+      }));
       
       console.log('🟢 [TIME_SLOTS] Bloques semanales:', blocks);
       
