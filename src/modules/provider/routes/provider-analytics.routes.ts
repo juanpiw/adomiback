@@ -204,21 +204,55 @@ router.get('/providers/:id/analytics/services-top', authenticateToken, async (re
     const limit = Math.min(Number(req.query.limit || 5), 10);
     const pool = DatabaseConnection.getPool();
 
-    const [rows]: any = await pool.query(
-      `SELECT ps.id, ps.name,
-              COUNT(*) AS bookings,
-              COALESCE(SUM(pay.provider_amount), 0) AS income
+    let rows: any[] = [];
+    try {
+      const [primary]: any = await pool.query(
+        `SELECT ps.id, ps.name,
+                COUNT(*) AS bookings,
+                COALESCE(SUM(pay.provider_amount), 0) AS income
+           FROM appointments a
+           JOIN provider_services ps ON ps.id = a.service_id
+           LEFT JOIN payments pay ON pay.appointment_id = a.id AND pay.status = 'completed'
+          WHERE a.provider_id = ?
+            AND a.status = 'completed'
+            AND a.appointment_date BETWEEN ? AND ?
+          GROUP BY ps.id, ps.name
+          ORDER BY bookings DESC, income DESC
+          LIMIT ?`,
+        [providerId, from, to, limit]
+      );
+      rows = primary;
+    } catch (primaryError: any) {
+      Logger.warn(MODULE, 'Fallo consulta de servicios con provider_services, usando fallback', {
+        providerId,
+        error: primaryError?.message || primaryError
+      });
+
+      const [fallback]: any = await pool.query(
+        `SELECT 
+            COALESCE(a.service_id, 0) AS service_id,
+            COUNT(*) AS bookings,
+            COALESCE(SUM(pay.provider_amount), 0) AS income
          FROM appointments a
-         JOIN provider_services ps ON ps.id = a.service_id
          LEFT JOIN payments pay ON pay.appointment_id = a.id AND pay.status = 'completed'
         WHERE a.provider_id = ?
           AND a.status = 'completed'
           AND a.appointment_date BETWEEN ? AND ?
-        GROUP BY ps.id, ps.name
+        GROUP BY COALESCE(a.service_id, 0)
         ORDER BY bookings DESC, income DESC
         LIMIT ?`,
-      [providerId, from, to, limit]
-    );
+        [providerId, from, to, limit]
+      );
+
+      rows = (fallback as any[]).map(row => ({
+        id: row.service_id,
+        name: row.service_id ? `Servicio #${row.service_id}` : 'Servicio sin identificar',
+        bookings: Number(row.bookings || 0),
+        income: Number(row.income || 0)
+      }));
+
+      return res.json({ success: true, period: { from: toISO(from), to: toISO(to) }, services: rows });
+    }
 
     const services = rows.map((row: any) => ({
       serviceId: row.id,
