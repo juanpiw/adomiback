@@ -414,7 +414,30 @@ export class ClientSearchRoutes {
         console.log('[CLIENT_SEARCH] Número de ? en query:', (query.match(/\?/g) || []).length);
         console.log('[CLIENT_SEARCH] Filtros aplicados - search:', search, 'location:', location, 'category:', category);
 
-        const [rows] = await pool.execute(query, params);
+        let providerRows: any[] = [];
+        try {
+          const [result] = await pool.execute(query, params);
+          providerRows = result as any[];
+        } catch (error: any) {
+          if (error?.code === 'ER_BAD_FIELD_ERROR' && error?.message?.includes('available_for_bookings')) {
+            Logger.warn(MODULE, 'provider_profiles.available_for_bookings no existe; usando fallback', {
+              message: error?.message
+            });
+
+            const fallbackQuery = query.replace(
+              'MAX(pp.available_for_bookings) as available_for_bookings,\n            ',
+              'TRUE AS available_for_bookings,\n            '
+            );
+
+            const [fallbackResult] = await pool.execute(fallbackQuery, params);
+            providerRows = (fallbackResult as any[]).map(row => ({
+              ...row,
+              available_for_bookings: true
+            }));
+          } else {
+            throw error;
+          }
+        }
         
         // Obtener servicios para cada profesional
         // Base pública para construir URLs absolutas de imágenes
@@ -422,7 +445,7 @@ export class ClientSearchRoutes {
         const publicBase = process.env.PUBLIC_BASE_URL 
           || process.env.API_BASE_URL 
           || `${req.protocol}://${req.get('host')}`;
-        const providers = await Promise.all((rows as any[]).map(async (provider) => {
+        const providers = await Promise.all(providerRows.map(async (provider) => {
           const [servicesRows] = await pool.execute(
             `SELECT 
               ps.id,
