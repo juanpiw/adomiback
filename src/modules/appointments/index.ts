@@ -145,6 +145,85 @@ function buildRouter(): Router {
         return res.status(400).json({ success: false, error: 'Servicio inválido para el proveedor' });
       }
       const service = (sv as any[])[0];
+      const serviceDuration = Number(service.duration_minutes || 0);
+      const normalizedStart = String(start_time).slice(0, 5);
+      const normalizedEnd = serviceDuration > 0 ? addMinutes(normalizedStart, serviceDuration) : String(end_time).slice(0, 5);
+
+      // Validar disponibilidad considerando horarios semanales y excepciones
+      const dayOfWeek = getDayOfWeekFromDate(date);
+      const [weekly] = await pool.query(
+        'SELECT start_time, end_time FROM provider_availability WHERE provider_id = ? AND day_of_week = ? AND is_active = TRUE',
+        [provider_id, dayOfWeek]
+      );
+
+      let allowedBlocks = (weekly as any[]).map((w: any) => ({
+        start: String(w.start_time).slice(0, 5),
+        end: String(w.end_time).slice(0, 5)
+      }));
+
+      const [exceptions] = await pool.query(
+        'SELECT is_available, start_time, end_time FROM availability_exceptions WHERE provider_id = ? AND exception_date = ?',
+        [provider_id, date]
+      );
+
+      const hadWeekly = (weekly as any[]).length > 0;
+      const hasExceptions = (exceptions as any[]).length > 0;
+      let allowManual = !hadWeekly && !hasExceptions;
+      let blockedRanges: Array<{ start: string; end: string }> = [];
+
+      for (const exc of (exceptions as any[])) {
+        const isActive = exc?.is_available === 1 || exc?.is_available === true;
+        const excStart = exc?.start_time ? String(exc.start_time).slice(0, 5) : null;
+        const excEnd = exc?.end_time ? String(exc.end_time).slice(0, 5) : null;
+
+        if (!isActive) {
+          allowManual = false;
+          if (!excStart && !excEnd) {
+            allowedBlocks = [];
+            blockedRanges = [{ start: '00:00', end: '24:00' }];
+            break;
+          } else if (excStart && excEnd) {
+            blockedRanges.push({ start: excStart, end: excEnd });
+          }
+        } else {
+          allowManual = false;
+          if (excStart && excEnd) {
+            allowedBlocks = [{
+              start: excStart,
+              end: excEnd
+            }];
+          }
+        }
+      }
+
+      if (!allowManual) {
+        if (allowedBlocks.length === 0) {
+          return res.status(409).json({ success: false, error: 'El profesional no está disponible en esta fecha.' });
+        }
+
+        const startMinutes = timeToMinutes(normalizedStart);
+        const endMinutes = timeToMinutes(normalizedEnd);
+
+        const insideAllowed = allowedBlocks.some(block => {
+          const blockStart = timeToMinutes(block.start);
+          const blockEnd = timeToMinutes(block.end);
+          return startMinutes >= blockStart && endMinutes <= blockEnd;
+        });
+
+        if (!insideAllowed) {
+          return res.status(409).json({ success: false, error: 'El profesional no está disponible en ese horario.' });
+        }
+
+        const overlapsBlocked = blockedRanges.some(range => {
+          const rangeStart = timeToMinutes(range.start);
+          const rangeEnd = timeToMinutes(range.end);
+          return rangesOverlap(startMinutes, endMinutes, rangeStart, rangeEnd);
+        });
+
+        if (overlapsBlocked) {
+          return res.status(409).json({ success: false, error: 'El profesional bloqueó este horario.' });
+        }
+      }
 
       // Construir dirección base desde perfil del cliente
       let locationLabel: string | null = null;
@@ -172,7 +251,7 @@ function buildRouter(): Router {
          WHERE provider_id = ? AND \`date\` = ?
            AND NOT (\`end_time\` <= ? OR \`start_time\` >= ?)
          LIMIT 1`,
-        [provider_id, date, start_time, end_time]
+        [provider_id, date, normalizedStart, normalizedEnd]
       );
       if ((over as any[]).length > 0) {
         return res.status(409).json({ success: false, error: 'Horario no disponible (solape)' });
@@ -196,8 +275,8 @@ function buildRouter(): Router {
           client_id,
           service_id,
           date,
-          start_time,
-          end_time,
+          normalizedStart,
+          normalizedEnd,
           service.price ?? 0,
           notes || null,
           locationLabel
@@ -232,7 +311,7 @@ function buildRouter(): Router {
       console.log('🟢 [APPOINTMENTS] Provider ID:', provider_id);
       console.log('🟢 [APPOINTMENTS] Client ID:', client_id);
       console.log('🟢 [APPOINTMENTS] Client Name:', (appointment as any).client_name);
-      console.log('🟢 [APPOINTMENTS] Start Time:', start_time);
+      console.log('🟢 [APPOINTMENTS] Start Time:', normalizedStart);
       console.log('🟢 [APPOINTMENTS] Appointment Data:', JSON.stringify(appointment, null, 2));
       
       // Emitir en tiempo real a provider y client
@@ -631,17 +710,26 @@ function buildRouter(): Router {
       
       console.log('🟢 [TIME_SLOTS] Excepciones encontradas:', (exceptions as any[]).length);
       
+      const hadWeekly = (weekly as any[]).length > 0;
+      const hasExceptions = (exceptions as any[]).length > 0;
+      let allowManual = !hadWeekly && !hasExceptions;
+      let fullyBlocked = false;
+
       let blockedRanges: Array<{ start: string; end: string; reason: string }> = [];
       
       for (const exc of (exceptions as any[])) {
         console.log('🟢 [TIME_SLOTS] Excepción:', exc);
         
         if (!exc.is_available) {
+          allowManual = false;
           // Es un bloqueo
           if (!exc.start_time && !exc.end_time) {
             // Bloqueo de todo el día
             console.log('🔴 [TIME_SLOTS] ⚠️ TODO EL DÍA BLOQUEADO');
             blocks = []; // No hay bloques disponibles
+            fullyBlocked = true;
+            blockedRanges = [{ start: '00:00', end: '24:00', reason: exc.reason || 'Bloqueado' }];
+            break;
           } else {
             // Bloqueo de horario específico
             blockedRanges.push({
@@ -650,6 +738,7 @@ function buildRouter(): Router {
               reason: exc.reason || 'Bloqueado'
             });
             console.log('🔴 [TIME_SLOTS] Horario bloqueado:', exc.start_time, '-', exc.end_time);
+            allowManual = false;
           }
         } else {
           // Es una habilitación especial (sobrescribe horario semanal)
@@ -659,6 +748,7 @@ function buildRouter(): Router {
               end: String(exc.end_time).slice(0, 5)
             }];
             console.log('🟢 [TIME_SLOTS] Horario especial habilitado:', exc.start_time, '-', exc.end_time);
+            allowManual = false;
           }
         }
       }
@@ -709,7 +799,14 @@ function buildRouter(): Router {
       console.log('🟢 [TIME_SLOTS] Bloqueados:', slots.filter(s => s.reason === 'blocked').length);
       console.log('🟢 [TIME_SLOTS] Ocupados:', slots.filter(s => s.reason === 'booked').length);
       
-      return res.json({ success: true, time_slots: slots });
+      return res.json({ 
+        success: true, 
+        time_slots: slots,
+        meta: {
+          fully_blocked: fullyBlocked || (blocks.length === 0 && !allowManual && hasExceptions),
+          allow_manual: allowManual
+        }
+      });
     } catch (err) {
       console.error('🔴 [TIME_SLOTS] Error:', err);
       Logger.error(MODULE, 'Error getting time-slots', err as any);
@@ -1369,6 +1466,15 @@ function buildRouter(): Router {
     const H = String(d.getHours()).padStart(2, '0');
     const M = String(d.getMinutes()).padStart(2, '0');
     return `${H}:${M}`;
+  }
+
+  function timeToMinutes(hhmm: string): number {
+    const [hh, mm] = hhmm.split(':').map(Number);
+    return (hh * 60) + mm;
+  }
+
+  function rangesOverlap(startA: number, endA: number, startB: number, endB: number): boolean {
+    return Math.max(startA, startB) < Math.min(endA, endB);
   }
   
   /**
