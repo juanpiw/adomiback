@@ -11,6 +11,7 @@ import { ClientProviderRoutes } from './routes/client-provider.routes';
 import { ClientAvailabilitySearchRoutes } from './routes/client-availability-search.routes';
 import clientNearbyRoutes from './routes/client-nearby.routes';
 import { ClientAccountRoutes } from './routes/client-account.routes';
+import clientVerificationRoutes from './routes/client-verification.routes';
 
 /**
  * Setup function to mount client routes
@@ -31,6 +32,7 @@ export function setupClientModule(app: Express) {
   app.use('/', accountRoutes.getRouter());
   // Nearby routes
   app.use('/', clientNearbyRoutes);
+  app.use('/', clientVerificationRoutes);
   console.log('[CLIENT MODULE] Client routes mounted');
 }
 

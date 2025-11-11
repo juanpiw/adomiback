@@ -28,7 +28,7 @@ export function setupAdminModule(app: Express) {
 
 let adminUserVerificationSyncDisabled = false;
 
-async function syncUserVerificationStatus(providerId: number, status: 'none' | 'pending' | 'approved' | 'rejected', isVerified: boolean) {
+async function syncUserVerificationStatus(userId: number, status: 'none' | 'pending' | 'approved' | 'rejected', isVerified: boolean) {
   if (adminUserVerificationSyncDisabled) return;
 
   try {
@@ -37,16 +37,16 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
       `UPDATE users
           SET verification_status = ?, is_verified = ?
         WHERE id = ?`,
-      [status, isVerified ? 1 : 0, providerId]
+      [status, isVerified ? 1 : 0, userId]
     );
   } catch (error: any) {
     const code = error?.code;
     if (code === 'ER_BAD_FIELD_ERROR') {
       adminUserVerificationSyncDisabled = true;
-      Logger.warn('ADMIN_MODULE', 'users.verification_status no disponible; se desactiva sincronización', { providerId, code });
+      Logger.warn('ADMIN_MODULE', 'users.verification_status no disponible; se desactiva sincronización', { userId, code });
     } else {
       Logger.warn('ADMIN_MODULE', 'No se pudo sincronizar users.verification_status', {
-        providerId,
+        userId,
         status,
         error: error?.message,
         code
@@ -249,25 +249,116 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
 
   router.get('/verification/requests', adminAuth, async (req, res) => {
     try {
+      const typeParam = String((req.query.type || 'provider')).toLowerCase();
+      const isClient = typeParam === 'client';
       const statusParam = String(req.query.status || '').toLowerCase();
       const searchParam = String(req.query.q || req.query.search || '').trim();
       const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
       const offset = Math.max(0, Number(req.query.offset) || 0);
       const from = String(req.query.from || '').trim();
       const to = String(req.query.to || '').trim();
+      const allowedStatuses = ['pending', 'approved', 'rejected', 'expired', 'draft'];
 
       const pool = DatabaseConnection.getPool();
+
+      if (isClient) {
+        const whereClauses: string[] = [];
+        const params: any[] = [];
+
+        if (allowedStatuses.includes(statusParam)) {
+          whereClauses.push('cv.status = ?');
+          params.push(statusParam);
+        }
+
+        if (searchParam) {
+          const like = `%${searchParam}%`;
+          whereClauses.push('(u.email LIKE ? OR u.name LIKE ? OR cp.full_name LIKE ? OR cv.document_number LIKE ?)');
+          params.push(like, like, like, like);
+        }
+
+        if (from) {
+          whereClauses.push('cv.updated_at >= ?');
+          params.push(from);
+        }
+
+        if (to) {
+          whereClauses.push('cv.updated_at <= ?');
+          params.push(to);
+        }
+
+        const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
+        const query = `
+          SELECT cv.id,
+                 cv.client_id,
+                 cv.document_type,
+                 cv.document_number,
+                 cv.status,
+                 cv.rejection_reason,
+                 cv.review_notes,
+                 cv.submitted_at,
+                 cv.reviewed_at,
+                 cv.created_at,
+                 cv.updated_at,
+                 u.email AS client_email,
+                 COALESCE(u.name, cp.full_name) AS client_name,
+                 cp.full_name,
+                 cp.verification_status,
+                 cp.is_verified,
+                 (SELECT COUNT(*) FROM client_verification_files cvf WHERE cvf.verification_id = cv.id) AS files_count,
+                 (SELECT GROUP_CONCAT(DISTINCT cvf.file_type) FROM client_verification_files cvf WHERE cvf.verification_id = cv.id) AS file_types
+            FROM client_verifications cv
+            LEFT JOIN users u ON u.id = cv.client_id
+            LEFT JOIN client_profiles cp ON cp.client_id = cv.client_id
+            ${whereSql}
+            ORDER BY
+              CASE WHEN cv.status = 'pending' THEN 0 ELSE 1 END,
+              cv.updated_at DESC
+            LIMIT ? OFFSET ?`;
+
+        const [rows] = await pool.query(query, [...params, limit, offset]);
+
+        const data = (rows as any[]).map(row => ({
+          id: row.id,
+          entityType: 'client',
+          entityId: row.client_id,
+          document_type: row.document_type,
+          document_number: row.document_number,
+          status: row.status,
+          rejection_reason: row.rejection_reason,
+          review_notes: row.review_notes,
+          submitted_at: row.submitted_at,
+          reviewed_at: row.reviewed_at,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          client_id: row.client_id,
+          client_email: row.client_email,
+          client_name: row.client_name,
+          full_name: row.full_name,
+          verification_status: row.verification_status,
+          is_verified: !!row.is_verified,
+          files_count: Number(row.files_count || 0),
+          file_types: row.file_types ? String(row.file_types).split(',') : []
+        }));
+
+        return res.json({
+          success: true,
+          data,
+          pagination: { limit, offset, returned: data.length },
+          meta: { type: 'client' }
+        });
+      }
+
       const whereClauses: string[] = [];
       const params: any[] = [];
 
-      if (['pending', 'approved', 'rejected', 'expired', 'draft'].includes(statusParam)) {
+      if (allowedStatuses.includes(statusParam)) {
         whereClauses.push('pv.status = ?');
         params.push(statusParam);
       }
 
       if (searchParam) {
         const like = `%${searchParam}%`;
-        whereClauses.push('(u.email LIKE ? OR u.name LIKE ? OR pp.full_name LIKE ? OR pv.document_number LIKE ? )');
+        whereClauses.push('(u.email LIKE ? OR u.name LIKE ? OR pp.full_name LIKE ? OR pv.document_number LIKE ?)');
         params.push(like, like, like, like);
       }
 
@@ -315,6 +406,8 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
 
       const data = (rows as any[]).map(row => ({
         id: row.id,
+        entityType: 'provider',
+        entityId: row.provider_id,
         provider_id: row.provider_id,
         document_type: row.document_type,
         document_number: row.document_number,
@@ -335,7 +428,12 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
         file_types: row.file_types ? String(row.file_types).split(',') : []
       }));
 
-      return res.json({ success: true, data, pagination: { limit, offset, returned: data.length } });
+      return res.json({
+        success: true,
+        data,
+        pagination: { limit, offset, returned: data.length },
+        meta: { type: 'provider' }
+      });
     } catch (error) {
       Logger.error('ADMIN_MODULE', 'Error fetching verification requests', error as any);
       return res.status(500).json({ success: false, error: 'verification_requests_error' });
@@ -349,7 +447,92 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
         return res.status(400).json({ success: false, error: 'invalid_id' });
       }
 
+      const typeParam = String((req.query.type || 'provider')).toLowerCase();
+      const isClient = typeParam === 'client';
       const pool = DatabaseConnection.getPool();
+      const defaultBucket = requireEnv('AWS_S3_BUCKET');
+
+      if (isClient) {
+        const [[verification]]: any = await pool.query(
+          `SELECT cv.*, 
+                  u.email AS client_email, 
+                  COALESCE(u.name, cp.full_name) AS client_name,
+                  cp.full_name,
+                  cp.verification_status,
+                  cp.is_verified
+             FROM client_verifications cv
+             LEFT JOIN users u ON u.id = cv.client_id
+             LEFT JOIN client_profiles cp ON cp.client_id = cv.client_id
+            WHERE cv.id = ?
+            LIMIT 1`,
+          [id]
+        );
+
+        if (!verification) {
+          return res.status(404).json({ success: false, error: 'verification_not_found' });
+        }
+
+        const [fileRows]: any = await pool.query(
+          `SELECT id, file_type, s3_bucket, s3_key, mime_type, size_bytes, checksum_sha256,
+                  uploaded_at, updated_at
+             FROM client_verification_files
+            WHERE verification_id = ?
+            ORDER BY FIELD(file_type, 'front', 'back', 'selfie', 'extra'), uploaded_at ASC`,
+          [id]
+        );
+
+        const files = await Promise.all((fileRows || []).map(async (row: any) => {
+          const bucket = row.s3_bucket || defaultBucket;
+          let signedUrl: string | null = null;
+          try {
+            signedUrl = await getPresignedGetUrl({ bucket, key: row.s3_key, expiresSeconds: 300 });
+          } catch (err) {
+            Logger.warn('ADMIN_MODULE', 'No se pudo generar URL firmada para verificación de cliente', {
+              verificationId: id,
+              fileId: row.id,
+              error: (err as any)?.message
+            });
+          }
+          return {
+            id: row.id,
+            type: row.file_type,
+            bucket,
+            key: row.s3_key,
+            mimeType: row.mime_type,
+            sizeBytes: row.size_bytes,
+            checksum: row.checksum_sha256,
+            uploadedAt: row.uploaded_at,
+            updatedAt: row.updated_at,
+            url: signedUrl
+          };
+        }));
+
+        return res.json({
+          success: true,
+          data: {
+            entityType: 'client',
+            entityId: verification.client_id,
+            id: verification.id,
+            client_id: verification.client_id,
+            client_email: verification.client_email,
+            client_name: verification.client_name,
+            document_type: verification.document_type,
+            document_number: verification.document_number,
+            status: verification.status,
+            rejection_reason: verification.rejection_reason,
+            review_notes: verification.review_notes,
+            submitted_at: verification.submitted_at,
+            reviewed_at: verification.reviewed_at,
+            created_at: verification.created_at,
+            updated_at: verification.updated_at,
+            verification_status: verification.verification_status,
+            is_verified: !!verification.is_verified,
+            metadata: verification.metadata,
+            files
+          }
+        });
+      }
+
       const [[verification]]: any = await pool.query(
         `SELECT pv.*, u.email AS provider_email, u.name AS provider_name,
                 pp.full_name, pp.professional_title, pp.verification_status, pp.is_verified
@@ -374,29 +557,15 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
         [id]
       );
 
-      const defaultBucket = requireEnv('AWS_S3_BUCKET');
       const files = await Promise.all((fileRows || []).map(async (row: any) => {
         const bucket = row.s3_bucket || defaultBucket;
         let signedUrl: string | null = null;
         try {
           signedUrl = await getPresignedGetUrl({ bucket, key: row.s3_key, expiresSeconds: 300 });
-          console.log('[ADMIN_VERIFICATION] URL firmada generada', {
-            verificationId: id,
-            fileId: row.id,
-            bucket,
-            key: row.s3_key
-          });
         } catch (err) {
-          Logger.warn('ADMIN_MODULE', 'No se pudo generar URL firmada para verificación', {
+          Logger.warn('ADMIN_MODULE', 'No se pudo generar URL firmada para verificación de proveedor', {
             verificationId: id,
             fileId: row.id,
-            error: (err as any)?.message
-          });
-          console.error('[ADMIN_VERIFICATION] Error generando URL firmada', {
-            verificationId: id,
-            fileId: row.id,
-            bucket,
-            key: row.s3_key,
             error: (err as any)?.message
           });
         }
@@ -417,6 +586,8 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
       return res.json({
         success: true,
         data: {
+          entityType: 'provider',
+          entityId: verification.provider_id,
           ...verification,
           is_verified: !!verification.is_verified,
           files
@@ -435,8 +606,85 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
         return res.status(400).json({ success: false, error: 'invalid_id' });
       }
 
+      const typeParam = String((req.query.type || req.body?.type || 'provider')).toLowerCase();
+      const isClient = typeParam === 'client';
       const notes = typeof req.body?.notes === 'string' ? req.body.notes.trim().slice(0, 500) : null;
       const pool = DatabaseConnection.getPool();
+      const appName = process.env.APP_NAME || 'Adomi';
+
+      if (isClient) {
+        const [[verification]]: any = await pool.query(
+          `SELECT cv.*, 
+                  u.email AS client_email, 
+                  COALESCE(u.name, cp.full_name) AS client_name,
+                  cp.full_name
+             FROM client_verifications cv
+             LEFT JOIN users u ON u.id = cv.client_id
+             LEFT JOIN client_profiles cp ON cp.client_id = cv.client_id
+            WHERE cv.id = ?
+            LIMIT 1`,
+          [id]
+        );
+
+        if (!verification) {
+          return res.status(404).json({ success: false, error: 'verification_not_found' });
+        }
+
+        await pool.execute(
+          `UPDATE client_verifications
+              SET status = 'approved', rejection_reason = NULL,
+                  review_notes = ?, reviewed_at = NOW(), reviewed_by_admin_id = ?, updated_at = NOW()
+            WHERE id = ?`,
+          [notes || null, req.user?.id || null, id]
+        );
+
+        const [profileUpdate]: any = await pool.execute(
+          `UPDATE client_profiles
+              SET verification_status = 'approved', is_verified = TRUE, updated_at = NOW()
+            WHERE client_id = ?`,
+          [verification.client_id]
+        );
+
+        if (!(profileUpdate?.affectedRows > 0)) {
+          try {
+            await pool.execute(
+              `INSERT INTO client_profiles (client_id, full_name, verification_status, is_verified, created_at, updated_at)
+               VALUES (?, ?, 'approved', TRUE, NOW(), NOW())`,
+              [verification.client_id, verification.full_name || verification.client_name || '']
+            );
+          } catch (insertErr: any) {
+            if (insertErr?.code !== 'ER_DUP_ENTRY') {
+              throw insertErr;
+            }
+          }
+        }
+
+        await syncUserVerificationStatus(verification.client_id, 'approved', true);
+
+        if (verification.client_email) {
+          try {
+            await EmailService.sendVerificationStatus(verification.client_email, {
+              appName,
+              providerName: verification.client_name || null,
+              status: 'approved'
+            });
+          } catch (emailErr) {
+            Logger.warn('ADMIN_MODULE', 'No se pudo enviar correo de verificación de cliente aprobada', emailErr as any);
+          }
+        }
+
+        try {
+          await PushService.notifyUser(verification.client_id, '✅ Verificación aprobada', 'Tu identidad como cliente ya está verificada.', {
+            type: 'verification',
+            status: 'approved'
+          });
+        } catch (pushErr) {
+          Logger.warn('ADMIN_MODULE', 'No se pudo enviar notificación de verificación aprobada (cliente)', pushErr as any);
+        }
+
+        Logger.info('ADMIN_MODULE', 'Verificación de cliente aprobada', { verificationId: id, adminId: req.user?.id });
+        return res.json({ success: true });
+      }
 
       const [[verification]]: any = await pool.query(
         `SELECT pv.*, u.email AS provider_email, u.name AS provider_name
@@ -468,7 +716,6 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
 
       await syncUserVerificationStatus(verification.provider_id, 'approved', true);
 
-      const appName = process.env.APP_NAME || 'Adomi';
       if (verification.provider_email) {
         try {
           await EmailService.sendVerificationStatus(verification.provider_email, {
@@ -506,6 +753,8 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
         return res.status(400).json({ success: false, error: 'invalid_id' });
       }
 
+      const typeParam = String((req.query.type || req.body?.type || 'provider')).toLowerCase();
+      const isClient = typeParam === 'client';
       const reasonRaw = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
       if (!reasonRaw) {
         return res.status(400).json({ success: false, error: 'reason_required' });
@@ -513,6 +762,82 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
       const reason = reasonRaw.slice(0, 255);
       const notes = typeof req.body?.notes === 'string' ? req.body.notes.trim().slice(0, 500) : null;
       const pool = DatabaseConnection.getPool();
+      const appName = process.env.APP_NAME || 'Adomi';
+
+      if (isClient) {
+        const [[verification]]: any = await pool.query(
+          `SELECT cv.*, 
+                  u.email AS client_email, 
+                  COALESCE(u.name, cp.full_name) AS client_name,
+                  cp.full_name
+             FROM client_verifications cv
+             LEFT JOIN users u ON u.id = cv.client_id
+             LEFT JOIN client_profiles cp ON cp.client_id = cv.client_id
+            WHERE cv.id = ?
+            LIMIT 1`,
+          [id]
+        );
+
+        if (!verification) {
+          return res.status(404).json({ success: false, error: 'verification_not_found' });
+        }
+
+        await pool.execute(
+          `UPDATE client_verifications
+              SET status = 'rejected', rejection_reason = ?,
+                  review_notes = ?, reviewed_at = NOW(), reviewed_by_admin_id = ?, updated_at = NOW()
+            WHERE id = ?`,
+          [reason, notes || null, req.user?.id || null, id]
+        );
+
+        const [profileUpdate]: any = await pool.execute(
+          `UPDATE client_profiles
+              SET verification_status = 'rejected', is_verified = FALSE, updated_at = NOW()
+            WHERE client_id = ?`,
+          [verification.client_id]
+        );
+
+        if (!(profileUpdate?.affectedRows > 0)) {
+          try {
+            await pool.execute(
+              `INSERT INTO client_profiles (client_id, full_name, verification_status, is_verified, created_at, updated_at)
+               VALUES (?, ?, 'rejected', FALSE, NOW(), NOW())`,
+              [verification.client_id, verification.full_name || verification.client_name || '']
+            );
+          } catch (insertErr: any) {
+            if (insertErr?.code !== 'ER_DUP_ENTRY') {
+              throw insertErr;
+            }
+          }
+        }
+
+        await syncUserVerificationStatus(verification.client_id, 'rejected', false);
+
+        if (verification.client_email) {
+          try {
+            await EmailService.sendVerificationStatus(verification.client_email, {
+              appName,
+              providerName: verification.client_name || null,
+              status: 'rejected',
+              rejectionReason: reason
+            });
+          } catch (emailErr) {
+            Logger.warn('ADMIN_MODULE', 'No se pudo enviar correo de verificación rechazada (cliente)', emailErr as any);
+          }
+        }
+
+        try {
+          await PushService.notifyUser(verification.client_id, '⚠️ Verificación rechazada', 'Necesitamos nuevos documentos para verificar tu identidad como cliente.', {
+            type: 'verification',
+            status: 'rejected'
+          });
+        } catch (pushErr) {
+          Logger.warn('ADMIN_MODULE', 'No se pudo enviar notificación de verificación rechazada (cliente)', pushErr as any);
+        }
+
+        Logger.info('ADMIN_MODULE', 'Verificación de cliente rechazada', { verificationId: id, adminId: req.user?.id });
+        return res.json({ success: true });
+      }
 
       const [[verification]]: any = await pool.query(
         `SELECT pv.*, u.email AS provider_email, u.name AS provider_name
@@ -544,7 +869,6 @@ async function syncUserVerificationStatus(providerId: number, status: 'none' | '
 
       await syncUserVerificationStatus(verification.provider_id, 'rejected', false);
 
-      const appName = process.env.APP_NAME || 'Adomi';
       if (verification.provider_email) {
         try {
           await EmailService.sendVerificationStatus(verification.provider_email, {
