@@ -1,6 +1,7 @@
 import DatabaseConnection from '../../shared/database/connection';
 import { Logger } from '../../shared/utils/logger.util';
 import { PushService } from '../notifications/services/push.service';
+import { emitToUser } from '../../shared/realtime/socket';
 import { loadCashSettings } from './utils/cash-settings.util';
 
 const MODULE = 'CLOSURE_CRON';
@@ -15,6 +16,95 @@ function toDateTime(dateStr: string, timeStr: string): Date | null {
     return isNaN(dt.getTime()) ? null : dt;
   } catch {
     return null;
+  }
+}
+
+async function expireUnconfirmedAppointments(expirationHours: number) {
+  const pool = DatabaseConnection.getPool();
+  const [rows]: any = await pool.query(
+    `SELECT id, provider_id, client_id, date, start_time
+       FROM appointments
+      WHERE status = 'scheduled'
+        AND created_at <= DATE_SUB(NOW(), INTERVAL ? HOUR)`,
+    [expirationHours]
+  );
+
+  if (!(rows as any[]).length) {
+    return;
+  }
+
+  const reason = `Cita expirada por falta de confirmación en ${expirationHours}h`;
+
+  for (const appt of rows as any[]) {
+    try {
+      const [result]: any = await pool.execute(
+        `UPDATE appointments
+            SET status = 'expired',
+                cancelled_by = 'system',
+                cancellation_reason = ?,
+                cancelled_at = NOW(),
+                updated_at = NOW()
+          WHERE id = ? AND status = 'scheduled'`,
+        [reason, appt.id]
+      );
+
+      if (!result?.affectedRows) {
+        continue;
+      }
+
+      const [[updated]]: any = await pool.query(
+        `SELECT a.*,
+                u.name AS client_name,
+                up.name AS provider_name,
+                ps.name AS service_name
+           FROM appointments a
+           LEFT JOIN users u ON u.id = a.client_id
+           LEFT JOIN users up ON up.id = a.provider_id
+           LEFT JOIN provider_services ps ON ps.id = a.service_id
+          WHERE a.id = ?
+          LIMIT 1`,
+        [appt.id]
+      );
+
+      if (!updated) {
+        continue;
+      }
+
+      try {
+        emitToUser(updated.provider_id, 'appointment:updated', updated);
+      } catch {}
+      try {
+        emitToUser(updated.client_id, 'appointment:updated', updated);
+      } catch {}
+
+      try {
+        await PushService.notifyUser(
+          Number(updated.client_id),
+          'Cita expirada',
+          'El proveedor no confirmó tu reserva en 24 horas. Busca otra opción disponible.',
+          { type: 'appointment', appointment_id: String(updated.id), status: 'expired' }
+        );
+      } catch {}
+      try {
+        await PushService.notifyUser(
+          Number(updated.provider_id),
+          'Cita expirada',
+          'La reserva expiró por no confirmarla a tiempo.',
+          { type: 'appointment', appointment_id: String(updated.id), status: 'expired' }
+        );
+      } catch {}
+
+      Logger.info(MODULE, '[EXPIRE] Cita expirada automáticamente', {
+        appointmentId: updated.id,
+        providerId: updated.provider_id,
+        clientId: updated.client_id
+      });
+    } catch (error) {
+      Logger.error(MODULE, '[EXPIRE] Error expirando cita', {
+        appointmentId: appt.id,
+        error
+      });
+    }
   }
 }
 
@@ -126,14 +216,17 @@ async function autoResolveClose() {
 export function setupClosureCron() {
   const activateOffsetMin = Number(process.env.CLOSURE_ACTIVATE_OFFSET_MIN || 60);
   const intervalMs = Math.max(60_000, Number(process.env.CLOSURE_CRON_INTERVAL_MS || 300_000)); // default 5 min
+  const expirationHours = Math.max(1, Number(process.env.APPOINTMENT_CONFIRMATION_LIMIT_HOURS || 24));
 
   // Primera ejecución diferida 30s
   setTimeout(() => {
+    expireUnconfirmedAppointments(expirationHours).catch(() => {});
     activatePendingClose(activateOffsetMin).catch(() => {});
     autoResolveClose().catch(() => {});
   }, 30_000);
 
   setInterval(() => {
+    expireUnconfirmedAppointments(expirationHours).catch(() => {});
     activatePendingClose(activateOffsetMin).catch(() => {});
     autoResolveClose().catch(() => {});
   }, intervalMs);

@@ -886,7 +886,7 @@ function buildRouter(): Router {
       if (status === 'cancelled' && !(isProvider || isClient)) {
         return res.status(403).json({ success: false, error: 'No autorizado' });
       }
-      if (status === 'cancelled' && ['completed', 'cancelled'].includes(String(appt.status))) {
+      if (status === 'cancelled' && ['completed', 'cancelled', 'expired'].includes(String(appt.status))) {
         return res.status(400).json({ success: false, error: 'La cita ya no puede cancelarse.' });
       }
 
