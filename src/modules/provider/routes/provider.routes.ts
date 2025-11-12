@@ -259,8 +259,19 @@ export class ProviderRoutes {
         const clientId = Number(req.params.clientId);
 
         if (!Number.isFinite(clientId) || clientId <= 0) {
+          console.warn('[PROVIDER_ROUTES][CLIENT_PROFILE] clientId inválido recibido', {
+            providerId: user?.id,
+            clientId: req.params.clientId,
+            path: req.originalUrl
+          });
           return res.status(400).json({ success: false, error: 'clientId inválido' });
         }
+
+        console.log('[PROVIDER_ROUTES][CLIENT_PROFILE] Solicitud recibida', {
+          providerId: user.id,
+          clientId,
+          path: req.originalUrl
+        });
 
         const pool = DatabaseConnection.getPool();
 
@@ -269,7 +280,17 @@ export class ProviderRoutes {
           [user.id, clientId]
         );
 
+        console.log('[PROVIDER_ROUTES][CLIENT_PROFILE] Relación proveedor-cliente', {
+          providerId: user.id,
+          clientId,
+          relationFound: Array.isArray(relationRows) && relationRows.length > 0
+        });
+
         if (!Array.isArray(relationRows) || relationRows.length === 0) {
+          console.warn('[PROVIDER_ROUTES][CLIENT_PROFILE] Cliente no asociado al proveedor', {
+            providerId: user.id,
+            clientId
+          });
           return res.status(404).json({ success: false, error: 'Cliente no asociado a este proveedor' });
         }
 
@@ -301,6 +322,10 @@ export class ProviderRoutes {
         );
 
         if (!Array.isArray(rows) || rows.length === 0) {
+          console.warn('[PROVIDER_ROUTES][CLIENT_PROFILE] Cliente no encontrado', {
+            providerId: user.id,
+            clientId
+          });
           return res.status(404).json({ success: false, error: 'Cliente no encontrado' });
         }
 
@@ -333,6 +358,13 @@ export class ProviderRoutes {
           created_at: review.created_at,
           provider_name: review.provider_name || null
         }));
+
+        console.log('[PROVIDER_ROUTES][CLIENT_PROFILE] Perfil construido', {
+          providerId: user.id,
+          clientId,
+          hasProfilePhoto: Boolean(row.profile_photo_url),
+          reviewSummary: summary
+        });
 
         return res.status(200).json({
           success: true,
@@ -369,7 +401,12 @@ export class ProviderRoutes {
           }
         });
       } catch (error: any) {
-        console.error('[PROVIDER_ROUTES] Error obteniendo perfil de cliente:', error);
+        console.error('[PROVIDER_ROUTES][CLIENT_PROFILE] Error inesperado', {
+          message: error?.message,
+          stack: error?.stack,
+          providerId: (req as any)?.user?.id,
+          clientId: req.params?.clientId
+        });
         return res.status(500).json({ success: false, error: 'Error al obtener perfil del cliente', details: error.message });
       }
     });
