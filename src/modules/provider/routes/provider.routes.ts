@@ -250,6 +250,87 @@ export class ProviderRoutes {
         return res.status(500).json({ success: false, error: 'Error al actualizar perfil', details: error.message });
       }
     });
+
+    // GET /provider/clients/:clientId/profile - Ver perfil del cliente asociado al proveedor
+    this.router.get('/provider/clients/:clientId/profile', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user as AuthUser;
+        const clientId = Number(req.params.clientId);
+
+        if (!Number.isFinite(clientId) || clientId <= 0) {
+          return res.status(400).json({ success: false, error: 'clientId inválido' });
+        }
+
+        const pool = DatabaseConnection.getPool();
+
+        const [relationRows]: any = await pool.query(
+          `SELECT id FROM appointments WHERE provider_id = ? AND client_id = ? LIMIT 1`,
+          [user.id, clientId]
+        );
+
+        if (!Array.isArray(relationRows) || relationRows.length === 0) {
+          return res.status(404).json({ success: false, error: 'Cliente no asociado a este proveedor' });
+        }
+
+        const [rows]: any = await pool.query(
+          `SELECT 
+             u.id AS client_id,
+             u.name AS user_name,
+             u.email,
+             u.created_at AS user_created_at,
+             cp.full_name,
+             cp.phone,
+             cp.profile_photo_url,
+             cp.address,
+             cp.commune,
+             cp.region,
+             cp.preferred_language,
+             cp.notes,
+             cp.verification_status,
+             cp.is_verified,
+             cp.created_at AS profile_created_at,
+             cp.updated_at AS profile_updated_at
+           FROM users u
+           LEFT JOIN client_profiles cp ON cp.client_id = u.id
+           WHERE u.id = ?
+           LIMIT 1`,
+          [clientId]
+        );
+
+        if (!Array.isArray(rows) || rows.length === 0) {
+          return res.status(404).json({ success: false, error: 'Cliente no encontrado' });
+        }
+
+        const row = rows[0];
+        const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
+        const profilePhotoUrl = row.profile_photo_url ? `${publicBase}${row.profile_photo_url}` : null;
+
+        return res.status(200).json({
+          success: true,
+          client: {
+            client_id: row.client_id,
+            full_name: row.full_name || row.user_name || '',
+            display_name: row.user_name || '',
+            email: row.email || '',
+            phone: row.phone || '',
+            address: row.address || '',
+            commune: row.commune || '',
+            region: row.region || '',
+            preferred_language: row.preferred_language || 'es',
+            notes: row.notes || '',
+            verification_status: row.verification_status || 'none',
+            is_verified: !!row.is_verified,
+            profile_photo_url: profilePhotoUrl,
+            profile_created_at: row.profile_created_at,
+            profile_updated_at: row.profile_updated_at,
+            user_created_at: row.user_created_at
+          }
+        });
+      } catch (error: any) {
+        console.error('[PROVIDER_ROUTES] Error obteniendo perfil de cliente:', error);
+        return res.status(500).json({ success: false, error: 'Error al obtener perfil del cliente', details: error.message });
+      }
+    });
   }
 }
 
