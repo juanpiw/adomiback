@@ -19,6 +19,7 @@ import { hasPendingCashDebt } from '../../shared/services/provider-cash.service'
 const MODULE = 'APPOINTMENTS';
 
 let ensureCashSchemaPromise: Promise<void> | null = null;
+let ensureRescheduleSchemaPromise: Promise<void> | null = null;
 
 type SlotCollisionContext = 'preflight' | 'transaction_lock' | 'constraint_violation';
 
@@ -135,10 +136,127 @@ async function ensureCashSchema(): Promise<void> {
   return ensureCashSchemaPromise;
 }
 
+async function ensureRescheduleSchema(): Promise<void> {
+  if (ensureRescheduleSchemaPromise) {
+    return ensureRescheduleSchemaPromise;
+  }
+
+  ensureRescheduleSchemaPromise = (async () => {
+    try {
+      const pool = DatabaseConnection.getPool();
+
+      const [[statusColumn]]: any = await pool.query(
+        `SELECT DATA_TYPE, COLUMN_TYPE 
+           FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = 'appointments'
+            AND COLUMN_NAME = 'status'
+          LIMIT 1`
+      );
+
+      if (statusColumn) {
+        const dataType = String(statusColumn.DATA_TYPE || '').toLowerCase();
+        const columnType = String(statusColumn.COLUMN_TYPE || '').toLowerCase();
+        const needsAlter =
+          dataType === 'enum'
+            ? !columnType.includes('pending_reschedule')
+            : false;
+
+        if (needsAlter) {
+          await pool.query(
+            `ALTER TABLE appointments 
+               MODIFY COLUMN status ENUM('scheduled','pending','pending_reschedule','confirmed','in_progress','completed','cancelled','expired') NOT NULL DEFAULT 'scheduled'`
+          );
+          Logger.info(MODULE, '[RESCHEDULE_SCHEMA] status enum actualizado');
+        } else if (dataType !== 'enum') {
+          await pool.query(
+            `ALTER TABLE appointments 
+               MODIFY COLUMN status VARCHAR(32) NOT NULL DEFAULT 'scheduled'`
+          );
+          Logger.info(MODULE, '[RESCHEDULE_SCHEMA] status convertido a VARCHAR');
+        }
+      }
+
+      const columnDefinitions: Array<{ name: string; sql: string }> = [
+        {
+          name: 'client_reschedule_count',
+          sql: 'ALTER TABLE appointments ADD COLUMN client_reschedule_count TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER payment_method'
+        },
+        {
+          name: 'provider_reschedule_count',
+          sql: 'ALTER TABLE appointments ADD COLUMN provider_reschedule_count TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER client_reschedule_count'
+        },
+        {
+          name: 'reschedule_requested_by',
+          sql: "ALTER TABLE appointments ADD COLUMN reschedule_requested_by ENUM('none','client','provider') NOT NULL DEFAULT 'none' AFTER provider_reschedule_count"
+        },
+        {
+          name: 'reschedule_requested_at',
+          sql: 'ALTER TABLE appointments ADD COLUMN reschedule_requested_at DATETIME(6) NULL AFTER reschedule_requested_by'
+        },
+        {
+          name: 'reschedule_target_date',
+          sql: 'ALTER TABLE appointments ADD COLUMN reschedule_target_date DATE NULL AFTER reschedule_requested_at'
+        },
+        {
+          name: 'reschedule_target_start_time',
+          sql: 'ALTER TABLE appointments ADD COLUMN reschedule_target_start_time TIME NULL AFTER reschedule_target_date'
+        },
+        {
+          name: 'reschedule_target_end_time',
+          sql: 'ALTER TABLE appointments ADD COLUMN reschedule_target_end_time TIME NULL AFTER reschedule_target_start_time'
+        },
+        {
+          name: 'reschedule_reason',
+          sql: 'ALTER TABLE appointments ADD COLUMN reschedule_reason VARCHAR(255) NULL AFTER reschedule_target_end_time'
+        },
+        {
+          name: 'reschedule_previous_status',
+          sql: 'ALTER TABLE appointments ADD COLUMN reschedule_previous_status VARCHAR(32) NULL AFTER reschedule_reason'
+        }
+      ];
+
+      for (const column of columnDefinitions) {
+        const [[{ exists }]]: any = await pool.query(
+          `SELECT COUNT(*) AS exists
+             FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'appointments'
+              AND COLUMN_NAME = ?`,
+          [column.name]
+        );
+        if (!exists) {
+          await pool.query(column.sql);
+          Logger.info(MODULE, '[RESCHEDULE_SCHEMA] Columna añadida', { column: column.name });
+        }
+      }
+
+      const [[{ idxExists }]]: any = await pool.query(
+        `SELECT COUNT(*) AS idxExists
+           FROM information_schema.statistics
+          WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = 'appointments'
+            AND INDEX_NAME = 'idx_appointments_reschedule_requested_by'`
+      );
+      if (!idxExists) {
+        await pool.query(
+          'CREATE INDEX idx_appointments_reschedule_requested_by ON appointments (reschedule_requested_by, status)'
+        );
+        Logger.info(MODULE, '[RESCHEDULE_SCHEMA] Índice creado idx_appointments_reschedule_requested_by');
+      }
+    } catch (error) {
+      Logger.error(MODULE, '[RESCHEDULE_SCHEMA] Error garantizando columnas de reprogramación', error);
+    }
+  })();
+
+  return ensureRescheduleSchemaPromise;
+}
+
 function buildRouter(): Router {
   const router = Router();
 
   void ensureCashSchema();
+  void ensureRescheduleSchema();
 
   // POST /appointments - crear cita
   router.post('/appointments', authenticateToken, async (req: Request, res: Response) => {
@@ -1053,6 +1171,404 @@ function buildRouter(): Router {
     }
   });
 
+  // POST /appointments/:id/reschedule - solicitar o ejecutar reprogramación
+  router.post('/appointments/:id/reschedule', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const appointmentId = Number(req.params.id);
+      const { date, start_time, end_time, reason } = req.body || {};
+
+      if (!Number.isFinite(appointmentId)) {
+        return res.status(400).json({ success: false, error: 'id inválido' });
+      }
+
+      const targetDate = typeof date === 'string' ? date.trim().slice(0, 10) : null;
+      const targetStart = typeof start_time === 'string' ? start_time.trim().slice(0, 5) : null;
+      let targetEnd = typeof end_time === 'string' ? end_time.trim().slice(0, 5) : null;
+      if (!targetDate || !targetStart) {
+        return res.status(400).json({ success: false, error: 'date y start_time son requeridos' });
+      }
+
+      const pool = DatabaseConnection.getPool();
+      const [[appointment]]: any = await pool.query(
+        `SELECT id, provider_id, client_id, service_id, status, date, start_time, end_time, price,
+                client_reschedule_count, provider_reschedule_count,
+                reschedule_requested_by, reschedule_previous_status
+           FROM appointments
+          WHERE id = ?
+          LIMIT 1`,
+        [appointmentId]
+      );
+      if (!appointment) {
+        return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      }
+
+      const isClient = Number(appointment.client_id) === Number(user.id);
+      const isProvider = Number(appointment.provider_id) === Number(user.id);
+
+      if (!isClient && !isProvider) {
+        return res.status(403).json({ success: false, error: 'No autorizado' });
+      }
+
+      if (['completed', 'cancelled', 'expired'].includes(String(appointment.status))) {
+        return res.status(409).json({ success: false, error: 'La cita no admite reprogramaciones' });
+      }
+
+      if (String(appointment.status) === 'pending_reschedule' && String(appointment.reschedule_requested_by) !== 'none') {
+        return res.status(409).json({ success: false, error: 'Ya existe una solicitud de reprogramación pendiente' });
+      }
+
+      const clientCount = Number(appointment.client_reschedule_count || 0);
+      const providerCount = Number(appointment.provider_reschedule_count || 0);
+      if (isClient && clientCount >= 1) {
+        return res.status(409).json({ success: false, error: 'Límite de reprogramaciones alcanzado para el cliente' });
+      }
+      if (isProvider && providerCount >= 1) {
+        return res.status(409).json({ success: false, error: 'Límite de reprogramaciones alcanzado para el proveedor' });
+      }
+
+      const [[service]]: any = await pool.query(
+        'SELECT id, duration_minutes, name FROM provider_services WHERE id = ? LIMIT 1',
+        [appointment.service_id]
+      );
+
+      if (!targetEnd) {
+        const duration = Number(service?.duration_minutes || 0);
+        if (duration > 0) {
+          targetEnd = addMinutes(targetStart, duration);
+        } else if (appointment.end_time) {
+          const currentDuration = timeToMinutes(String(appointment.end_time).slice(0, 5)) - timeToMinutes(String(appointment.start_time).slice(0, 5));
+          targetEnd = addMinutes(targetStart, Math.max(currentDuration, 30));
+        } else {
+          targetEnd = addMinutes(targetStart, 60);
+        }
+      }
+
+      const startMinutes = timeToMinutes(targetStart);
+      const endMinutes = timeToMinutes(targetEnd);
+      if (startMinutes >= endMinutes) {
+        return res.status(400).json({ success: false, error: 'Horario inválido' });
+      }
+
+      const proposedStart = new Date(`${targetDate}T${targetStart}:00`);
+      if (Number.isNaN(proposedStart.getTime()) || proposedStart.getTime() < Date.now()) {
+        return res.status(400).json({ success: false, error: 'La nueva fecha y hora debe ser futura' });
+      }
+
+      await ensureSlotAvailabilityForReschedule(pool, Number(appointment.provider_id), appointmentId, targetDate, targetStart, targetEnd);
+
+      const reasonText = typeof reason === 'string' && reason.trim().length > 0 ? reason.trim().slice(0, 250) : null;
+
+      const originalStartStr = String(appointment.start_time || '').slice(0, 5);
+      const originalDateStr = String(appointment.date || '').slice(0, 10);
+      const originalStart = new Date(`${originalDateStr}T${originalStartStr}:00`);
+      const hoursToOriginal = Number.isNaN(originalStart.getTime())
+        ? 0
+        : (originalStart.getTime() - Date.now()) / 3_600_000;
+
+      const connection = await pool.getConnection();
+      let updatedAppointment: any = null;
+
+      try {
+        await connection.beginTransaction();
+
+        if (isClient && hoursToOriginal >= 24) {
+          const nextStatus = determineStatusAfterInstantReschedule(String(appointment.status || 'scheduled'));
+          const nextClientCount = clientCount + 1;
+
+          await connection.execute(
+            `UPDATE appointments
+                SET date = ?, start_time = ?, end_time = ?, status = ?, updated_at = NOW(),
+                    client_reschedule_count = ?, reschedule_requested_by = 'none',
+                    reschedule_requested_at = NULL,
+                    reschedule_target_date = NULL,
+                    reschedule_target_start_time = NULL,
+                    reschedule_target_end_time = NULL,
+                    reschedule_reason = NULL,
+                    reschedule_previous_status = NULL
+              WHERE id = ?`,
+            [targetDate, targetStart, targetEnd, nextStatus, nextClientCount, appointmentId]
+          );
+        } else {
+          const requestedBy = isClient ? 'client' : 'provider';
+          const nextClientCount = clientCount + (requestedBy === 'client' ? 1 : 0);
+          const nextProviderCount = providerCount + (requestedBy === 'provider' ? 1 : 0);
+
+          await connection.execute(
+            `UPDATE appointments
+                SET status = 'pending_reschedule',
+                    reschedule_requested_by = ?,
+                    reschedule_requested_at = NOW(),
+                    reschedule_target_date = ?,
+                    reschedule_target_start_time = ?,
+                    reschedule_target_end_time = ?,
+                    reschedule_reason = ?,
+                    reschedule_previous_status = ?,
+                    client_reschedule_count = ?,
+                    provider_reschedule_count = ?,
+                    updated_at = NOW()
+              WHERE id = ?`,
+            [
+              requestedBy,
+              targetDate,
+              targetStart,
+              targetEnd,
+              reasonText,
+              appointment.status,
+              nextClientCount,
+              nextProviderCount,
+              appointmentId
+            ]
+          );
+        }
+
+        const [updatedRows]: any = await connection.query(
+          `SELECT a.*,
+                  (SELECT name FROM users WHERE id = a.provider_id) AS provider_name,
+                  (SELECT name FROM users WHERE id = a.client_id) AS client_name
+             FROM appointments a
+            WHERE a.id = ?
+            LIMIT 1`,
+          [appointmentId]
+        );
+
+        updatedAppointment = Array.isArray(updatedRows) ? updatedRows[0] : null;
+        await connection.commit();
+      } catch (error: any) {
+        try { await connection.rollback(); } catch {}
+        if (error?.code === 'SLOT_TAKEN') {
+          return res.status(409).json({ success: false, error: 'SLOT_TAKEN' });
+        }
+        throw error;
+      } finally {
+        connection.release();
+      }
+
+      if (!updatedAppointment) {
+        return res.status(500).json({ success: false, error: 'No se pudo actualizar la cita' });
+      }
+
+      try { emitToUser(updatedAppointment.provider_id, 'appointment:updated', updatedAppointment); } catch {}
+      try { emitToUser(updatedAppointment.client_id, 'appointment:updated', updatedAppointment); } catch {}
+
+      const humanDate = new Date(`${targetDate}T${targetStart}:00`).toLocaleString('es-CL', {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+
+      if (isClient && hoursToOriginal >= 24) {
+        try {
+          await PushService.notifyUser(
+            Number(updatedAppointment.provider_id),
+            'Reprogramación automática',
+            `El cliente reprogramó la cita para ${humanDate}. Revisa tu agenda.`,
+            { type: 'appointment', appointment_id: String(appointmentId), status: updatedAppointment.status }
+          );
+        } catch {}
+      } else {
+        const targetUserId = isClient ? updatedAppointment.provider_id : updatedAppointment.client_id;
+        const title = isClient ? 'Solicitud de reprogramación' : 'Solicitud de reprogramación del proveedor';
+        const message = isClient
+          ? `El cliente solicita mover la cita a ${humanDate}.`
+          : `El proveedor propone ${humanDate} como nuevo horario.`;
+        try {
+          await PushService.notifyUser(
+            Number(targetUserId),
+            title,
+            message,
+            { type: 'appointment', appointment_id: String(appointmentId), status: 'pending_reschedule' }
+          );
+        } catch {}
+      }
+
+      return res.json({ success: true, appointment: updatedAppointment });
+    } catch (err: any) {
+      Logger.error(MODULE, '[RESCHEDULE] Error solicitando reprogramación', err);
+      if (err?.code === 'SLOT_TAKEN') {
+        return res.status(409).json({ success: false, error: 'SLOT_TAKEN' });
+      }
+      return res.status(500).json({ success: false, error: 'Error al procesar reprogramación' });
+    }
+  });
+
+  // POST /appointments/:id/reschedule/decision - aceptar o rechazar reprogramación
+  router.post('/appointments/:id/reschedule/decision', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const appointmentId = Number(req.params.id);
+      const { decision, reason } = req.body || {};
+
+      if (!Number.isFinite(appointmentId)) {
+        return res.status(400).json({ success: false, error: 'id inválido' });
+      }
+
+      if (!['accept', 'reject'].includes(String(decision))) {
+        return res.status(400).json({ success: false, error: 'decision inválida' });
+      }
+
+      const pool = DatabaseConnection.getPool();
+      const [[appointment]]: any = await pool.query(
+        `SELECT *
+           FROM appointments
+          WHERE id = ?
+          LIMIT 1`,
+        [appointmentId]
+      );
+
+      if (!appointment) {
+        return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      }
+
+      if (String(appointment.status) !== 'pending_reschedule' || String(appointment.reschedule_requested_by) === 'none') {
+        return res.status(409).json({ success: false, error: 'No hay reprogramación pendiente' });
+      }
+
+      const requestedBy = String(appointment.reschedule_requested_by);
+      const isClient = Number(appointment.client_id) === Number(user.id);
+      const isProvider = Number(appointment.provider_id) === Number(user.id);
+
+      if (requestedBy === 'client' && !isProvider) {
+        return res.status(403).json({ success: false, error: 'Solo el proveedor puede responder esta solicitud' });
+      }
+      if (requestedBy === 'provider' && !isClient) {
+        return res.status(403).json({ success: false, error: 'Solo el cliente puede responder esta solicitud' });
+      }
+
+      const connection = await pool.getConnection();
+      let updatedAppointment: any = null;
+      const rejectionReason = typeof reason === 'string' && reason.trim().length > 0 ? reason.trim().slice(0, 250) : null;
+
+      try {
+        await connection.beginTransaction();
+
+        if (decision === 'accept') {
+          const targetDate = String(appointment.reschedule_target_date || '').slice(0, 10);
+          const targetStart = String(appointment.reschedule_target_start_time || '').slice(0, 5);
+          const targetEnd = String(appointment.reschedule_target_end_time || '').slice(0, 5);
+
+          if (!targetDate || !targetStart || !targetEnd) {
+            await connection.rollback();
+            return res.status(400).json({ success: false, error: 'Solicitud incompleta: faltan datos de horario' });
+          }
+
+          await ensureSlotAvailabilityForReschedule(connection, Number(appointment.provider_id), appointmentId, targetDate, targetStart, targetEnd);
+
+          const nextStatus = determineStatusAfterRescheduleDecision(String(appointment.reschedule_previous_status || appointment.status), requestedBy);
+
+          await connection.execute(
+            `UPDATE appointments
+                SET date = ?, start_time = ?, end_time = ?, status = ?, updated_at = NOW(),
+                    reschedule_requested_by = 'none',
+                    reschedule_requested_at = NULL,
+                    reschedule_target_date = NULL,
+                    reschedule_target_start_time = NULL,
+                    reschedule_target_end_time = NULL,
+                    reschedule_reason = NULL,
+                    reschedule_previous_status = NULL
+              WHERE id = ?`,
+            [targetDate, targetStart, targetEnd, nextStatus, appointmentId]
+          );
+        } else {
+          if (requestedBy === 'provider') {
+            await connection.execute(
+              `UPDATE appointments
+                  SET status = 'cancelled',
+                      cancelled_by = 'provider',
+                      cancellation_reason = ?,
+                      cancelled_at = NOW(),
+                      reschedule_requested_by = 'none',
+                      reschedule_requested_at = NULL,
+                      reschedule_target_date = NULL,
+                      reschedule_target_start_time = NULL,
+                      reschedule_target_end_time = NULL,
+                      reschedule_previous_status = NULL,
+                      reschedule_reason = NULL,
+                      updated_at = NOW()
+                WHERE id = ?`,
+              [rejectionReason || 'Cliente rechazó la reprogramación propuesta.', appointmentId]
+            );
+          } else {
+            const previousStatus = String(appointment.reschedule_previous_status || appointment.status || 'scheduled');
+            await connection.execute(
+              `UPDATE appointments
+                  SET status = ?, 
+                      reschedule_requested_by = 'none',
+                      reschedule_requested_at = NULL,
+                      reschedule_target_date = NULL,
+                      reschedule_target_start_time = NULL,
+                      reschedule_target_end_time = NULL,
+                      reschedule_previous_status = NULL,
+                      reschedule_reason = NULL,
+                      updated_at = NOW()
+                WHERE id = ?`,
+              [previousStatus, appointmentId]
+            );
+          }
+        }
+
+        const [updatedRows]: any = await connection.query(
+          `SELECT a.*,
+                  (SELECT name FROM users WHERE id = a.provider_id) AS provider_name,
+                  (SELECT name FROM users WHERE id = a.client_id) AS client_name
+             FROM appointments a
+            WHERE a.id = ?
+            LIMIT 1`,
+          [appointmentId]
+        );
+        updatedAppointment = Array.isArray(updatedRows) ? updatedRows[0] : null;
+
+        await connection.commit();
+      } catch (error: any) {
+        try { await connection.rollback(); } catch {}
+        if (error?.code === 'SLOT_TAKEN') {
+          return res.status(409).json({ success: false, error: 'SLOT_TAKEN' });
+        }
+        throw error;
+      } finally {
+        connection.release();
+      }
+
+      if (!updatedAppointment) {
+        return res.status(500).json({ success: false, error: 'No se pudo actualizar la cita' });
+      }
+
+      try { emitToUser(updatedAppointment.provider_id, 'appointment:updated', updatedAppointment); } catch {}
+      try { emitToUser(updatedAppointment.client_id, 'appointment:updated', updatedAppointment); } catch {}
+
+      const counterpartyId = requestedBy === 'client' ? updatedAppointment.client_id : updatedAppointment.provider_id;
+      const decisionActorText = requestedBy === 'client' ? 'El proveedor' : 'El cliente';
+
+      try {
+        if (decision === 'accept') {
+          await PushService.notifyUser(
+            Number(counterpartyId),
+            'Reprogramación confirmada',
+            `${decisionActorText} aceptó la reprogramación.`,
+            { type: 'appointment', appointment_id: String(appointmentId), status: updatedAppointment.status }
+          );
+        } else {
+          await PushService.notifyUser(
+            Number(counterpartyId),
+            'Reprogramación rechazada',
+            `${decisionActorText} rechazó la reprogramación.`,
+            { type: 'appointment', appointment_id: String(appointmentId), status: updatedAppointment.status }
+          );
+        }
+      } catch {}
+
+      return res.json({ success: true, appointment: updatedAppointment });
+    } catch (err: any) {
+      Logger.error(MODULE, '[RESCHEDULE] Error resolviendo solicitud', err);
+      if (err?.code === 'SLOT_TAKEN') {
+        return res.status(409).json({ success: false, error: 'SLOT_TAKEN' });
+      }
+      return res.status(500).json({ success: false, error: 'Error al procesar la decisión' });
+    }
+  });
+
   // POST /appointments/:id/cash/collect - registrar cobro en efectivo
   router.post('/appointments/:id/cash/collect', authenticateToken, cashClosureGate, async (req: Request, res: Response) => {
     try {
@@ -1567,6 +2083,56 @@ function buildRouter(): Router {
     return (hh * 60) + mm;
   }
 
+  async function ensureSlotAvailabilityForReschedule(
+    db: any,
+    providerId: number,
+    appointmentId: number,
+    date: string,
+    startTime: string,
+    endTime: string
+  ): Promise<void> {
+    const [conflict]: any = await db.query(
+      `SELECT id
+         FROM appointments
+        WHERE provider_id = ?
+          AND \`date\` = ?
+          AND id <> ?
+          AND status IN ('scheduled','pending','pending_reschedule','confirmed','in_progress')
+          AND NOT (\`end_time\` <= ? OR \`start_time\` >= ?)
+        LIMIT 1`,
+      [providerId, date, appointmentId, startTime, endTime]
+    );
+
+    if (Array.isArray(conflict) && conflict.length > 0) {
+      const error: any = new Error('SLOT_TAKEN');
+      error.code = 'SLOT_TAKEN';
+      throw error;
+    }
+  }
+
+  function determineStatusAfterInstantReschedule(previousStatus: string): string {
+    if (previousStatus === 'confirmed') return 'confirmed';
+    if (previousStatus === 'pending_reschedule') return 'scheduled';
+    if (previousStatus === 'cancelled' || previousStatus === 'expired') return 'scheduled';
+    return previousStatus || 'scheduled';
+  }
+
+  function determineStatusAfterRescheduleDecision(previousStatus: string, requestedBy: 'client'|'provider'): string {
+    if (requestedBy === 'provider') {
+      return 'confirmed';
+    }
+    if (previousStatus === 'confirmed') {
+      return 'confirmed';
+    }
+    if (previousStatus === 'pending_reschedule') {
+      return 'scheduled';
+    }
+    if (previousStatus === 'cancelled' || previousStatus === 'expired') {
+      return 'scheduled';
+    }
+    return previousStatus || 'scheduled';
+  }
+
   function rangesOverlap(startA: number, endA: number, startB: number, endB: number): boolean {
     return Math.max(startA, startB) < Math.min(endA, endB);
   }
@@ -2017,6 +2583,43 @@ function buildRouter(): Router {
         success: false, 
         error: 'Error al listar citas pagadas' 
       });
+    }
+  });
+
+  /**
+   * GET /provider/appointments/reschedule-requests
+   * Lista solicitudes de reprogramación iniciadas por clientes (<24h) pendientes de respuesta del proveedor
+   */
+  router.get('/provider/appointments/reschedule-requests', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const providerId = Number(user.id);
+      if (!providerId) {
+        return res.status(401).json({ success: false, error: 'No autorizado' });
+      }
+
+      const pool = DatabaseConnection.getPool();
+      const [rows] = await pool.query(
+        `SELECT a.*,
+                u.name AS client_name,
+                u.email AS client_email,
+                ps.name AS service_name,
+                ps.duration_minutes,
+                (SELECT phone FROM client_profiles WHERE client_id = a.client_id LIMIT 1) AS client_phone
+           FROM appointments a
+           LEFT JOIN users u ON u.id = a.client_id
+           LEFT JOIN provider_services ps ON ps.id = a.service_id
+          WHERE a.provider_id = ?
+            AND a.status = 'pending_reschedule'
+            AND a.reschedule_requested_by = 'client'
+          ORDER BY a.reschedule_requested_at DESC`,
+        [providerId]
+      );
+
+      return res.json({ success: true, appointments: rows });
+    } catch (error) {
+      Logger.error(MODULE, '[RESCHEDULE] Error listando solicitudes para proveedor', error as any);
+      return res.status(500).json({ success: false, error: 'Error al listar solicitudes de reprogramación' });
     }
   });
 
