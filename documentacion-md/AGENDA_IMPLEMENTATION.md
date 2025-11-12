@@ -197,6 +197,11 @@ Frontend: mapear a toasts claros; en 409 sugerir seleccionar otro horario.
     - `GET /provider/clients/:clientId/reviewable-appointments` → citas completadas sin reseña (máx 50).
     - Agregados en `client_profiles`: `client_rating_average`, `client_review_count`.
     - `GET /appointments/by-day` ahora expone `client_review_id` para ocultar CTA “Calificar” cuando corresponda.
+  - ✅ **Nuevo:** Concurrencia First-to-Commit:
+    - Índice único `uq_appointments_provider_slot_active` + columna generada `slot_active` para bloquear slots activos.
+    - Inserción de citas envuelta en transacción con `SELECT ... FOR UPDATE`; colisiones devuelven `409 SLOT_TAKEN`.
+    - Logs estructurados `[SLOT_TAKEN]` con `context` = `preflight | transaction_lock | constraint_violation`.
+    - Script de regresión: `npm run test:appointments` dispara dos POST paralelos y valida que solo persista una cita.
 
 - Frontend
   - AppointmentsService: REST + sockets (falta exponer listClientAppointments/updateStatus en servicio; en curso).
@@ -208,6 +213,31 @@ Frontend: mapear a toasts claros; en 409 sugerir seleccionar otro horario.
     - Botón “Calificar cliente” en `DayDetailComponent` cuando la cita está `completed` y sin reseña.
     - `DashAgendaComponent` abre `ReviewModalComponent` reutilizable (texto configurable).
     - Perfil del cliente (`/client/solicitante/:id`) muestra promedio, contador, reseñas recientes y listado de citas calificables.
+
+### Runbook: monitoreo de colisiones `SLOT_TAKEN`
+1. **Detección**: filtrar logs por `[SLOT_TAKEN]` y revisar campo `context`.
+2. **Métrica rápida** (log aggregator / SQL proxy):
+   ```sql
+   SELECT JSON_EXTRACT(payload, '$.provider_id') AS provider_id,
+          JSON_EXTRACT(payload, '$.date')       AS date,
+          COUNT(*)                              AS collisions
+     FROM log_events
+    WHERE message LIKE '%SLOT_TAKEN%'
+      AND created_at >= NOW() - INTERVAL 1 DAY
+    GROUP BY 1, 2
+    ORDER BY collisions DESC;
+   ```
+   *(Actualizar el nombre de la tabla según la herramienta de logging).*
+3. **Verificación**: abrir agenda del proveedor, revisar disponibilidad publicada y bloqueos manuales.
+4. **Respuesta a soporte**: explicar que otro cliente tomó el mismo horario instantes antes; sugerir horarios alternativos (el frontend ya los ofrece en la UI).
+5. **Escalamiento**: si el % de colisiones diarias supera 3% de intentos de booking, escalar a Producto para analizar UX de disponibilidad.
+
+### Comunicación de rollout
+- Enviar summary a soporte/producto:
+  - Nuevo código `SLOT_TAKEN` con mensaje para clientes.
+  - Ubicación del log estructurado y comando `npm run test:appointments`.
+  - Recordatorio de que el booking panel recomienda alternativas automáticamente.
+- Actualizar FAQ interna “No puedo reservar un horario” con pasos para revisar logs y disponibilidad del proveedor.
 
 ## Próximos pasos (acciones concretas)
 

@@ -20,6 +20,16 @@ const MODULE = 'APPOINTMENTS';
 
 let ensureCashSchemaPromise: Promise<void> | null = null;
 
+type SlotCollisionContext = 'preflight' | 'transaction_lock' | 'constraint_violation';
+
+function logSlotCollision(context: SlotCollisionContext, payload: Record<string, any>): void {
+  Logger.warn(MODULE, '[SLOT_TAKEN] Colisión de slot detectada', {
+    context,
+    ...payload,
+    timestamp: new Date().toISOString()
+  });
+}
+
 async function ensureCashSchema(): Promise<void> {
   if (ensureCashSchemaPromise) {
     return ensureCashSchemaPromise;
@@ -249,12 +259,24 @@ function buildRouter(): Router {
       const [over] = await pool.query(
         `SELECT id FROM appointments
          WHERE provider_id = ? AND \`date\` = ?
+           AND status IN ('scheduled','pending','confirmed','in_progress')
            AND NOT (\`end_time\` <= ? OR \`start_time\` >= ?)
          LIMIT 1`,
         [provider_id, date, normalizedStart, normalizedEnd]
       );
-      if ((over as any[]).length > 0) {
-        return res.status(409).json({ success: false, error: 'Horario no disponible (solape)' });
+      if (Array.isArray(over) && over.length > 0) {
+        logSlotCollision('preflight', {
+          provider_id,
+          client_id,
+          service_id,
+          date,
+          start_time: normalizedStart
+        });
+        return res.status(409).json({
+          success: false,
+          error: 'SLOT_TAKEN',
+          message: 'El proveedor ya tiene una cita en ese horario.'
+        });
       }
       try {
         const targetDate = new Date(`${date}T00:00:00`);
@@ -266,23 +288,81 @@ function buildRouter(): Router {
         throw limitError;
       }
 
-      // Insertar cita
-      const [ins] = await pool.execute(
-        `INSERT INTO appointments (provider_id, client_id, service_id, \`date\`, \`start_time\`, \`end_time\`, price, status, notes, client_location)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?)` ,
-        [
-          provider_id,
-          client_id,
-          service_id,
-          date,
-          normalizedStart,
-          normalizedEnd,
-          service.price ?? 0,
-          notes || null,
-          locationLabel
-        ]
-      );
-      const id = (ins as any).insertId;
+      const connection = await pool.getConnection();
+      let id: number | null = null;
+      try {
+        await connection.beginTransaction();
+
+        const [locked] = await connection.query(
+          `SELECT id FROM appointments
+           WHERE provider_id = ? AND \`date\` = ?
+             AND status IN ('scheduled','pending','confirmed','in_progress')
+             AND NOT (\`end_time\` <= ? OR \`start_time\` >= ?)
+           LIMIT 1
+           FOR UPDATE`,
+          [provider_id, date, normalizedStart, normalizedEnd]
+        );
+
+        if (Array.isArray(locked) && locked.length > 0) {
+          await connection.rollback();
+          logSlotCollision('transaction_lock', {
+            provider_id,
+            client_id,
+            service_id,
+            date,
+            start_time: normalizedStart
+          });
+          return res.status(409).json({
+            success: false,
+            error: 'SLOT_TAKEN',
+            message: 'El proveedor ya tiene una cita en ese horario.'
+          });
+        }
+
+        const [ins] = await connection.execute(
+          `INSERT INTO appointments (provider_id, client_id, service_id, \`date\`, \`start_time\`, \`end_time\`, price, status, notes, client_location)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?)` ,
+          [
+            provider_id,
+            client_id,
+            service_id,
+            date,
+            normalizedStart,
+            normalizedEnd,
+            service.price ?? 0,
+            notes || null,
+            locationLabel
+          ]
+        );
+        id = (ins as any).insertId;
+
+        await connection.commit();
+      } catch (dbError: any) {
+        try {
+          await connection.rollback();
+        } catch {}
+        if (dbError?.code === 'ER_DUP_ENTRY') {
+          logSlotCollision('constraint_violation', {
+            provider_id,
+            client_id,
+            service_id,
+            date,
+            start_time: normalizedStart
+          });
+          return res.status(409).json({
+            success: false,
+            error: 'SLOT_TAKEN',
+            message: 'El proveedor ya tiene una cita en ese horario.'
+          });
+        }
+        throw dbError;
+      } finally {
+        connection.release();
+      }
+
+      if (id === null) {
+        throw new Error('No se pudo obtener el ID de la cita creada.');
+      }
       const [row] = await pool.query(
         `SELECT a.*,
                 u.name AS client_name,
