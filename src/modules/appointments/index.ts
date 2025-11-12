@@ -514,7 +514,8 @@ function buildRouter(): Router {
                 cp.commune AS client_commune,
                 cp.region AS client_region,
                 cp.phone AS client_phone,
-                COALESCE(NULLIF(a.client_location, ''), TRIM(CONCAT_WS(', ', cp.address, cp.commune, cp.region))) AS client_location_label
+                COALESCE(NULLIF(a.client_location, ''), TRIM(CONCAT_WS(', ', cp.address, cp.commune, cp.region))) AS client_location_label,
+                cp.profile_photo_url AS client_avatar_url
          FROM appointments a
          LEFT JOIN users u ON u.id = a.client_id
          LEFT JOIN provider_services ps ON ps.id = a.service_id
@@ -525,7 +526,12 @@ function buildRouter(): Router {
       );
       Logger.info(MODULE, `📅 Citas retornadas: ${(rows as any[]).length}`, { sample: (rows as any[])[0] });
       res.setHeader('Cache-Control', 'no-store');
-      return res.json({ success: true, appointments: rows });
+      const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
+      const appointments = (rows as any[]).map(r => ({
+        ...r,
+        client_avatar_url: r.client_avatar_url ? `${publicBase}${r.client_avatar_url}` : null
+      }));
+      return res.json({ success: true, appointments });
     } catch (err) {
       Logger.error(MODULE, 'Error listing appointments by day', err as any);
       return res.status(500).json({ success: false, error: 'Error al listar citas del día' });
@@ -616,7 +622,8 @@ function buildRouter(): Router {
                 cp.commune AS client_commune,
                 cp.region AS client_region,
                 cp.phone AS client_phone,
-                COALESCE(NULLIF(a.client_location, ''), TRIM(CONCAT_WS(', ', cp.address, cp.commune, cp.region))) AS client_location_label
+                COALESCE(NULLIF(a.client_location, ''), TRIM(CONCAT_WS(', ', cp.address, cp.commune, cp.region))) AS client_location_label,
+                cp.profile_photo_url AS client_avatar_url
          FROM appointments a
          LEFT JOIN users u ON u.id = a.client_id
          LEFT JOIN users up ON up.id = a.provider_id
@@ -630,7 +637,12 @@ function buildRouter(): Router {
         return res.status(404).json({ success: false, error: 'Cita no encontrada tras actualizar' });
       }
 
-      const appointment = (row as any[])[0];
+      const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
+      const appointmentRaw = (row as any[])[0];
+      const appointment = {
+        ...appointmentRaw,
+        client_avatar_url: appointmentRaw?.client_avatar_url ? `${publicBase}${appointmentRaw.client_avatar_url}` : null
+      };
 
       try { emitToUser(appointment.provider_id, 'appointment:updated', appointment); } catch {}
       try { emitToUser(appointment.client_id, 'appointment:updated', appointment); } catch {}

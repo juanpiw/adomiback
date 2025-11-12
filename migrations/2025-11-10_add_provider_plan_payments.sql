@@ -40,3 +40,4 @@ ALTER TABLE subscriptions
 
 COMMIT;
 
+
