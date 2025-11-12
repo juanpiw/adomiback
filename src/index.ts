@@ -5,6 +5,7 @@ import { setupPaymentsWebhooks } from './modules/payments/webhooks';
 import { buildAppointmentCheckoutRoutes } from './modules/payments/routes/appointment-checkout.routes';
 import { setupReviewsModule } from './modules/reviews/index';
 import { setupFavoritesModule } from './modules/favorites/index';
+import { setupWalletModule } from './modules/wallet';
 
 console.log('='.repeat(80));
 console.log('🚀 ADOMI BACKEND - VERSIÓN CON MÓDULOS DE REVIEWS Y FAVORITES');
@@ -49,6 +50,9 @@ setupAppointmentsModule(app);
 console.log('[SERVER] 💳 Configurando módulo de payments...');
 setupPaymentsWebhooks(app);
 app.use('/', buildAppointmentCheckoutRoutes());
+
+console.log('[SERVER] 💼 Configurando módulo de wallet...');
+setupWalletModule(app);
 
 console.log('[SERVER] ⭐ Configurando módulo de reviews...');
 setupReviewsModule(app);

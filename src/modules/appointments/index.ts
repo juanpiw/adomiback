@@ -21,6 +21,7 @@ const MODULE = 'APPOINTMENTS';
 
 let ensureCashSchemaPromise: Promise<void> | null = null;
 let ensureRescheduleSchemaPromise: Promise<void> | null = null;
+let ensureProviderMetricsSchemaPromise: Promise<void> | null = null;
 
 type SlotCollisionContext = 'preflight' | 'transaction_lock' | 'constraint_violation';
 
@@ -253,11 +254,53 @@ async function ensureRescheduleSchema(): Promise<void> {
   return ensureRescheduleSchemaPromise;
 }
 
+async function ensureProviderMetricsSchema(): Promise<void> {
+  if (ensureProviderMetricsSchemaPromise) {
+    return ensureProviderMetricsSchemaPromise;
+  }
+
+  ensureProviderMetricsSchemaPromise = (async () => {
+    try {
+      const pool = DatabaseConnection.getPool();
+      const columnDefinitions: Array<{ name: string; sql: string }> = [
+        {
+          name: 'cancellation_count',
+          sql: 'ALTER TABLE provider_profiles ADD COLUMN cancellation_count INT UNSIGNED NOT NULL DEFAULT 0'
+        },
+        {
+          name: 'cancellation_rate',
+          sql: 'ALTER TABLE provider_profiles ADD COLUMN cancellation_rate DECIMAL(5,2) NOT NULL DEFAULT 0'
+        }
+      ];
+
+      for (const column of columnDefinitions) {
+        const [[{ exists }]]: any = await pool.query(
+          `SELECT COUNT(*) AS exists
+             FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'provider_profiles'
+              AND COLUMN_NAME = ?`,
+          [column.name]
+        );
+        if (!exists) {
+          await pool.query(column.sql);
+          Logger.info(MODULE, '[PROVIDER_METRICS] Columna añadida', { column: column.name });
+        }
+      }
+    } catch (error) {
+      Logger.error(MODULE, '[PROVIDER_METRICS] Error garantizando columnas', error);
+    }
+  })();
+
+  return ensureProviderMetricsSchemaPromise;
+}
+
 function buildRouter(): Router {
   const router = Router();
 
   void ensureCashSchema();
   void ensureRescheduleSchema();
+  void ensureProviderMetricsSchema();
 
   // POST /appointments - crear cita
   router.post('/appointments', authenticateToken, async (req: Request, res: Response) => {
@@ -1512,6 +1555,7 @@ function buildRouter(): Router {
                 WHERE id = ?`,
               [rejectionReason || 'Cliente rechazó la reprogramación propuesta.', appointmentId]
             );
+            await applyCancellationConsequences(connection, appointment, 'provider', rejectionReason);
           } else {
             const previousStatus = String(appointment.reschedule_previous_status || appointment.status || 'scheduled');
             await connection.execute(
@@ -2193,6 +2237,8 @@ function buildRouter(): Router {
         description: `Reembolso por cancelación del proveedor (cita #${appointment.id})`,
         addToTotalEarned: false
       });
+
+      await incrementProviderCancellation(connection, Number(appointment.provider_id));
     }
   }
 
@@ -2263,6 +2309,33 @@ function buildRouter(): Router {
        VALUES (?, 0, 0, 0, 0, 'CLP')
        ON DUPLICATE KEY UPDATE user_id = user_id`,
       [userId]
+    );
+  }
+
+  async function incrementProviderCancellation(connection: PoolConnection, providerId: number): Promise<void> {
+    if (!providerId) {
+      return;
+    }
+
+    const [[summary]]: any = await connection.query(
+      `SELECT 
+          SUM(CASE WHEN status = 'cancelled' AND cancelled_by = 'provider' THEN 1 ELSE 0 END) AS cancellations,
+          COUNT(*) AS total
+         FROM appointments
+        WHERE provider_id = ?`,
+      [providerId]
+    );
+
+    const cancellations = Number(summary?.cancellations || 0);
+    const total = Number(summary?.total || 0);
+    const rate = total > 0 ? Math.round((cancellations / total) * 10000) / 100 : 0;
+
+    await connection.execute(
+      `UPDATE provider_profiles
+          SET cancellation_count = ?,
+              cancellation_rate = ?
+        WHERE provider_id = ?`,
+      [cancellations, rate, providerId]
     );
   }
 
