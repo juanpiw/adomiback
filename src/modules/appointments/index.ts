@@ -1426,7 +1426,11 @@ function buildRouter(): Router {
         return res.status(409).json({ success: false, error: 'No hay reprogramación pendiente' });
       }
 
-      const requestedBy = String(appointment.reschedule_requested_by);
+      const requestedByRaw = String(appointment.reschedule_requested_by);
+      if (requestedByRaw !== 'client' && requestedByRaw !== 'provider') {
+        return res.status(409).json({ success: false, error: 'Origen de reprogramación inválido' });
+      }
+      const requestedBy = requestedByRaw as 'client' | 'provider';
       const isClient = Number(appointment.client_id) === Number(user.id);
       const isProvider = Number(appointment.provider_id) === Number(user.id);
 
