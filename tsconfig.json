@@ -31,6 +31,7 @@
     "src/*-old.ts",
     "src/test-basic.ts",
     "src/debug-memory.ts",
+    "src/tests/**/*",
     "node_modules"
   ]
 }
