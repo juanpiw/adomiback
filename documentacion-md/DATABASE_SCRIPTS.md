@@ -312,7 +312,58 @@ CREATE TABLE terms_acceptances (
 );
 ```
 
-### **19. Tabla `reviews` (Calificaciones y Reseñas)**
+### **19. Tabla `client_reviews` (Calificaciones de Proveedores hacia Clientes)**
+```sql
+-- ✅ EJECUTADO
+CREATE TABLE client_reviews (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    appointment_id INT NOT NULL,
+    client_id INT NOT NULL,
+    provider_id INT NOT NULL,
+    rating TINYINT UNSIGNED NOT NULL,
+    comment TEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_client_reviews_appointment FOREIGN KEY (appointment_id) REFERENCES appointments(id) ON DELETE CASCADE,
+    CONSTRAINT fk_client_reviews_client FOREIGN KEY (client_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_client_reviews_provider FOREIGN KEY (provider_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT uq_client_reviews_appointment_provider UNIQUE (appointment_id, provider_id),
+    CONSTRAINT chk_client_reviews_rating CHECK (rating BETWEEN 1 AND 5),
+    INDEX idx_client_reviews_client (client_id),
+    INDEX idx_client_reviews_provider (provider_id)
+);
+```
+
+**Descripción:** Permite que el proveedor deje retroalimentación sobre el cliente una vez completada la cita. Sirve para construir reputación de clientes y detectar comportamientos de riesgo.
+
+**Campos Clave:**
+- `appointment_id`: Cita asociada a la reseña (1:1 por proveedor).
+- `client_id`: Cliente evaluado.
+- `provider_id`: Proveedor que emite la evaluación.
+- `rating`: Valor de 1 a 5 estrellas.
+- `comment`: Texto opcional con detalles de la experiencia.
+
+**Reglas:**
+- Una reseña por proveedor y cita (`UNIQUE (appointment_id, provider_id)`).
+- Eliminación en cascada cuando se borra la cita, cliente o proveedor.
+- Constraint `CHECK` para asegurar ratings entre 1 y 5.
+
+### **20. Columnas agregadas a `client_profiles`**
+```sql
+-- ✅ EJECUTADO
+ALTER TABLE client_profiles
+  ADD COLUMN client_rating_average DECIMAL(3,2) NULL DEFAULT NULL,
+  ADD COLUMN client_review_count INT NOT NULL DEFAULT 0;
+
+UPDATE client_profiles
+   SET client_rating_average = 0,
+       client_review_count = 0
+ WHERE client_rating_average IS NULL;
+```
+
+**Objetivo:** Guardar agregados de reputación del cliente para lecturas rápidas desde el dashboard del proveedor. Inicialmente todos los perfiles se normalizan en 0 reseñas con promedio 0.
+
+### **21. Tabla `reviews` (Calificaciones y Reseñas de Clientes hacia Proveedores)**
 ```sql
 -- ✅ EJECUTADO
 CREATE TABLE reviews (
@@ -329,7 +380,7 @@ CREATE TABLE reviews (
 );
 ```
 
-### **20. Tabla `bookings` (Sistema de Reservas/Citas)**
+### **22. Tabla `bookings` (Sistema de Reservas/Citas)**
 ```sql
 -- ✅ EJECUTADO
 CREATE TABLE bookings (

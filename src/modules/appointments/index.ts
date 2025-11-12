@@ -515,7 +515,8 @@ function buildRouter(): Router {
                 cp.region AS client_region,
                 cp.phone AS client_phone,
                 COALESCE(NULLIF(a.client_location, ''), TRIM(CONCAT_WS(', ', cp.address, cp.commune, cp.region))) AS client_location_label,
-                cp.profile_photo_url AS client_avatar_url
+                cp.profile_photo_url AS client_avatar_url,
+                (SELECT id FROM client_reviews WHERE appointment_id = a.id AND provider_id = a.provider_id LIMIT 1) AS client_review_id
          FROM appointments a
          LEFT JOIN users u ON u.id = a.client_id
          LEFT JOIN provider_services ps ON ps.id = a.service_id
@@ -623,7 +624,8 @@ function buildRouter(): Router {
                 cp.region AS client_region,
                 cp.phone AS client_phone,
                 COALESCE(NULLIF(a.client_location, ''), TRIM(CONCAT_WS(', ', cp.address, cp.commune, cp.region))) AS client_location_label,
-                cp.profile_photo_url AS client_avatar_url
+                cp.profile_photo_url AS client_avatar_url,
+                (SELECT id FROM client_reviews WHERE appointment_id = a.id AND provider_id = a.provider_id LIMIT 1) AS client_review_id
          FROM appointments a
          LEFT JOIN users u ON u.id = a.client_id
          LEFT JOIN users up ON up.id = a.provider_id

@@ -1,9 +1,78 @@
 import { Express, Router, Request, Response } from 'express';
 import DatabaseConnection from '../../shared/database/connection';
-import { authenticateToken } from '../../shared/middleware/auth.middleware';
+import { authenticateToken, requireRole, AuthUser } from '../../shared/middleware/auth.middleware';
 import { Logger } from '../../shared/utils/logger.util';
 
 const MODULE = 'REVIEWS';
+
+type ClientReviewSummary = {
+  reviewCount: number;
+  reviewAverage: number;
+};
+
+async function getClientReviewSummary(clientId: number): Promise<ClientReviewSummary> {
+  const pool = DatabaseConnection.getPool();
+  const [[agg]]: any = await pool.query(
+    `SELECT 
+        COUNT(*) AS review_count,
+        AVG(rating) AS review_average
+     FROM client_reviews
+     WHERE client_id = ?`,
+    [clientId]
+  );
+
+  const reviewCount = Number(agg?.review_count || 0);
+  const averageRaw = agg?.review_average;
+  const reviewAverage = reviewCount > 0 ? Number((Number(averageRaw) || 0).toFixed(2)) : 0;
+
+  return { reviewCount, reviewAverage };
+}
+
+async function updateClientReviewAggregates(clientId: number): Promise<ClientReviewSummary> {
+  const summary = await getClientReviewSummary(clientId);
+  const pool = DatabaseConnection.getPool();
+
+  const [updateResult]: any = await pool.execute(
+    `UPDATE client_profiles 
+        SET client_review_count = ?, 
+            client_rating_average = ? 
+      WHERE client_id = ?`,
+    [summary.reviewCount, summary.reviewAverage, clientId]
+  );
+
+  if (updateResult?.affectedRows === 0) {
+    try {
+      const [[userRow]]: any = await pool.query(
+        'SELECT name FROM users WHERE id = ? LIMIT 1',
+        [clientId]
+      );
+      const fallbackName = (userRow?.name && String(userRow.name).trim()) || 'Cliente Adomi';
+      await pool.execute(
+        `INSERT INTO client_profiles (
+            client_id,
+            full_name,
+            phone,
+            profile_photo_url,
+            address,
+            commune,
+            region,
+            preferred_language,
+            notes,
+            client_rating_average,
+            client_review_count
+         ) VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, 'es', NULL, ?, ?)
+         ON DUPLICATE KEY UPDATE 
+           client_rating_average = VALUES(client_rating_average),
+           client_review_count = VALUES(client_review_count)`,
+        [clientId, fallbackName, summary.reviewAverage, summary.reviewCount]
+      );
+    } catch (err) {
+      Logger.warn(MODULE, `No se pudo crear perfil básico para cliente ${clientId} al actualizar agregados`, err as any);
+    }
+  }
+
+  return summary;
+}
 
 function buildRouter(): Router {
   const router = Router();
@@ -94,6 +163,240 @@ function buildRouter(): Router {
     }
   });
 
+  // POST /provider/clients/:clientId/reviews – proveedor califica a un cliente
+  router.post(
+    '/provider/clients/:clientId/reviews',
+    authenticateToken,
+    requireRole('provider'),
+    async (req: Request, res: Response) => {
+      try {
+        const provider = (req as any).user as AuthUser;
+        const clientId = Number(req.params.clientId);
+        const { appointment_id, rating, comment } = req.body || {};
+
+        if (!Number.isInteger(clientId) || clientId <= 0) {
+          return res.status(400).json({ success: false, error: 'clientId inválido' });
+        }
+
+        const appointmentId = Number(appointment_id);
+        const ratingNumber = Number(rating);
+        if (!Number.isInteger(appointmentId) || appointmentId <= 0) {
+          return res.status(400).json({ success: false, error: 'appointment_id inválido' });
+        }
+        if (!Number.isFinite(ratingNumber) || ratingNumber < 1 || ratingNumber > 5) {
+          return res.status(400).json({ success: false, error: 'rating debe estar entre 1 y 5' });
+        }
+
+        const trimmedComment =
+          typeof comment === 'string' ? comment.trim().slice(0, 2000) : null;
+
+        const pool = DatabaseConnection.getPool();
+
+        const [appointmentRows]: any = await pool.query(
+          `SELECT id, client_id, provider_id, status 
+             FROM appointments 
+            WHERE id = ? 
+            LIMIT 1`,
+          [appointmentId]
+        );
+
+        if (!Array.isArray(appointmentRows) || appointmentRows.length === 0) {
+          return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+        }
+
+        const appointment = appointmentRows[0];
+        if (Number(appointment.provider_id) !== Number(provider.id)) {
+          return res.status(403).json({ success: false, error: 'No autorizado para calificar esta cita' });
+        }
+        if (Number(appointment.client_id) !== clientId) {
+          return res.status(400).json({ success: false, error: 'La cita no pertenece a este cliente' });
+        }
+        if (String(appointment.status) !== 'completed') {
+          return res.status(400).json({ success: false, error: 'La cita debe estar completada para calificar al cliente' });
+        }
+
+        const [existingRows]: any = await pool.query(
+          `SELECT id 
+             FROM client_reviews 
+            WHERE appointment_id = ? 
+              AND provider_id = ? 
+            LIMIT 1`,
+          [appointmentId, provider.id]
+        );
+
+        if (Array.isArray(existingRows) && existingRows.length > 0) {
+          return res.status(409).json({ success: false, error: 'Ya registraste una reseña para esta cita' });
+        }
+
+        const [insertResult]: any = await pool.execute(
+          `INSERT INTO client_reviews (appointment_id, client_id, provider_id, rating, comment)
+           VALUES (?, ?, ?, ?, ?)`,
+          [appointmentId, clientId, provider.id, ratingNumber, trimmedComment || null]
+        );
+
+        const reviewId = insertResult?.insertId ? Number(insertResult.insertId) : null;
+
+        const summary = await updateClientReviewAggregates(clientId);
+
+        Logger.info(
+          MODULE,
+          `Cliente ${clientId} calificado por proveedor ${provider.id} para cita ${appointmentId}`,
+          { providerId: provider.id, clientId, appointmentId, rating: ratingNumber }
+        );
+
+        return res.json({
+          success: true,
+          review: {
+            id: reviewId,
+            appointment_id: appointmentId,
+            client_id: clientId,
+            provider_id: provider.id,
+            rating: ratingNumber,
+            comment: trimmedComment
+          },
+          summary
+        });
+      } catch (err) {
+        console.error('[REVIEWS] error creating client review:', (err as any)?.message, (err as any)?.stack);
+        Logger.error(MODULE, 'Error creando reseña de cliente', err as any);
+        return res.status(500).json({ success: false, error: 'Error al crear reseña del cliente' });
+      }
+    }
+  );
+
+  // GET /provider/clients/:clientId/reviews – listar reseñas de un cliente (vista proveedor)
+  router.get(
+    '/provider/clients/:clientId/reviews',
+    authenticateToken,
+    requireRole('provider'),
+    async (req: Request, res: Response) => {
+      try {
+        const provider = (req as any).user as AuthUser;
+        const clientId = Number(req.params.clientId);
+        if (!Number.isInteger(clientId) || clientId <= 0) {
+          return res.status(400).json({ success: false, error: 'clientId inválido' });
+        }
+
+        const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+        const offset = Math.max(Number(req.query.offset) || 0, 0);
+
+        const pool = DatabaseConnection.getPool();
+
+        const [relationshipRows]: any = await pool.query(
+          `SELECT id FROM appointments 
+            WHERE provider_id = ? AND client_id = ?
+            LIMIT 1`,
+          [provider.id, clientId]
+        );
+
+        if (!Array.isArray(relationshipRows) || relationshipRows.length === 0) {
+          return res.status(404).json({ success: false, error: 'No se encontraron citas compartidas con este cliente' });
+        }
+
+        const summary = await getClientReviewSummary(clientId);
+
+        const [rows]: any = await pool.query(
+          `SELECT cr.id,
+                  cr.appointment_id,
+                  cr.provider_id,
+                  cr.rating,
+                  cr.comment,
+                  cr.created_at,
+                  u.name AS provider_name
+             FROM client_reviews cr
+             LEFT JOIN users u ON u.id = cr.provider_id
+            WHERE cr.client_id = ?
+            ORDER BY cr.created_at DESC
+            LIMIT ? OFFSET ?`,
+          [clientId, limit, offset]
+        );
+
+        const reviews = (rows as any[]).map((row) => ({
+          id: row.id,
+          appointment_id: row.appointment_id,
+          provider_id: row.provider_id,
+          provider_name: row.provider_name || null,
+          rating: Number(row.rating),
+          comment: row.comment || null,
+          created_at: row.created_at
+        }));
+
+        return res.json({
+          success: true,
+          summary: {
+            count: summary.reviewCount,
+            average: summary.reviewAverage
+          },
+          pagination: {
+            limit,
+            offset,
+            hasMore: offset + reviews.length < summary.reviewCount
+          },
+          reviews
+        });
+      } catch (err) {
+        console.error('[REVIEWS] error listing client reviews:', (err as any)?.message, (err as any)?.stack);
+        Logger.error(MODULE, 'Error listando reseñas de clientes', err as any);
+        return res.status(500).json({ success: false, error: 'Error al obtener reseñas del cliente' });
+      }
+    }
+  );
+
+  // GET /provider/clients/:clientId/reviewable-appointments – citas completadas sin reseña
+  router.get(
+    '/provider/clients/:clientId/reviewable-appointments',
+    authenticateToken,
+    requireRole('provider'),
+    async (req: Request, res: Response) => {
+      try {
+        const provider = (req as any).user as AuthUser;
+        const clientId = Number(req.params.clientId);
+        if (!Number.isInteger(clientId) || clientId <= 0) {
+          return res.status(400).json({ success: false, error: 'clientId inválido' });
+        }
+
+        const pool = DatabaseConnection.getPool();
+        const [rows]: any = await pool.query(
+          `SELECT a.id,
+                  a.date,
+                  a.start_time,
+                  a.end_time,
+                  a.status,
+                  ps.name AS service_name
+             FROM appointments a
+             LEFT JOIN provider_services ps ON ps.id = a.service_id
+            WHERE a.provider_id = ?
+              AND a.client_id = ?
+              AND a.status = 'completed'
+              AND NOT EXISTS (
+                  SELECT 1
+                    FROM client_reviews cr
+                   WHERE cr.appointment_id = a.id
+                     AND cr.provider_id = a.provider_id
+              )
+            ORDER BY a.date DESC, a.start_time DESC
+            LIMIT 50`,
+          [provider.id, clientId]
+        );
+
+        const appointments = (rows as any[]).map((row) => ({
+          id: row.id,
+          date: row.date,
+          start_time: row.start_time,
+          end_time: row.end_time,
+          status: row.status,
+          service_name: row.service_name || null
+        }));
+
+        return res.json({ success: true, appointments });
+      } catch (err) {
+        console.error('[REVIEWS] error listing reviewable appointments:', (err as any)?.message, (err as any)?.stack);
+        Logger.error(MODULE, 'Error listando citas calificables', err as any);
+        return res.status(500).json({ success: false, error: 'Error al obtener citas para calificar' });
+      }
+    }
+  );
+
   return router;
 }
 
@@ -111,6 +414,9 @@ export function setupReviewsModule(app: Express) {
   console.log('[REVIEWS] 🔗 Endpoints disponibles:');
   console.log('[REVIEWS]   - POST /reviews');
   console.log('[REVIEWS]   - GET /providers/:id/reviews');
+  console.log('[REVIEWS]   - POST /provider/clients/:clientId/reviews');
+  console.log('[REVIEWS]   - GET /provider/clients/:clientId/reviews');
+  console.log('[REVIEWS]   - GET /provider/clients/:clientId/reviewable-appointments');
   console.log('[REVIEWS] 📊 Módulo de reviews completamente inicializado');
   console.log('⭐'.repeat(20));
   console.log('⭐ MÓDULO DE REVIEWS LISTO ⭐');
@@ -119,3 +425,4 @@ export function setupReviewsModule(app: Express) {
   Logger.info(MODULE, 'Reviews routes mounted');
 }
 
+export { getClientReviewSummary };

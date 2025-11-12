@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import DatabaseConnection from '../../../shared/database/connection';
 import { authenticateToken, requireRole, AuthUser } from '../../../shared/middleware/auth.middleware';
+import { getClientReviewSummary } from '../../reviews';
 
 // Use shared authenticateToken which re-hydrates role from DB
 
@@ -288,6 +289,8 @@ export class ProviderRoutes {
              cp.notes,
              cp.verification_status,
              cp.is_verified,
+             cp.client_rating_average,
+             cp.client_review_count,
              cp.created_at AS profile_created_at,
              cp.updated_at AS profile_updated_at
            FROM users u
@@ -305,6 +308,32 @@ export class ProviderRoutes {
         const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
         const profilePhotoUrl = row.profile_photo_url ? `${publicBase}${row.profile_photo_url}` : null;
 
+        const summary = await getClientReviewSummary(clientId);
+
+        const [recentReviewRows]: any = await pool.query(
+          `SELECT cr.id,
+                  cr.appointment_id,
+                  cr.rating,
+                  cr.comment,
+                  cr.created_at,
+                  up.name AS provider_name
+             FROM client_reviews cr
+             LEFT JOIN users up ON up.id = cr.provider_id
+            WHERE cr.client_id = ?
+            ORDER BY cr.created_at DESC
+            LIMIT 5`,
+          [clientId]
+        );
+
+        const recentReviews = (recentReviewRows as any[]).map((review) => ({
+          id: review.id,
+          appointment_id: review.appointment_id,
+          rating: Number(review.rating),
+          comment: review.comment || null,
+          created_at: review.created_at,
+          provider_name: review.provider_name || null
+        }));
+
         return res.status(200).json({
           success: true,
           client: {
@@ -320,10 +349,23 @@ export class ProviderRoutes {
             notes: row.notes || '',
             verification_status: row.verification_status || 'none',
             is_verified: !!row.is_verified,
+            rating_average: row.client_rating_average !== null && row.client_rating_average !== undefined
+              ? Number(row.client_rating_average)
+              : summary.reviewAverage,
+            review_count: row.client_review_count !== null && row.client_review_count !== undefined
+              ? Number(row.client_review_count)
+              : summary.reviewCount,
             profile_photo_url: profilePhotoUrl,
             profile_created_at: row.profile_created_at,
             profile_updated_at: row.profile_updated_at,
             user_created_at: row.user_created_at
+          },
+          reviews: {
+            summary: {
+              count: summary.reviewCount,
+              average: summary.reviewAverage
+            },
+            recent: recentReviews
           }
         });
       } catch (error: any) {

@@ -191,6 +191,12 @@ Frontend: mapear a toasts claros; en 409 sugerir seleccionar otro horario.
   - Time-slots: `GET /availability/time-slots` (placeholder 09:00–18:00, resta citas del día, usa duración del servicio).
   - Respuestas enriquecidas: `client_name`/`provider_name`/`service_name` donde aplica.
   - Realtime citas: emite `appointment:created|updated|deleted` a `user:{provider_id}` y `user:{client_id}`.
+  - ✅ **Nuevo:** `client_reviews` para que el proveedor califique clientes:
+    - `POST /provider/clients/:clientId/reviews` (requiere cita `completed` sin reseña previa).
+    - `GET /provider/clients/:clientId/reviews` → `{ summary: { average, count }, reviews: [...] }`.
+    - `GET /provider/clients/:clientId/reviewable-appointments` → citas completadas sin reseña (máx 50).
+    - Agregados en `client_profiles`: `client_rating_average`, `client_review_count`.
+    - `GET /appointments/by-day` ahora expone `client_review_id` para ocultar CTA “Calificar” cuando corresponda.
 
 - Frontend
   - AppointmentsService: REST + sockets (falta exponer listClientAppointments/updateStatus en servicio; en curso).
@@ -198,6 +204,10 @@ Frontend: mapear a toasts claros; en 409 sugerir seleccionar otro horario.
   - Perfil del trabajador: consume slots y create; UI lista. (implementado)
   - Agenda proveedor: carga mes/día, escucha realtime y preselecciona hoy. (implementado). Falta botón Confirmar (UI) → PATCH status.
   - Mis Reservas: pendiente wiring para listar citas del cliente y mostrar estados “Esperando confirmación / Esperando pago (Pagar) / Pasadas / Canceladas”.
+  - ✅ **Nuevo:** Agenda y perfil del cliente integran reseñas de clientes:
+    - Botón “Calificar cliente” en `DayDetailComponent` cuando la cita está `completed` y sin reseña.
+    - `DashAgendaComponent` abre `ReviewModalComponent` reutilizable (texto configurable).
+    - Perfil del cliente (`/client/solicitante/:id`) muestra promedio, contador, reseñas recientes y listado de citas calificables.
 
 ## Próximos pasos (acciones concretas)
 
