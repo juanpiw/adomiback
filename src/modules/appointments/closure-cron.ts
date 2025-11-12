@@ -108,6 +108,141 @@ async function expireUnconfirmedAppointments(expirationHours: number) {
   }
 }
 
+async function cancelUnpaidAppointments(lastMinuteGraceMinutes: number, prepayHours: number) {
+  const pool = DatabaseConnection.getPool();
+  const [rows]: any = await pool.query(
+    `SELECT a.id,
+            a.provider_id,
+            a.client_id,
+            a.date,
+            a.start_time,
+            a.created_at,
+            a.updated_at,
+            ps.name AS service_name,
+            u.name AS client_name,
+            up.name AS provider_name
+       FROM appointments a
+       LEFT JOIN payments p ON p.appointment_id = a.id AND p.status = 'completed'
+       LEFT JOIN provider_services ps ON ps.id = a.service_id
+       LEFT JOIN users u ON u.id = a.client_id
+       LEFT JOIN users up ON up.id = a.provider_id
+      WHERE a.status = 'confirmed'
+        AND p.id IS NULL`
+  );
+
+  if (!(rows as any[]).length) {
+    return;
+  }
+
+  const now = new Date();
+
+  for (const row of rows as any[]) {
+    try {
+      const startDt = toDateTime(String(row.date), String(row.start_time));
+      if (!startDt) {
+        continue;
+      }
+
+      const hoursUntilStart = (startDt.getTime() - now.getTime()) / 3_600_000;
+      const referenceDate = row.updated_at ? new Date(row.updated_at) : new Date(row.created_at);
+      const leadTimeHours = (startDt.getTime() - referenceDate.getTime()) / 3_600_000;
+
+      let shouldCancel = false;
+      if (hoursUntilStart <= 0) {
+        shouldCancel = true;
+      } else if (leadTimeHours >= prepayHours) {
+        const deadline = new Date(startDt.getTime() - prepayHours * 3_600_000);
+        if (now >= deadline) {
+          shouldCancel = true;
+        }
+      } else {
+        const deadline = new Date(referenceDate.getTime() + lastMinuteGraceMinutes * 60_000);
+        if (now >= deadline) {
+          shouldCancel = true;
+        }
+      }
+
+      if (!shouldCancel) {
+        continue;
+      }
+
+      const reason = `Cancelada por falta de pago dentro del plazo (${leadTimeHours >= prepayHours ? `> ${prepayHours}h` : `${lastMinuteGraceMinutes} min`})`;
+
+      const [result]: any = await pool.execute(
+        `UPDATE appointments
+            SET status = 'cancelled',
+                cancelled_by = 'system',
+                cancellation_reason = ?,
+                cancelled_at = NOW(),
+                updated_at = NOW()
+          WHERE id = ? AND status = 'confirmed'`,
+        [reason, row.id]
+      );
+
+      if (!result?.affectedRows) {
+        continue;
+      }
+
+      await pool.execute(
+        `UPDATE payments
+            SET status = 'failed',
+                refund_reason = 'cancelled_no_payment',
+                refunded_at = NOW()
+          WHERE appointment_id = ? AND status = 'pending'`,
+        [row.id]
+      );
+
+      const [[updated]]: any = await pool.query(
+        `SELECT a.*,
+                u.name AS client_name,
+                up.name AS provider_name,
+                ps.name AS service_name
+           FROM appointments a
+           LEFT JOIN users u ON u.id = a.client_id
+           LEFT JOIN users up ON up.id = a.provider_id
+           LEFT JOIN provider_services ps ON ps.id = a.service_id
+          WHERE a.id = ?
+          LIMIT 1`,
+        [row.id]
+      );
+
+      if (!updated) continue;
+
+      try { emitToUser(updated.provider_id, 'appointment:updated', updated); } catch {}
+      try { emitToUser(updated.client_id, 'appointment:updated', updated); } catch {}
+
+      try {
+        await PushService.notifyUser(
+          Number(updated.client_id),
+          'Pago pendiente cancelado',
+          `Tu reserva con ${updated.provider_name} fue cancelada por no completar el pago a tiempo.`,
+          { type: 'appointment', appointment_id: String(updated.id), status: 'cancelled' }
+        );
+      } catch {}
+
+      try {
+        await PushService.notifyUser(
+          Number(updated.provider_id),
+          'Reserva cancelada',
+          `La cita con ${updated.client_name} fue cancelada automáticamente por falta de pago.`,
+          { type: 'appointment', appointment_id: String(updated.id), status: 'cancelled' }
+        );
+      } catch {}
+
+      Logger.info(MODULE, '[UNPAID_CANCEL] Cita cancelada por falta de pago', {
+        appointmentId: updated.id,
+        providerId: updated.provider_id,
+        clientId: updated.client_id
+      });
+    } catch (error) {
+      Logger.error(MODULE, '[UNPAID_CANCEL] Error cancelando cita por falta de pago', {
+        appointmentId: row.id,
+        error
+      });
+    }
+  }
+}
+
 async function activatePendingClose(offsetMinutes: number) {
   const pool = DatabaseConnection.getPool();
   // Seleccionar citas cash sin cierre marcadas, cuya hora de fin + offset ya pasó
@@ -217,21 +352,28 @@ export function setupClosureCron() {
   const activateOffsetMin = Number(process.env.CLOSURE_ACTIVATE_OFFSET_MIN || 60);
   const intervalMs = Math.max(60_000, Number(process.env.CLOSURE_CRON_INTERVAL_MS || 300_000)); // default 5 min
   const expirationHours = Math.max(1, Number(process.env.APPOINTMENT_CONFIRMATION_LIMIT_HOURS || 24));
+  const paymentGraceMinutes = Math.max(1, Number(process.env.APPOINTMENT_PAYMENT_GRACE_MINUTES || 15));
+  const paymentPrepayHours = Math.max(1, Number(process.env.APPOINTMENT_PAYMENT_PREPAY_HOURS || 24));
 
   // Primera ejecución diferida 30s
   setTimeout(() => {
     expireUnconfirmedAppointments(expirationHours).catch(() => {});
+    cancelUnpaidAppointments(paymentGraceMinutes, paymentPrepayHours).catch(() => {});
     activatePendingClose(activateOffsetMin).catch(() => {});
     autoResolveClose().catch(() => {});
   }, 30_000);
 
   setInterval(() => {
     expireUnconfirmedAppointments(expirationHours).catch(() => {});
+    cancelUnpaidAppointments(paymentGraceMinutes, paymentPrepayHours).catch(() => {});
     activatePendingClose(activateOffsetMin).catch(() => {});
     autoResolveClose().catch(() => {});
   }, intervalMs);
 
-  Logger.info(MODULE, `Closure cron started (activate +${activateOffsetMin}m, interval ${Math.round(intervalMs/1000)}s)`);
+  Logger.info(
+    MODULE,
+    `Closure cron started (activate +${activateOffsetMin}m, interval ${Math.round(intervalMs/1000)}s, payment grace ${paymentGraceMinutes}m, prepay window ${paymentPrepayHours}h)`
+  );
 }
 
 

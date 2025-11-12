@@ -4,6 +4,7 @@
  */
 
 import { Express, Router, Request, Response } from 'express';
+import { PoolConnection } from 'mysql2/promise';
 import DatabaseConnection from '../../shared/database/connection';
 import { authenticateToken } from '../../shared/middleware/auth.middleware';
 import { Logger } from '../../shared/utils/logger.util';
@@ -1072,7 +1073,6 @@ function buildRouter(): Router {
         return res.status(400).json({ success: false, error: 'status inválido' });
       }
       const pool = DatabaseConnection.getPool();
-      // Asegurar autorización: proveedor dueño o cliente dueño puede cambiar a cancelada; confirmado/completed solo provider
       const [rows] = await pool.query('SELECT * FROM appointments WHERE id = ? LIMIT 1', [id]);
       if ((rows as any[]).length === 0) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
       const appt = (rows as any[])[0];
@@ -1105,19 +1105,35 @@ function buildRouter(): Router {
       updateSql += ' WHERE id = ?';
       updateParams.push(id);
 
-      await pool.execute(updateSql, updateParams);
-      const [after] = await pool.query(
-        `SELECT a.*, 
-                (SELECT name FROM users WHERE id = a.provider_id) AS provider_name,
-                (SELECT name FROM users WHERE id = a.client_id) AS client_name
-         FROM appointments a WHERE a.id = ? LIMIT 1`,
-        [id]
-      );
-      const updated = (after as any[])[0];
-      if (cancelledBy) {
-        (updated as any).cancelled_by = cancelledBy;
-        (updated as any).cancellation_reason = cancelReason;
+      let updated: any = null;
+      const connection = await pool.getConnection();
+      try {
+        await connection.beginTransaction();
+        await connection.execute(updateSql, updateParams);
+        const [after] = await connection.query(
+          `SELECT a.*, 
+                  (SELECT name FROM users WHERE id = a.provider_id) AS provider_name,
+                  (SELECT name FROM users WHERE id = a.client_id) AS client_name
+           FROM appointments a WHERE a.id = ? LIMIT 1`,
+          [id]
+        );
+        updated = (after as any[])[0];
+        if (!updated) {
+          throw new Error('No se pudo cargar la cita actualizada');
+        }
+        if (cancelledBy) {
+          (updated as any).cancelled_by = cancelledBy;
+          (updated as any).cancellation_reason = cancelReason;
+          await applyCancellationConsequences(connection, appt, cancelledBy as 'client'|'provider'|'system', cancelReason);
+        }
+        await connection.commit();
+      } catch (txError) {
+        try { await connection.rollback(); } catch {}
+        throw txError;
+      } finally {
+        connection.release();
       }
+
       Logger.info(MODULE, '[APPOINTMENTS] Status actualizado', {
         appointmentId: id,
         previousStatus: appt.status,
@@ -1138,18 +1154,20 @@ function buildRouter(): Router {
             { type: 'appointment', appointment_id: String(id), status: 'confirmed' }
           );
         } else if (status === 'cancelled') {
-          const cancelledBy = user.role === 'provider' ? 'el proveedor' : 'el cliente';
+          const cancelledByLabel = cancelledBy === 'provider'
+            ? 'el proveedor'
+            : (cancelledBy === 'client' ? 'el cliente' : 'el sistema');
           const cancelMessageSuffix = cancelReason ? ` Motivo: ${cancelReason}` : '';
           await PushService.notifyUser(
             Number(updated.client_id), 
             'Cita cancelada', 
-            `Tu cita con ${updated.provider_name} ha sido cancelada por ${cancelledBy}.${cancelMessageSuffix}`, 
+            `Tu cita con ${updated.provider_name} ha sido cancelada por ${cancelledByLabel}.${cancelMessageSuffix}`, 
             { type: 'appointment', appointment_id: String(id), status: 'cancelled' }
           );
           await PushService.notifyUser(
             Number(updated.provider_id), 
             'Cita cancelada', 
-            `La cita con ${updated.client_name} ha sido cancelada por ${cancelledBy}.${cancelMessageSuffix}`, 
+            `La cita con ${updated.client_name} ha sido cancelada por ${cancelledByLabel}.${cancelMessageSuffix}`, 
             { type: 'appointment', appointment_id: String(id), status: 'cancelled' }
           );
         } else if (status === 'completed') {
@@ -2072,6 +2090,243 @@ function buildRouter(): Router {
       return res.status(500).json({ success: false, error: 'Error al consultar cierre' });
     }
   });
+
+  async function applyCancellationConsequences(
+    connection: PoolConnection,
+    appointment: any,
+    cancelledBy: 'client' | 'provider' | 'system',
+    cancelReason: string | null
+  ): Promise<void> {
+    if (!appointment || !cancelledBy) {
+      return;
+    }
+
+    // Actualmente no aplicamos cargos adicionales cuando el sistema cancela.
+    if (cancelledBy === 'system') {
+      return;
+    }
+
+    const [paymentRows]: any = await connection.query(
+      `SELECT id, amount, provider_amount, commission_amount, currency, status, payment_method, paid_at
+         FROM payments
+        WHERE appointment_id = ?
+        ORDER BY id DESC
+        LIMIT 1`,
+      [appointment.id]
+    );
+
+    const payment = (paymentRows as any[])[0];
+    if (!payment) {
+      return;
+    }
+
+    if (String(payment.status || '') !== 'completed') {
+      return;
+    }
+
+    const paymentMethod = String(payment.payment_method || '');
+    if (!['card', 'wallet'].includes(paymentMethod)) {
+      return;
+    }
+
+    const totalAmount = toCurrency(Number(payment.amount || appointment.price || 0));
+    if (!(totalAmount > 0)) {
+      return;
+    }
+
+    const appointmentStart = toDateTimeSafe(appointment.date, appointment.start_time);
+    const now = new Date();
+    const hoursToStart = appointmentStart ? (appointmentStart.getTime() - now.getTime()) / 3_600_000 : 0;
+
+    if (cancelledBy === 'client') {
+      const isLate = appointmentStart ? hoursToStart < 24 : true;
+      const providerComp = isLate ? toCurrency(totalAmount * 0.30) : 0;
+      const clientRefund = toCurrency(totalAmount - providerComp);
+
+      const refundReason = cancelReason || (isLate
+        ? 'Cancelación tardía del cliente (<24h)'
+        : 'Cancelación cliente sin penalización (>24h)');
+
+      await markPaymentRefunded(connection, payment.id, refundReason);
+
+      if (clientRefund > 0) {
+        await creditWalletIfNeeded({
+          connection,
+          userId: Number(appointment.client_id),
+          type: 'refund',
+          amount: clientRefund,
+          payment,
+          appointment,
+          description: isLate
+            ? `Crédito por cancelación tardía de la cita #${appointment.id}`
+            : `Reembolso por cancelación de la cita #${appointment.id}`,
+          addToTotalEarned: false
+        });
+      }
+
+      if (providerComp > 0) {
+        await creditWalletIfNeeded({
+          connection,
+          userId: Number(appointment.provider_id),
+          type: 'payment_received',
+          amount: providerComp,
+          payment,
+          appointment,
+          description: `Compensación por cancelación tardía de la cita #${appointment.id}`,
+          addToTotalEarned: true
+        });
+      }
+      return;
+    }
+
+    if (cancelledBy === 'provider') {
+      const refundReason = cancelReason || 'Cancelación realizada por el proveedor';
+      await markPaymentRefunded(connection, payment.id, refundReason);
+
+      await creditWalletIfNeeded({
+        connection,
+        userId: Number(appointment.client_id),
+        type: 'refund',
+        amount: totalAmount,
+        payment,
+        appointment,
+        description: `Reembolso por cancelación del proveedor (cita #${appointment.id})`,
+        addToTotalEarned: false
+      });
+    }
+  }
+
+  function toDateTimeSafe(dateValue: any, timeValue: any): Date | null {
+    if (!dateValue || !timeValue) return null;
+    try {
+      const dateStr = normalizeDateValue(dateValue);
+      const timeStr = normalizeTimeValue(timeValue);
+      if (!dateStr || !timeStr) return null;
+      const [y, m, d] = dateStr.split('-').map(Number);
+      const [hh, mm] = timeStr.split(':').map(Number);
+      if (!y || !m || !d) return null;
+      const dt = new Date(y, m - 1, d, hh || 0, mm || 0, 0, 0);
+      return isNaN(dt.getTime()) ? null : dt;
+    } catch {
+      return null;
+    }
+  }
+
+  function normalizeDateValue(value: any): string | null {
+    if (!value) return null;
+    if (value instanceof Date) {
+      return value.toISOString().slice(0, 10);
+    }
+    const raw = String(value).trim();
+    if (!raw) return null;
+    if (raw.includes('T')) {
+      return raw.split('T')[0];
+    }
+    if (raw.length >= 10) {
+      return raw.slice(0, 10);
+    }
+    return raw;
+  }
+
+  function normalizeTimeValue(value: any): string | null {
+    if (!value && value !== 0) return null;
+    if (value instanceof Date) {
+      return value.toISOString().slice(11, 16);
+    }
+    const raw = String(value).trim();
+    if (!raw) return null;
+    return raw.slice(0, 5);
+  }
+
+  function toCurrency(amount: number): number {
+    if (!Number.isFinite(amount)) return 0;
+    return Math.round(amount * 100) / 100;
+  }
+
+  async function markPaymentRefunded(connection: PoolConnection, paymentId: number, reason: string): Promise<void> {
+    await connection.execute(
+      `UPDATE payments
+          SET status = 'refunded',
+              refunded_at = NOW(),
+              refund_reason = ?,
+              can_release = FALSE,
+              release_status = 'failed',
+              provider_amount = 0
+        WHERE id = ?`,
+      [reason, paymentId]
+    );
+  }
+
+  async function ensureWalletRow(connection: PoolConnection, userId: number): Promise<void> {
+    await connection.execute(
+      `INSERT INTO wallet_balance (user_id, balance, pending_balance, total_earned, total_withdrawn, currency)
+       VALUES (?, 0, 0, 0, 0, 'CLP')
+       ON DUPLICATE KEY UPDATE user_id = user_id`,
+      [userId]
+    );
+  }
+
+  interface WalletCreditOptions {
+    connection: PoolConnection;
+    userId: number;
+    type: 'payment_received' | 'payment_sent' | 'withdrawal' | 'refund' | 'commission';
+    amount: number;
+    payment: any;
+    appointment: any;
+    description: string;
+    addToTotalEarned?: boolean;
+  }
+
+  async function creditWalletIfNeeded(options: WalletCreditOptions): Promise<void> {
+    const { connection, userId, type, amount, payment, appointment, description, addToTotalEarned } = options;
+    if (!(amount > 0)) {
+      return;
+    }
+
+    const [existing] = await connection.query(
+      'SELECT id FROM transactions WHERE user_id = ? AND appointment_id = ? AND type = ? LIMIT 1',
+      [userId, appointment.id, type]
+    );
+    if ((existing as any[]).length) {
+      return;
+    }
+
+    await ensureWalletRow(connection, userId);
+
+    const [[wallet]]: any = await connection.query(
+      'SELECT balance FROM wallet_balance WHERE user_id = ? LIMIT 1 FOR UPDATE',
+      [userId]
+    );
+    const before = toCurrency(Number(wallet?.balance || 0));
+    const after = toCurrency(before + amount);
+
+    if (addToTotalEarned) {
+      await connection.execute(
+        'UPDATE wallet_balance SET balance = ?, total_earned = total_earned + ?, last_transaction_at = NOW() WHERE user_id = ?',
+        [after, amount, userId]
+      );
+    } else {
+      await connection.execute(
+        'UPDATE wallet_balance SET balance = ?, last_transaction_at = NOW() WHERE user_id = ?',
+        [after, userId]
+      );
+    }
+
+    await connection.execute(
+      `INSERT INTO transactions (user_id, type, amount, currency, description, payment_id, appointment_id, balance_before, balance_after)
+       VALUES (?, ?, ?, 'CLP', ?, ?, ?, ?, ?)`,
+      [
+        userId,
+        type,
+        amount,
+        description,
+        payment?.id ?? null,
+        appointment.id ?? null,
+        before,
+        after
+      ]
+    );
+  }
 
   function addMinutes(hhmm: string, minutes: number): string {
     const [hh, mm] = hhmm.split(':').map(Number);
