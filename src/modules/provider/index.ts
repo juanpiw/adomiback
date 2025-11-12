@@ -16,6 +16,7 @@ import providerIncomeGoalsRoutes from './routes/provider-income-goals.routes';
 import providerAnalyticsRoutes from './routes/provider-analytics.routes';
 import providerVerificationRoutes from './routes/provider-verification.routes';
 import providerFaqRoutes from './routes/provider-faq.routes';
+import providerInvitesRoutes from './routes/provider-invites.routes';
 
 /**
  * Setup function to mount provider routes
@@ -87,6 +88,13 @@ export function setupProviderModule(app: Express) {
     console.log('[PROVIDER MODULE] Provider verification routes mounted');
   } catch (e) {
     console.warn('[PROVIDER MODULE] Provider verification routes not mounted', e);
+  }
+
+  try {
+    app.use('/', providerInvitesRoutes);
+    console.log('[PROVIDER MODULE] Provider invites routes mounted');
+  } catch (e) {
+    console.warn('[PROVIDER MODULE] Provider invites routes not mounted', e);
   }
 }
 

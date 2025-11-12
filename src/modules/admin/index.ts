@@ -9,6 +9,7 @@ import { EmailService } from '../../shared/services/email.service';
 import { PushService } from '../notifications/services/push.service';
 import { getPresignedGetUrl, getPublicUrlForKey, requireEnv } from '../../shared/utils/s3.util';
 import { ManualCashHistoryService } from '../../shared/services/manual-cash-history.service';
+import { markInviteAsVerified } from '../provider/routes/provider-invites.routes';
 
 export function setupAdminModule(app: Express) {
   const router = Router();
@@ -735,6 +736,27 @@ async function syncUserVerificationStatus(userId: number, status: 'none' | 'pend
         });
       } catch (pushErr) {
         Logger.warn('ADMIN_MODULE', 'No se pudo enviar notificación de verificación aprobada', pushErr as any);
+      }
+
+      try {
+        const inviteResult = await markInviteAsVerified(verification.provider_id);
+        if (inviteResult?.matched) {
+          Logger.info('ADMIN_MODULE', 'Invitación dorada asociada marcada como verificada', inviteResult);
+          if (inviteResult.pioneerUnlocked && inviteResult.inviterProviderId) {
+            try {
+              await PushService.notifyUser(
+                inviteResult.inviterProviderId,
+                '🏅 ¡Eres Pionero en Adomi!',
+                'Tus tres colegas verificados ya forman parte del gremio. Gracias por impulsar la comunidad.',
+                { type: 'invite', status: 'pioneer_unlocked' }
+              );
+            } catch (notifyErr) {
+              Logger.warn('ADMIN_MODULE', 'No se pudo enviar push de Pioneer desbloqueado', notifyErr as any);
+            }
+          }
+        }
+      } catch (inviteErr) {
+        Logger.warn('ADMIN_MODULE', 'No se pudo actualizar invitación dorada tras verificación', inviteErr as any);
       }
 
       Logger.info('ADMIN_MODULE', 'Verificación aprobada', { verificationId: id, adminId: req.user?.id });
