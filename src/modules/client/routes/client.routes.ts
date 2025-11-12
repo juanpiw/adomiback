@@ -478,5 +478,113 @@ export class ClientRoutes {
         return res.status(500).json({ success: false, error: 'Error al obtener historial de pagos' });
       }
     });
+
+    // GET /client/wallet/summary
+    this.router.get('/client/wallet/summary', authenticateToken, async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user as AuthUser;
+        const pool = DatabaseConnection.getPool();
+
+        const [[summaryRow]]: any = await pool.query(
+          `SELECT balance, pending_balance, total_earned, total_withdrawn, currency, last_transaction_at
+             FROM wallet_balance
+            WHERE user_id = ?
+            LIMIT 1`,
+          [user.id]
+        );
+
+        const [[{ credit_count }]]: any = await pool.query(
+          `SELECT COUNT(1) AS credit_count
+             FROM transactions
+            WHERE user_id = ?
+              AND type = 'refund'`,
+          [user.id]
+        );
+
+        return res.status(200).json({
+          success: true,
+          summary: {
+            balance: Number(summaryRow?.balance ?? 0),
+            pending_balance: Number(summaryRow?.pending_balance ?? 0),
+            hold_balance: Number(summaryRow?.pending_balance ?? 0),
+            total_received: Number(summaryRow?.total_earned ?? 0),
+            total_spent: Number(summaryRow?.total_withdrawn ?? 0),
+            credits_count: Number(credit_count ?? 0),
+            currency: summaryRow?.currency || 'CLP',
+            last_updated: summaryRow?.last_transaction_at || null,
+            note: 'Tu saldo no expira y solo se genera por reembolsos y compensaciones.'
+          }
+        });
+      } catch (error: any) {
+        console.error('[CLIENT][WALLET SUMMARY] Error obteniendo saldo del cliente:', error);
+        return res.status(500).json({ success: false, error: 'Error al obtener tu billetera' });
+      }
+    });
+
+    // GET /client/wallet/movements
+    this.router.get('/client/wallet/movements', authenticateToken, async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user as AuthUser;
+        const pool = DatabaseConnection.getPool();
+
+        const limit = Math.min(100, Math.max(1, Number.parseInt(String(req.query.limit ?? '50'), 10) || 50));
+        const offset = Math.max(0, Number.parseInt(String(req.query.offset ?? '0'), 10) || 0);
+
+        const [rows]: any = await pool.query(
+          `SELECT
+             id,
+             type,
+             amount,
+             currency,
+             description,
+             appointment_id,
+             created_at
+           FROM transactions
+           WHERE user_id = ?
+             AND type IN ('refund','payment_sent')
+           ORDER BY created_at DESC
+           LIMIT ?
+           OFFSET ?`,
+          [user.id, limit, offset]
+        );
+
+        const [[{ total }]]: any = await pool.query(
+          `SELECT COUNT(1) AS total
+             FROM transactions
+            WHERE user_id = ?
+              AND type IN ('refund','payment_sent')`,
+          [user.id]
+        );
+
+        const movements = rows.map((row: any) => {
+          const movementType = String(row.type || '').toLowerCase();
+          const kind = movementType === 'refund' ? 'credit' : 'debit';
+          const baseTitle = movementType === 'refund' ? 'Reembolso de servicio' : 'Uso de saldo';
+
+          return {
+            id: row.id,
+            type: kind,
+            title: row.description || baseTitle,
+            description: row.appointment_id ? `Cita #${row.appointment_id}` : null,
+            amount: Number(row.amount ?? 0),
+            currency: row.currency || 'CLP',
+            created_at: row.created_at
+          };
+        });
+
+        return res.status(200).json({
+          success: true,
+          movements,
+          pagination: {
+            total: Number(total || 0),
+            limit,
+            offset
+          }
+        });
+      } catch (error: any) {
+        console.error('[CLIENT][WALLET MOVEMENTS] Error obteniendo movimientos de billetera:', error);
+        return res.status(500).json({ success: false, error: 'Error al obtener los movimientos de tu billetera' });
+      }
+    });
   }
 }
