@@ -30,3 +30,4 @@ UPDATE client_profiles
        client_review_count = 0
  WHERE client_rating_average IS NULL;
 
+

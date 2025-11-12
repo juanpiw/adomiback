@@ -17,3 +17,4 @@ CREATE TABLE IF NOT EXISTS cash_manual_payments_history (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
+
