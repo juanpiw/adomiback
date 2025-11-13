@@ -11,3 +11,4 @@ export function setupQuotesModule(app: Express) {
   Logger.info(MODULE, 'Quotes module mounted');
 }
 
+

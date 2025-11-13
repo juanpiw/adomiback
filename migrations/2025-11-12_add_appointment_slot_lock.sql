@@ -11,3 +11,4 @@ CREATE UNIQUE INDEX uq_appointments_provider_slot_active
   ON appointments (provider_id, `date`, start_time, slot_active);
 
 
+

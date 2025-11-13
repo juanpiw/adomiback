@@ -31,3 +31,4 @@ UPDATE client_profiles
  WHERE client_rating_average IS NULL;
 
 
+

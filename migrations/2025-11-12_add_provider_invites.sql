@@ -45,3 +45,4 @@ UPDATE provider_profiles
  WHERE invite_quota IS NULL OR invite_used IS NULL;
 
 
+

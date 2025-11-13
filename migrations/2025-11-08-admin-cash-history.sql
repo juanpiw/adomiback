@@ -18,3 +18,4 @@ CREATE TABLE IF NOT EXISTS cash_manual_payments_history (
 
 
 
+

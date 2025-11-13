@@ -108,3 +108,4 @@ CREATE TABLE IF NOT EXISTS quote_messages (
 CREATE INDEX IF NOT EXISTS idx_quotes_provider_updated ON quotes (provider_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_quotes_client_updated ON quotes (client_id, updated_at);
 
+

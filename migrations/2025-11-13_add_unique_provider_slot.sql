@@ -27,3 +27,4 @@ PREPARE stmt FROM @create_index_sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
 
+
