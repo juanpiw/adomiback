@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { authenticateToken, AuthUser } from '../../../shared/middleware/auth.middleware';
 import DatabaseConnection from '../../../shared/database/connection';
 import { Logger } from '../../../shared/utils/logger.util';
+import { getProviderPlanLimits } from '../../../shared/utils/subscription.util';
 
 const MODULE = 'PROVIDER_ANALYTICS_ROUTES';
 const router = Router();
@@ -43,6 +44,15 @@ function toISO(date: Date): string {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
+async function ensureAdvancedAnalytics(providerId: number) {
+  const limits = await getProviderPlanLimits(providerId);
+  if (limits.analyticsTier !== 'advanced') {
+    const err: any = new Error('Tu plan actual no incluye el dashboard avanzado. Actualiza tu suscripción para acceder a estas métricas.');
+    err.statusCode = 403;
+    throw err;
+  }
+}
+
 router.get('/providers/:id/analytics/summary', authenticateToken, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user as AuthUser;
@@ -52,6 +62,8 @@ router.get('/providers/:id/analytics/summary', authenticateToken, async (req: Re
     }
 
     const { from, to } = parseRange(req);
+    const planLimits = await getProviderPlanLimits(providerId);
+    const canViewRatings = !!planLimits.clientRatingVisible;
     const pool = DatabaseConnection.getPool();
 
     const [[incomeRow]]: any = await pool.query(
@@ -72,15 +84,18 @@ router.get('/providers/:id/analytics/summary', authenticateToken, async (req: Re
       [providerId, from, to]
     );
 
-    const [[ratingRow]]: any = await pool.query(
-      `SELECT COALESCE(AVG(rating), 0) AS avg_rating,
-              COUNT(*) AS reviews_count
-         FROM reviews
-        WHERE provider_id = ?
-          AND is_visible = TRUE
-          AND created_at BETWEEN ? AND ?`,
-      [providerId, from, to]
-    );
+    const ratingQuery = canViewRatings
+      ? await pool.query(
+          `SELECT COALESCE(AVG(rating), 0) AS avg_rating,
+                  COUNT(*) AS reviews_count
+             FROM reviews
+            WHERE provider_id = ?
+              AND is_visible = TRUE
+              AND created_at BETWEEN ? AND ?`,
+          [providerId, from, to]
+        )
+      : [ [ { avg_rating: null, reviews_count: 0 } ] ];
+    const [[ratingRow]]: any = ratingQuery;
 
     const [clientsRows]: any = await pool.query(
       `SELECT client_id, COUNT(*) AS visits
@@ -103,11 +118,18 @@ router.get('/providers/:id/analytics/summary', authenticateToken, async (req: Re
         currency: 'CLP',
         totalIncome: Number(incomeRow?.total_income || 0),
         completedAppointments: Number(appointmentRow?.total_completed || 0),
-        averageRating: Number(Number(ratingRow?.avg_rating || 0).toFixed(2)),
-        reviewsCount: Number(ratingRow?.reviews_count || 0),
+        averageRating: canViewRatings && ratingRow?.avg_rating !== null && ratingRow?.avg_rating !== undefined
+          ? Number(Number(ratingRow.avg_rating || 0).toFixed(2))
+          : null,
+        reviewsCount: canViewRatings ? Number(ratingRow?.reviews_count || 0) : 0,
         totalClients,
         recurringClients,
         recurringRate
+      },
+      planFeatures: {
+        analyticsTier: planLimits.analyticsTier,
+        csvExportEnabled: !!planLimits.csvExportEnabled,
+        clientRatingVisible: canViewRatings
       }
     });
   } catch (error: any) {
@@ -123,6 +145,12 @@ router.get('/providers/:id/analytics/revenue-timeseries', authenticateToken, asy
     const providerId = Number(req.params.id);
     if (!Number.isFinite(providerId) || !requireProvider(user, providerId)) {
       return res.status(403).json({ success: false, error: 'forbidden' });
+    }
+
+    try {
+      await ensureAdvancedAnalytics(providerId);
+    } catch (planErr: any) {
+      return res.status(planErr.statusCode || 403).json({ success: false, error: planErr.message });
     }
 
     const { from, to } = parseRange(req);
@@ -200,6 +228,12 @@ router.get('/providers/:id/analytics/services-top', authenticateToken, async (re
       return res.status(403).json({ success: false, error: 'forbidden' });
     }
 
+    try {
+      await ensureAdvancedAnalytics(providerId);
+    } catch (planErr: any) {
+      return res.status(planErr.statusCode || 403).json({ success: false, error: planErr.message });
+    }
+
     const { from, to } = parseRange(req);
     const limit = Math.min(Number(req.query.limit || 5), 10);
     const pool = DatabaseConnection.getPool();
@@ -275,6 +309,12 @@ router.get('/providers/:id/analytics/reviews', authenticateToken, async (req: Re
     const providerId = Number(req.params.id);
     if (!Number.isFinite(providerId) || !requireProvider(user, providerId)) {
       return res.status(403).json({ success: false, error: 'forbidden' });
+    }
+
+    try {
+      await ensureAdvancedAnalytics(providerId);
+    } catch (planErr: any) {
+      return res.status(planErr.statusCode || 403).json({ success: false, error: planErr.message });
     }
 
     const limit = Math.min(Number(req.query.limit || 5), 20);

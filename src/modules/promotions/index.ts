@@ -2,7 +2,6 @@ import { Express, Router, Request, Response } from 'express';
 import DatabaseConnection from '../../shared/database/connection';
 import { authenticateToken } from '../../shared/middleware/auth.middleware';
 import { Logger } from '../../shared/utils/logger.util';
-import { getProviderPlanLimits } from '../../shared/utils/subscription.util';
 
 const MODULE = 'PROMOTIONS';
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -44,24 +43,6 @@ function buildRouter(): Router {
 
       const pool = DatabaseConnection.getPool();
 
-      const planLimits = await getProviderPlanLimits(providerId);
-      if (!planLimits.promotionsEnabled) {
-        return res.status(403).json({ success: false, error: 'Tu plan actual no incluye la creación de promociones. Actualiza tu suscripción para habilitarlas.' });
-      }
-      const promotionsLimit = Number(planLimits.promotionsLimit || 0);
-
-      if (promotionsLimit > 0) {
-        const [[{ total }]]: any = await pool.query(
-          `SELECT COUNT(*) AS total
-             FROM promotions
-            WHERE provider_id = ?
-              AND is_active = TRUE`,
-          [providerId]
-        );
-        if (Number(total || 0) >= promotionsLimit) {
-          return res.status(409).json({ success: false, error: `Has alcanzado el máximo de ${promotionsLimit} promociones activas para tu plan.` });
-        }
-      }
       const [result]: any = await pool.execute(
         `INSERT INTO promo_signups (nombre, correo, profesion, notas, status)
          VALUES (?, ?, ?, ?, 'pending')

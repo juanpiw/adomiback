@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import DatabaseConnection from '../../../shared/database/connection';
 import { authenticateToken, requireRole, AuthUser } from '../../../shared/middleware/auth.middleware';
 import { getClientReviewSummary } from '../../reviews';
+import { getProviderPlanLimits } from '../../../shared/utils/subscription.util';
+import { Logger } from '../../../shared/utils/logger.util';
 
 // Use shared authenticateToken which re-hydrates role from DB
 
@@ -18,6 +20,18 @@ export class ProviderRoutes {
   }
 
   private mountRoutes() {
+    // GET /provider/plan/features - Metadata del plan actual
+    this.router.get('/provider/plan/features', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user as AuthUser;
+        const limits = await getProviderPlanLimits(user.id);
+        return res.json({ success: true, features: limits });
+      } catch (error: any) {
+        Logger.error('PROVIDER_ROUTES', 'Error obteniendo features del plan', error);
+        return res.status(500).json({ success: false, error: 'No se pudieron obtener los permisos del plan actual.' });
+      }
+    });
+
     // GET /provider/profile - Obtener perfil del provider
     this.router.get('/provider/profile', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
@@ -294,6 +308,9 @@ export class ProviderRoutes {
           return res.status(404).json({ success: false, error: 'Cliente no asociado a este proveedor' });
         }
 
+        const planLimits = await getProviderPlanLimits(user.id);
+        const canViewClientRating = !!planLimits.clientRatingVisible;
+
         const [rows]: any = await pool.query(
           `SELECT 
              u.id AS client_id,
@@ -333,31 +350,34 @@ export class ProviderRoutes {
         const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
         const profilePhotoUrl = row.profile_photo_url ? `${publicBase}${row.profile_photo_url}` : null;
 
-        const summary = await getClientReviewSummary(clientId);
+        const summary = canViewClientRating ? await getClientReviewSummary(clientId) : { reviewAverage: null, reviewCount: 0 };
 
-        const [recentReviewRows]: any = await pool.query(
-          `SELECT cr.id,
-                  cr.appointment_id,
-                  cr.rating,
-                  cr.comment,
-                  cr.created_at,
-                  up.name AS provider_name
-             FROM client_reviews cr
-             LEFT JOIN users up ON up.id = cr.provider_id
-            WHERE cr.client_id = ?
-            ORDER BY cr.created_at DESC
-            LIMIT 5`,
-          [clientId]
-        );
+        let recentReviews: any[] = [];
+        if (canViewClientRating) {
+          const [recentReviewRows]: any = await pool.query(
+            `SELECT cr.id,
+                    cr.appointment_id,
+                    cr.rating,
+                    cr.comment,
+                    cr.created_at,
+                    up.name AS provider_name
+               FROM client_reviews cr
+               LEFT JOIN users up ON up.id = cr.provider_id
+              WHERE cr.client_id = ?
+              ORDER BY cr.created_at DESC
+              LIMIT 5`,
+            [clientId]
+          );
 
-        const recentReviews = (recentReviewRows as any[]).map((review) => ({
-          id: review.id,
-          appointment_id: review.appointment_id,
-          rating: Number(review.rating),
-          comment: review.comment || null,
-          created_at: review.created_at,
-          provider_name: review.provider_name || null
-        }));
+          recentReviews = (recentReviewRows as any[]).map((review) => ({
+            id: review.id,
+            appointment_id: review.appointment_id,
+            rating: Number(review.rating),
+            comment: review.comment || null,
+            created_at: review.created_at,
+            provider_name: review.provider_name || null
+          }));
+        }
 
         console.log('[PROVIDER_ROUTES][CLIENT_PROFILE] Perfil construido', {
           providerId: user.id,
@@ -381,24 +401,34 @@ export class ProviderRoutes {
             notes: row.notes || '',
             verification_status: row.verification_status || 'none',
             is_verified: !!row.is_verified,
-            rating_average: row.client_rating_average !== null && row.client_rating_average !== undefined
-              ? Number(row.client_rating_average)
-              : summary.reviewAverage,
-            review_count: row.client_review_count !== null && row.client_review_count !== undefined
-              ? Number(row.client_review_count)
-              : summary.reviewCount,
+            rating_average: canViewClientRating
+              ? (row.client_rating_average !== null && row.client_rating_average !== undefined
+                  ? Number(row.client_rating_average)
+                  : summary.reviewAverage)
+              : null,
+            review_count: canViewClientRating
+              ? (row.client_review_count !== null && row.client_review_count !== undefined
+                  ? Number(row.client_review_count)
+                  : summary.reviewCount)
+              : 0,
             profile_photo_url: profilePhotoUrl,
             profile_created_at: row.profile_created_at,
             profile_updated_at: row.profile_updated_at,
             user_created_at: row.user_created_at
           },
-          reviews: {
-            summary: {
-              count: summary.reviewCount,
-              average: summary.reviewAverage
-            },
-            recent: recentReviews
-          }
+          canViewClientRating,
+          reviews: canViewClientRating
+            ? {
+                summary: {
+                  count: summary.reviewCount,
+                  average: summary.reviewAverage
+                },
+                recent: recentReviews
+              }
+            : {
+                summary: null,
+                recent: []
+              }
         });
       } catch (error: any) {
         console.error('[PROVIDER_ROUTES][CLIENT_PROFILE] Error inesperado', {

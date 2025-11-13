@@ -24,14 +24,6 @@ class ProviderFaqRoutes {
         if (!planLimits.faqEnabled) {
           return res.status(403).json({ success: false, error: 'Tu plan actual no incluye preguntas frecuentes. Actualiza tu suscripción para habilitarlas.' });
         }
-        const planLimits = await getProviderPlanLimits(user.id);
-        if (!planLimits.faqEnabled) {
-          return res.status(403).json({ success: false, error: 'Tu plan actual no incluye preguntas frecuentes. Actualiza tu suscripción para habilitarlas.' });
-        }
-        const planLimits = await getProviderPlanLimits(user.id);
-        if (!planLimits.faqEnabled) {
-          return res.status(403).json({ success: false, error: 'Tu plan actual no incluye preguntas frecuentes. Actualiza tu suscripción para habilitarlas.' });
-        }
         const pool = DatabaseConnection.getPool();
         const [rows] = await pool.query(
           `SELECT id, question, answer, order_index

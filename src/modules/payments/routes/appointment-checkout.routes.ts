@@ -201,6 +201,7 @@ export function buildAppointmentCheckoutRoutes(): Router {
         return res.status(403).json({ success: false, error: 'No autorizado' });
       }
 
+      const commissionRate = await resolveCommissionRate(appt.provider_id);
       const stripeSecret = process.env.STRIPE_SECRET_KEY;
       if (!stripeSecret) return res.status(500).json({ success: false, error: 'Stripe no configurado' });
       const stripe = new Stripe(stripeSecret);
