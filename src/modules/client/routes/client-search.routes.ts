@@ -306,7 +306,8 @@ export class ClientSearchRoutes {
             MAX(primary_loc.region) as primary_region,
             COALESCE(AVG(r.rating), 0) as rating,
             COUNT(DISTINCT r.id) as review_count,
-            COUNT(DISTINCT ps.id) as services_count
+            COUNT(DISTINCT ps.id) as services_count,
+            MAX(pp.pioneer_unlocked_at) as pioneer_unlocked_at
           FROM provider_profiles pp
           JOIN users u ON pp.provider_id = u.id
           LEFT JOIN provider_locations primary_loc ON primary_loc.provider_id = pp.provider_id AND primary_loc.is_primary = TRUE
@@ -404,7 +405,11 @@ export class ClientSearchRoutes {
         }
         query += `
           HAVING ${havingClauses.join(' AND ')}
-          ORDER BY rating DESC, review_count DESC, services_count DESC
+          ORDER BY 
+            (CASE WHEN pioneer_unlocked_at IS NOT NULL THEN 1 ELSE 0 END) DESC,
+            rating DESC,
+            review_count DESC,
+            services_count DESC
           LIMIT ${limitNumber} OFFSET ${offsetNumber}
         `;
 
@@ -527,6 +532,10 @@ export class ClientSearchRoutes {
             primary_lng: primaryLng,
             primary_commune: provider.primary_commune || null,
             primary_region: provider.primary_region || null,
+            is_pioneer: !!provider.pioneer_unlocked_at,
+            pioneer_unlocked_at: provider.pioneer_unlocked_at
+              ? new Date(provider.pioneer_unlocked_at).toISOString()
+              : null,
             live_location: liveLocation,
             primary_location: primaryLocation,
             services: (servicesRows as any[]).map(service => ({
@@ -623,7 +632,8 @@ export class ClientSearchRoutes {
             MAX(primary_loc.commune) as primary_commune,
             MAX(primary_loc.region) as primary_region,
             COALESCE(AVG(r.rating), 0) as provider_rating,
-            COUNT(DISTINCT r.id) as provider_review_count
+            COUNT(DISTINCT r.id) as provider_review_count,
+            MAX(pp.pioneer_unlocked_at) as pioneer_unlocked_at
           FROM provider_services ps
           JOIN provider_profiles pp ON ps.provider_id = pp.provider_id
           JOIN users u ON pp.provider_id = u.id
@@ -703,7 +713,11 @@ export class ClientSearchRoutes {
           GROUP BY ps.id, ps.name, ps.description, ps.price, ps.duration_minutes, ps.custom_category,
                    ps.service_image_url, ps.is_featured, ps.provider_id, u.name, pp.professional_title,
                    pp.profile_photo_url, pp.main_region, pp.main_commune
-          ORDER BY ps.is_featured DESC, ps.order_index ASC, ps.price ASC
+          ORDER BY 
+            (CASE WHEN pioneer_unlocked_at IS NOT NULL THEN 1 ELSE 0 END) DESC,
+            ps.is_featured DESC,
+            ps.order_index ASC,
+            ps.price ASC
           LIMIT ${limitNumber} OFFSET ${offsetNumber}
         `;
 
@@ -780,6 +794,10 @@ export class ClientSearchRoutes {
               primary_lng: primaryLng,
               primary_commune: service.primary_commune || null,
               primary_region: service.primary_region || null,
+              is_pioneer: !!service.pioneer_unlocked_at,
+              pioneer_unlocked_at: service.pioneer_unlocked_at
+                ? new Date(service.pioneer_unlocked_at).toISOString()
+                : null,
               live_location: liveLocation,
               primary_location: primaryLocation
             }
