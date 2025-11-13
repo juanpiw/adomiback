@@ -970,6 +970,7 @@ function buildRouter(): Router {
       const hasExceptions = (exceptions as any[]).length > 0;
       let allowManual = !hadWeekly && !hasExceptions;
       let fullyBlocked = false;
+      let blockedReason: string | null = null;
 
       let blockedRanges: Array<{ start: string; end: string; reason: string }> = [];
       
@@ -984,7 +985,8 @@ function buildRouter(): Router {
             console.log('🔴 [TIME_SLOTS] ⚠️ TODO EL DÍA BLOQUEADO');
             blocks = []; // No hay bloques disponibles
             fullyBlocked = true;
-            blockedRanges = [{ start: '00:00', end: '24:00', reason: exc.reason || 'Bloqueado' }];
+            blockedReason = exc.reason ? String(exc.reason) : 'El profesional bloqueó esta fecha completa';
+            blockedRanges = [{ start: '00:00', end: '24:00', reason: blockedReason }];
             break;
           } else {
             // Bloqueo de horario específico
@@ -995,6 +997,9 @@ function buildRouter(): Router {
             });
             console.log('🔴 [TIME_SLOTS] Horario bloqueado:', exc.start_time, '-', exc.end_time);
             allowManual = false;
+            if (!blockedReason && exc.reason) {
+              blockedReason = String(exc.reason);
+            }
           }
         } else {
           // Es una habilitación especial (sobrescribe horario semanal)
@@ -1060,7 +1065,8 @@ function buildRouter(): Router {
         time_slots: slots,
         meta: {
           fully_blocked: fullyBlocked || (blocks.length === 0 && !allowManual && hasExceptions),
-          allow_manual: allowManual
+          allow_manual: allowManual,
+          blocked_reason: blockedReason
         }
       });
     } catch (err) {
