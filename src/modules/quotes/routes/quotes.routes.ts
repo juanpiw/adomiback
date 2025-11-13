@@ -164,9 +164,75 @@ export class QuotesRoutes {
   }
 
   private mountClientRoutes() {
-    this.router.post('/client/quotes', authenticateToken, async (_req: Request, res: Response) => {
-      return res.status(501).json({ success: false, error: 'El módulo de cotizaciones para clientes estará disponible próximamente.' });
-    });
+    this.router.post(
+      '/client/quotes',
+      authenticateToken,
+      upload.array('attachments', 5),
+      async (req: Request, res: Response) => {
+        const user = (req as any).user as AuthUser;
+        const files = (req.files as Express.Multer.File[]) ?? [];
+        const cleanupUploads = () => {
+          files.forEach((file) => {
+            if (file?.path && fs.existsSync(file.path)) {
+              fs.unlink(file.path, () => {});
+            }
+          });
+        };
+
+        if (!user || user.role !== 'client') {
+          cleanupUploads();
+          return res.status(403).json({ success: false, error: 'Solo los clientes autenticados pueden solicitar cotizaciones.' });
+        }
+
+        const providerId = Number(
+          req.body?.providerId ?? req.body?.provider_id ?? req.body?.provider ?? req.query?.providerId
+        );
+        if (!providerId || Number.isNaN(providerId)) {
+          cleanupUploads();
+          return res.status(400).json({ success: false, error: 'Debes indicar un profesional válido para solicitar cotización.' });
+        }
+
+        const message = String(req.body?.message ?? req.body?.clientMessage ?? '').trim();
+        if (!message || message.length < 20) {
+          cleanupUploads();
+          return res.status(400).json({
+            success: false,
+            error: 'Cuéntanos con al menos 20 caracteres qué necesitas para que el profesional pueda ayudarte.'
+          });
+        }
+
+        const serviceSummary = String(req.body?.service ?? req.body?.serviceSummary ?? '').trim();
+        const preferredDate = req.body?.preferredDate ?? req.body?.fechaDeseada ?? null;
+        const preferredTimeRange = req.body?.preferredTimeRange ?? req.body?.rangoHorario ?? null;
+
+        try {
+          const quoteId = await this.service.createClientRequest({
+            clientId: user.id,
+            providerId,
+            serviceSummary,
+            clientMessage: message,
+            preferredDate: preferredDate ? String(preferredDate) : null,
+            preferredTimeRange: preferredTimeRange ? String(preferredTimeRange) : null,
+            attachments: files.map((file) => ({
+              fileName: file.originalname,
+              filePath: `/uploads/quotes/${file.filename}`,
+              mimeType: file.mimetype,
+              fileSize: file.size
+            }))
+          });
+
+          return res.status(201).json({ success: true, quoteId });
+        } catch (error: any) {
+          cleanupUploads();
+          Logger.error(MODULE, 'Error creating client quote request', error);
+          const status = error?.statusCode || 500;
+          return res.status(status).json({
+            success: false,
+            error: error?.message || 'No pudimos enviar tu solicitud de cotización. Intenta nuevamente más tarde.'
+          });
+        }
+      }
+    );
   }
 }
 

@@ -24,11 +24,86 @@ interface AttachmentPayload {
   category?: 'client_request' | 'provider_proposal' | 'support';
 }
 
+interface ClientRequestPayload {
+  clientId: number;
+  providerId: number;
+  serviceSummary: string;
+  clientMessage: string;
+  preferredDate?: string | null;
+  preferredTimeRange?: string | null;
+  attachments?: Array<{
+    fileName: string;
+    filePath: string;
+    mimeType?: string | null;
+    fileSize?: number | null;
+  }>;
+}
+
 export class QuotesService {
   async listProviderQuotes(providerId: number, bucket: QuoteBucket, limit?: number, offset?: number) {
     await ensureQuotesFeature(providerId);
     const records = await QuotesRepository.listProviderQuotes(providerId, bucket, { limit, offset });
     return records.map((record) => this.mapListRecord(record));
+  }
+
+  async createClientRequest(payload: ClientRequestPayload): Promise<number> {
+    const serviceSummary = (payload.serviceSummary || '').trim().slice(0, 255);
+    const message = (payload.clientMessage || '').trim();
+
+    if (!message || message.length < 20) {
+      const error: any = new Error('Describe tu necesidad con al menos 20 caracteres para que el profesional tenga contexto.');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const pool = DatabaseConnection.getPool();
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+
+      const quoteId = await QuotesRepository.createClientRequest(connection, {
+        clientId: payload.clientId,
+        providerId: payload.providerId,
+        serviceSummary: serviceSummary || 'Solicitud de servicio',
+        clientMessage: message,
+        appointmentId: null
+      });
+
+      await QuotesRepository.insertEvent(connection, quoteId, 'client', payload.clientId, 'request_created', {
+        service_summary: serviceSummary || null,
+        preferred_date: payload.preferredDate || null,
+        preferred_time_range: payload.preferredTimeRange || null
+      });
+
+      if (payload.attachments?.length) {
+        for (const attachment of payload.attachments) {
+          await QuotesRepository.insertAttachment(connection, {
+            quoteId,
+            uploadedBy: payload.clientId,
+            role: 'client',
+            fileName: attachment.fileName,
+            filePath: attachment.filePath,
+            mimeType: attachment.mimeType,
+            fileSize: attachment.fileSize ?? null,
+            category: 'client_request'
+          });
+        }
+      }
+
+      await connection.commit();
+
+      void this.notifyProviderNewRequest(payload.providerId, quoteId).catch((err) => {
+        Logger.error(MODULE, 'Error notifying provider about new request', err);
+      });
+
+      return quoteId;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
   }
 
   async getProviderQuote(providerId: number, quoteId: number): Promise<any | null> {
@@ -260,6 +335,22 @@ export class QuotesService {
       });
     } catch (err) {
       Logger.error(MODULE, 'Error notifying client about proposal', err as any);
+    }
+  }
+
+  private async notifyProviderNewRequest(providerId: number, quoteId: number) {
+    try {
+      await PushService.notifyUser(
+        providerId,
+        'Tienes una nueva solicitud de cotización',
+        'Un cliente está interesado en tus servicios. Ingresa a Cotizaciones para responder.',
+        {
+          type: 'quote_request',
+          quoteId: String(quoteId)
+        }
+      );
+    } catch (err) {
+      Logger.error(MODULE, 'Error notifying provider about new request', err as any);
     }
   }
 
