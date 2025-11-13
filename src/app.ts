@@ -21,6 +21,7 @@ import { setupFavoritesModule } from './modules/favorites';
 import { EmailService } from './shared/services/email.service';
 import { setupAdminModule } from './modules/admin';
 import { setupWalletModule } from './modules/wallet';
+import { setupQuotesModule } from './modules/quotes';
 
 export function createApp(): Express {
   const app = express();
@@ -102,6 +103,7 @@ export function createApp(): Express {
   setupAppointmentsModule(app);
   setupPaymentsModule(app);
   setupWalletModule(app);
+  setupQuotesModule(app);
   // 🔗 NUEVO: montar módulos de Reviews y Favorites
   Logger.info('APP', 'Mounting Reviews and Favorites modules...');
   setupReviewsModule(app);
