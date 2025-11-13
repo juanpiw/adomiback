@@ -708,6 +708,25 @@ function buildRouter(): Router {
     }
   });
 
+  const buildPublicAssetUrl = (rawUrl: any, req: Request): string | null => {
+    if (!rawUrl) return null;
+    const trimmed = String(rawUrl).trim();
+    if (!trimmed) return null;
+    if (/^https?:\/\//i.test(trimmed)) return trimmed;
+
+    const base =
+      process.env.S3_PUBLIC_BASE_URL ||
+      process.env.FILE_PUBLIC_BASE_URL ||
+      process.env.UPLOADS_PUBLIC_BASE_URL ||
+      process.env.API_BASE_URL ||
+      process.env.PUBLIC_BASE_URL ||
+      `${req.protocol}://${req.get('host')}`;
+
+    const normalizedBase = base.replace(/\/$/, '');
+    const normalizedPath = trimmed.replace(/^\//, '');
+    return `${normalizedBase}/${normalizedPath}`;
+  };
+
   // GET /appointments?month=YYYY-MM - listar por mes (proveedor actual)
   router.get('/appointments', authenticateToken, async (req: Request, res: Response) => {
     try {
@@ -770,10 +789,9 @@ function buildRouter(): Router {
       );
       Logger.info(MODULE, `📅 Citas retornadas: ${(rows as any[]).length}`, { sample: (rows as any[])[0] });
       res.setHeader('Cache-Control', 'no-store');
-      const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
       const appointments = (rows as any[]).map(r => ({
         ...r,
-        client_avatar_url: r.client_avatar_url ? `${publicBase}${r.client_avatar_url}` : null
+        client_avatar_url: buildPublicAssetUrl(r.client_avatar_url, req)
       }));
       return res.json({ success: true, appointments });
     } catch (err) {
@@ -882,11 +900,10 @@ function buildRouter(): Router {
         return res.status(404).json({ success: false, error: 'Cita no encontrada tras actualizar' });
       }
 
-      const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
       const appointmentRaw = (row as any[])[0];
       const appointment = {
         ...appointmentRaw,
-        client_avatar_url: appointmentRaw?.client_avatar_url ? `${publicBase}${appointmentRaw.client_avatar_url}` : null
+        client_avatar_url: buildPublicAssetUrl(appointmentRaw?.client_avatar_url, req)
       };
 
       try { emitToUser(appointment.provider_id, 'appointment:updated', appointment); } catch {}
@@ -1098,10 +1115,9 @@ function buildRouter(): Router {
          ORDER BY a.\`date\` ASC, a.\`start_time\` ASC`,
         [clientId]
       );
-      const publicBase = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
       const withAvatars = (rows as any[]).map(r => ({
         ...r,
-        provider_avatar_url: r.provider_avatar_url ? `${publicBase}${r.provider_avatar_url}` : null
+        provider_avatar_url: buildPublicAssetUrl(r.provider_avatar_url, req)
       }));
       Logger.info(MODULE, `Client appointments loaded: ${(withAvatars as any[]).length} appointments`, { sample: (withAvatars as any[])[0] });
       console.log('[BACKEND] Sample appointment data:', (withAvatars as any[])[0] ? { id: (withAvatars as any[])[0].id, price: (withAvatars as any[])[0].price, service_name: (withAvatars as any[])[0].service_name } : 'No appointments');
@@ -2986,7 +3002,8 @@ function buildRouter(): Router {
                 cp.commune AS client_commune,
                 cp.region AS client_region,
                 cp.phone AS client_phone,
-                COALESCE(NULLIF(a.client_location, ''), TRIM(CONCAT_WS(', ', cp.address, cp.commune, cp.region))) AS client_location_label
+                COALESCE(NULLIF(a.client_location, ''), TRIM(CONCAT_WS(', ', cp.address, cp.commune, cp.region))) AS client_location_label,
+                cp.profile_photo_url AS client_avatar_url
          FROM appointments a
          LEFT JOIN users u ON u.id = a.client_id
          LEFT JOIN provider_services ps ON ps.id = a.service_id
@@ -3005,10 +3022,15 @@ function buildRouter(): Router {
       console.log('[APPOINTMENTS] 📋 Citas confirmadas sin pagar encontradas:', (rows as any[]).length);
       Logger.info(MODULE, `✅ ${(rows as any[]).length} citas confirmadas sin pagar encontradas`);
       
+      const appointments = (rows as any[]).map((r) => ({
+        ...r,
+        client_avatar_url: buildPublicAssetUrl(r.client_avatar_url, req)
+      }));
+
       res.setHeader('Cache-Control', 'no-store');
       return res.json({ 
         success: true, 
-        appointments: rows 
+        appointments
       });
       
     } catch (err) {
@@ -3036,11 +3058,15 @@ function buildRouter(): Router {
       
       const [rows] = await pool.query(
         `SELECT a.*, 
-                (SELECT name FROM users WHERE id = a.client_id) AS client_name,
-                (SELECT email FROM users WHERE id = a.client_id) AS client_email,
-                (SELECT name FROM provider_services WHERE id = a.service_id) AS service_name,
-                a.price AS scheduled_price
+                u.name AS client_name,
+                u.email AS client_email,
+                ps.name AS service_name,
+                a.price AS scheduled_price,
+                cp.profile_photo_url AS client_avatar_url
          FROM appointments a
+         LEFT JOIN users u ON u.id = a.client_id
+         LEFT JOIN provider_services ps ON ps.id = a.service_id
+         LEFT JOIN client_profiles cp ON cp.client_id = a.client_id
          WHERE a.provider_id = ? 
            AND a.status = 'confirmed'
            AND a.date >= CURDATE()
@@ -3049,7 +3075,13 @@ function buildRouter(): Router {
         [user.id]
       );
       
-      const nextAppointment = (rows as any[])[0] || null;
+      const nextAppointmentRaw = (rows as any[])[0] || null;
+      const nextAppointment = nextAppointmentRaw
+        ? ({
+            ...nextAppointmentRaw,
+            client_avatar_url: buildPublicAssetUrl(nextAppointmentRaw.client_avatar_url, req)
+          })
+        : null;
       console.log('[APPOINTMENTS] 📅 Próxima cita encontrada:', nextAppointment ? nextAppointment.id : 'ninguna');
       Logger.info(MODULE, `✅ Próxima cita encontrada: ${nextAppointment ? nextAppointment.id : 'ninguna'}`);
       
