@@ -25,7 +25,7 @@ export async function ensureQuotesFeature(providerId: number): Promise<void> {
     (process.env.QUOTES_ALLOWED_PLAN_TYPES ?? 'premium,founder').split(',').map((t) => t.trim().toLowerCase()).filter(Boolean)
   );
 
-  const allowAll = process.env.QUOTES_FEATURE_ALLOW_ALL === 'true';
+  const allowAll = (process.env.QUOTES_FEATURE_ALLOW_ALL ?? 'true') === 'true';
 
   if (allowAll) {
     return;
