@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import DatabaseConnection from '../../../shared/database/connection';
 import { authenticateToken, requireRole, AuthUser } from '../../../shared/middleware/auth.middleware';
 import { Logger } from '../../../shared/utils/logger.util';
+import { getProviderPlanLimits } from '../../../shared/utils/subscription.util';
 
 const MODULE = 'ProviderFAQRoutes';
 const DEFAULT_MAX_FAQS = 6;
@@ -19,6 +20,18 @@ class ProviderFaqRoutes {
     this.router.get('/provider/faqs', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
+        const planLimits = await getProviderPlanLimits(user.id);
+        if (!planLimits.faqEnabled) {
+          return res.status(403).json({ success: false, error: 'Tu plan actual no incluye preguntas frecuentes. Actualiza tu suscripción para habilitarlas.' });
+        }
+        const planLimits = await getProviderPlanLimits(user.id);
+        if (!planLimits.faqEnabled) {
+          return res.status(403).json({ success: false, error: 'Tu plan actual no incluye preguntas frecuentes. Actualiza tu suscripción para habilitarlas.' });
+        }
+        const planLimits = await getProviderPlanLimits(user.id);
+        if (!planLimits.faqEnabled) {
+          return res.status(403).json({ success: false, error: 'Tu plan actual no incluye preguntas frecuentes. Actualiza tu suscripción para habilitarlas.' });
+        }
         const pool = DatabaseConnection.getPool();
         const [rows] = await pool.query(
           `SELECT id, question, answer, order_index
@@ -48,7 +61,15 @@ class ProviderFaqRoutes {
           return res.status(400).json({ success: false, error: 'Pregunta y respuesta son obligatorias' });
         }
 
-        const maxFaqs = Number(process.env.PROVIDER_FAQ_MAX || DEFAULT_MAX_FAQS);
+        const planLimits = await getProviderPlanLimits(user.id);
+        if (!planLimits.faqEnabled) {
+          return res.status(403).json({ success: false, error: 'Tu plan actual no incluye preguntas frecuentes. Actualiza tu suscripción para habilitarlas.' });
+        }
+        const maxFaqs = (() => {
+          const planMax = Number(planLimits.faqLimit || 0);
+          if (planMax > 0) return planMax;
+          return Number(process.env.PROVIDER_FAQ_MAX || DEFAULT_MAX_FAQS);
+        })();
         const pool = DatabaseConnection.getPool();
 
         const [[{ total }]]: any = await pool.query(
@@ -58,7 +79,7 @@ class ProviderFaqRoutes {
           [user.id]
         );
 
-        if (Number(total) >= maxFaqs) {
+        if (maxFaqs > 0 && Number(total) >= maxFaqs) {
           return res.status(400).json({ success: false, error: `Has alcanzado el límite de ${maxFaqs} preguntas frecuentes` });
         }
 
@@ -146,6 +167,10 @@ class ProviderFaqRoutes {
     this.router.put('/provider/faqs/reorder', authenticateToken, requireRole('provider'), async (req: Request, res: Response) => {
       try {
         const user = (req as any).user as AuthUser;
+        const planLimits = await getProviderPlanLimits(user.id);
+        if (!planLimits.faqEnabled) {
+          return res.status(403).json({ success: false, error: 'Tu plan actual no incluye preguntas frecuentes. Actualiza tu suscripción para habilitarlas.' });
+        }
         const { order } = req.body || {};
 
         if (!Array.isArray(order) || !order.length) {

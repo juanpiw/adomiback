@@ -8,7 +8,7 @@ import { PoolConnection } from 'mysql2/promise';
 import DatabaseConnection from '../../shared/database/connection';
 import { authenticateToken } from '../../shared/middleware/auth.middleware';
 import { Logger } from '../../shared/utils/logger.util';
-import { ensureBookingLimit } from '../../shared/utils/subscription.util';
+import { ensureBookingLimit, getProviderPlanLimits } from '../../shared/utils/subscription.util';
 import { emitToUser } from '../../shared/realtime/socket';
 import { PushService } from '../notifications/services/push.service';
 import { validateCodeFormat, compareVerificationCodes, sanitizeCode, generateVerificationCode } from '../../shared/utils/verification-code.util';
@@ -16,6 +16,7 @@ import { cashClosureGate } from '../../shared/middleware/cash-closure-gate';
 import { buildCashCapErrorMessage, loadCashSettings } from './utils/cash-settings.util';
 import { EmailService } from '../../shared/services/email.service';
 import { hasPendingCashDebt } from '../../shared/services/provider-cash.service';
+import { resolveCommissionRate } from '../../shared/utils/commission.util';
 
 const MODULE = 'APPOINTMENTS';
 
@@ -1687,6 +1688,11 @@ function buildRouter(): Router {
       const amount = Number(appt.price || 0);
       if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Precio inválido para la cita' });
 
+      const planLimits = await getProviderPlanLimits(appt.provider_id);
+      if (!planLimits.cashEnabled) {
+        return res.status(403).json({ success: false, error: 'Tu plan actual no permite pagos en efectivo. Actualiza tu plan para habilitarlos.' });
+      }
+
       const cashSettings = await loadCashSettings(pool, MODULE);
       if (amount > cashSettings.cashCap) {
         return res.status(400).json({ success: false, error: buildCashCapErrorMessage(cashSettings.cashCap), cashCap: cashSettings.cashCap });
@@ -1701,7 +1707,9 @@ function buildRouter(): Router {
 
       // Obtener tax y comisión desde settings
       const taxRate = cashSettings.taxRate;
-      const commissionRate = cashSettings.commissionRate;
+      const commissionRate = planLimits.commissionRate && planLimits.commissionRate > 0
+        ? planLimits.commissionRate
+        : cashSettings.commissionRate;
 
       const priceBase = Number((amount / (1 + taxRate / 100)).toFixed(2));
       const taxAmount = Number((amount - priceBase).toFixed(2));
@@ -1811,6 +1819,11 @@ function buildRouter(): Router {
         return res.status(400).json({ success: false, error: 'Precio inválido para la cita' });
       }
 
+      const planLimits = await getProviderPlanLimits(appt.provider_id);
+      if (!planLimits.cashEnabled) {
+        return res.status(403).json({ success: false, error: 'Tu plan actual no permite pagos en efectivo. Actualiza tu plan para habilitarlos.' });
+      }
+
       const cashSettings = await loadCashSettings(pool, MODULE);
       if (amount > cashSettings.cashCap) {
         return res.status(400).json({ success: false, error: buildCashCapErrorMessage(cashSettings.cashCap), cashCap: cashSettings.cashCap });
@@ -1914,6 +1927,10 @@ function buildRouter(): Router {
       }
 
       const amount = Number(appt.price || 0);
+      const planLimits = await getProviderPlanLimits(appt.provider_id);
+      if (!planLimits.cashEnabled) {
+        return res.status(403).json({ success: false, error: 'Tu plan actual no permite pagos en efectivo. Actualiza tu plan para habilitarlos.' });
+      }
       const cashSettings = await loadCashSettings(pool, MODULE);
       if (amount > cashSettings.cashCap) {
         return res.status(400).json({ success: false, error: buildCashCapErrorMessage(cashSettings.cashCap), cashCap: cashSettings.cashCap });
@@ -1931,7 +1948,9 @@ function buildRouter(): Router {
 
       // Calcular impuestos/comisión
       const taxRate = cashSettings.taxRate;
-      const commissionRate = cashSettings.commissionRate;
+      const commissionRate = planLimits.commissionRate && planLimits.commissionRate > 0
+        ? planLimits.commissionRate
+        : cashSettings.commissionRate;
       const dueDays = cashSettings.dueDays;
 
       const priceBase = Number((amount / (1 + taxRate / 100)).toFixed(2));
@@ -2029,6 +2048,11 @@ function buildRouter(): Router {
     const [[appt]]: any = await pool.query('SELECT * FROM appointments WHERE id = ? LIMIT 1', [appointmentId]);
     if (!appt) return { resolved: false };
 
+    const planLimits = await getProviderPlanLimits(appt.provider_id);
+    if (!planLimits.cashEnabled) {
+      return { resolved: false };
+    }
+
     const providerAction = String(appt.closure_provider_action || 'none');
     const clientAction = String(appt.closure_client_action || 'none');
 
@@ -2051,9 +2075,13 @@ function buildRouter(): Router {
       const settings = await loadCashSettings(pool, MODULE);
       if (amount > settings.cashCap) return { resolved: false };
 
+      const commissionRate = planLimits.commissionRate && planLimits.commissionRate > 0
+        ? planLimits.commissionRate
+        : await resolveCommissionRate(appt.provider_id);
+
       const priceBase = Number((amount / (1 + settings.taxRate / 100)).toFixed(2));
       const taxAmount = Number((amount - priceBase).toFixed(2));
-      const commissionAmount = Number((priceBase * (settings.commissionRate / 100)).toFixed(2));
+      const commissionAmount = Number((priceBase * (commissionRate / 100)).toFixed(2));
       const providerAmount = Number((priceBase - commissionAmount).toFixed(2));
 
       const [ins]: any = await pool.execute(

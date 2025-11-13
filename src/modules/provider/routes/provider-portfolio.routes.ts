@@ -7,6 +7,7 @@ import { Router, Request, Response } from 'express';
 import DatabaseConnection from '../../../shared/database/connection';
 import { authenticateToken, AuthUser } from '../../../shared/middleware/auth.middleware';
 import { Logger } from '../../../shared/utils/logger.util';
+import { getProviderPlanLimits } from '../../../shared/utils/subscription.util';
 
 const MODULE = 'ProviderPortfolioRoutes';
 
@@ -85,17 +86,19 @@ export class ProviderPortfolioRoutes {
 
         const pool = DatabaseConnection.getPool();
 
-        // Verificar límite de items (máximo 10)
+        const planLimits = await getProviderPlanLimits(user.id);
+        const portfolioLimit = Number(planLimits.portfolioLimit || 0);
+
         const [countResult] = await pool.query(
           'SELECT COUNT(*) as count FROM provider_portfolio WHERE provider_id = ? AND is_active = TRUE',
           [user.id]
         );
-        const currentCount = (countResult as any[])[0].count;
+        const currentCount = Number((countResult as any[])[0]?.count || 0);
 
-        if (currentCount >= 10) {
+        if (portfolioLimit > 0 && currentCount >= portfolioLimit) {
           return res.status(400).json({
             success: false,
-            error: 'Has alcanzado el límite máximo de 10 items en el portafolio'
+            error: `Has alcanzado el límite máximo de ${portfolioLimit} items en tu plan.`
           });
         }
 

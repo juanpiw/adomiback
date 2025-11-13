@@ -54,7 +54,7 @@ export class QuotesRepository {
           cp.full_name AS client_name,
           cp.profile_photo_url AS client_avatar_url,
           c.created_at AS client_since,
-          a.appointment_date,
+          a.date AS appointment_date,
           a.start_time AS appointment_time
         FROM quotes q
         JOIN users c ON c.id = q.client_id
@@ -128,7 +128,7 @@ export class QuotesRepository {
           cp.full_name AS client_name,
           cp.profile_photo_url AS client_avatar_url,
           c.created_at AS client_since,
-          a.appointment_date,
+          a.date AS appointment_date,
           a.start_time AS appointment_time
         FROM quotes q
         JOIN users c ON c.id = q.client_id
@@ -215,7 +215,7 @@ export class QuotesRepository {
           cp.full_name AS client_name,
           cp.profile_photo_url AS client_avatar_url,
           c.created_at AS client_since,
-          a.appointment_date,
+          a.date AS appointment_date,
           a.start_time AS appointment_time
         FROM quotes q
         JOIN users c ON c.id = q.client_id

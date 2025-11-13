@@ -13,6 +13,7 @@ import { Logger } from '../../../shared/utils/logger.util';
 import { getPresignedPutUrl, getPublicUrlForKey, requireEnv } from '../../../shared/utils/s3.util';
 import { v4 as uuidv4 } from 'uuid';
 import mime from 'mime-types';
+import { getProviderPlanLimits } from '../../../shared/utils/subscription.util';
 
 const MODULE = 'ProviderUploadRoutes';
 
@@ -265,11 +266,13 @@ export class ProviderUploadRoutes {
           }
 
           const pool = DatabaseConnection.getPool();
-          // Límite: 10 items totales, 2 videos máximo
+          const planLimits = await getProviderPlanLimits(user.id);
+          const portfolioLimit = Number(planLimits.portfolioLimit || 0);
+          // Límite: configurable por plan, 2 videos máximo
           const [[{ total }]]: any = await pool.query('SELECT COUNT(*) AS total FROM provider_portfolio WHERE provider_id = ? AND is_active = TRUE', [user.id]);
           Logger.info(MODULE, 'Portfolio counters', { userId: user.id, total });
-          if (total >= 10) {
-            return res.status(400).json({ success: false, error: 'Has alcanzado el límite máximo de 10 items en el portafolio' });
+          if (portfolioLimit > 0 && Number(total || 0) >= portfolioLimit) {
+            return res.status(400).json({ success: false, error: `Has alcanzado el límite máximo de ${portfolioLimit} items en tu plan.` });
           }
           if (type === 'video') {
             const [[{ videos }]]: any = await pool.query('SELECT COUNT(*) AS videos FROM provider_portfolio WHERE provider_id = ? AND is_active = TRUE AND file_type = "video"', [user.id]);

@@ -1,7 +1,8 @@
 import DatabaseConnection from '../database/connection';
 import { Logger } from './logger.util';
+import { parsePlanMetadata, PlanFeatureMetadata, getDefaultPlanFeatures } from './plan-features.util';
 
-export interface ProviderPlanLimits {
+export interface ProviderPlanLimits extends PlanFeatureMetadata {
   providerId: number;
   planId: number | null;
   planType: string | null;
@@ -65,7 +66,8 @@ export async function getProviderPlanLimits(providerId: number): Promise<Provide
         p.plan_type,
         COALESCE(p.max_services, 0) AS max_services,
         COALESCE(p.max_bookings, 0) AS max_bookings,
-        COALESCE(p.commission_rate, 0) AS commission_rate
+        COALESCE(p.commission_rate, 0) AS commission_rate,
+        p.metadata
      FROM users u
      LEFT JOIN subscriptions s ON s.user_id = u.id AND s.status IN ('active','warning','past_due')
      LEFT JOIN plans p ON p.id = COALESCE(s.plan_id, u.active_plan_id)
@@ -83,11 +85,14 @@ export async function getProviderPlanLimits(providerId: number): Promise<Provide
       maxServices: LIMIT_UNLIMITED.services,
       maxBookings: LIMIT_UNLIMITED.bookings,
       commissionRate: null,
-      promoExpiresAt: null
+      promoExpiresAt: null,
+      ...getDefaultPlanFeatures()
     };
   }
 
   const row = (rows as any[])[0];
+  const features = parsePlanMetadata(row.metadata);
+
   return {
     providerId,
     planId: row.active_plan_id || null,
@@ -96,7 +101,8 @@ export async function getProviderPlanLimits(providerId: number): Promise<Provide
     maxServices: row.max_services !== null ? Number(row.max_services) : LIMIT_UNLIMITED.services,
     maxBookings: row.max_bookings !== null ? Number(row.max_bookings) : LIMIT_UNLIMITED.bookings,
     commissionRate: row.commission_rate !== null ? Number(row.commission_rate) : null,
-    promoExpiresAt: row.promo_expires_at ? new Date(row.promo_expires_at) : null
+    promoExpiresAt: row.promo_expires_at ? new Date(row.promo_expires_at) : null,
+    ...features
   };
 }
 

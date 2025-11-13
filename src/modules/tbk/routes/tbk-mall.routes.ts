@@ -4,6 +4,7 @@ import { authenticateToken, AuthUser } from '../../../shared/middleware/auth.mid
 import DatabaseConnection from '../../../shared/database/connection';
 import axios from 'axios';
 import { Logger } from '../../../shared/utils/logger.util';
+import { resolveCommissionRate } from '../../../shared/utils/commission.util';
 
 const MODULE = 'TBK_MALL_ROUTES';
 const router = Router();
@@ -59,16 +60,13 @@ router.post('/tbk/mall/transactions', authenticateToken, async (req: Request, re
 
       // Leer settings de comisión/IVA
       let taxRate = 0.0; // si no hay IVA, se considera 0
-      let commissionRate = 15.0;
       try {
-        const [setRows]: any = await pool.query(
-          `SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN ('default_tax_rate','default_commission_rate')`
+        const [[taxRow]]: any = await pool.query(
+          `SELECT setting_value FROM platform_settings WHERE setting_key = 'default_tax_rate' LIMIT 1`
         );
-        for (const r of setRows as any[]) {
-          if (r.setting_key === 'default_tax_rate') taxRate = Number(r.setting_value) || 0.0;
-          if (r.setting_key === 'default_commission_rate') commissionRate = Number(r.setting_value) || 15.0;
-        }
+        taxRate = taxRow ? Number(taxRow.setting_value) || 0.0 : 0.0;
       } catch {}
+      const commissionRate = await resolveCommissionRate(pid);
 
       // Calcular sobre base neta si hay IVA configurado
       const priceBase = taxRate > 0 ? Math.round(amount / (1 + taxRate / 100)) : amount;

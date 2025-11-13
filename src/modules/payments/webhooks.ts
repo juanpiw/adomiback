@@ -6,6 +6,7 @@ import { emitToUser } from '../../shared/realtime/socket';
 import { PushService } from '../notifications/services/push.service';
 import { generateVerificationCode } from '../../shared/utils/verification-code.util';
 import { EmailService } from '../../shared/services/email.service';
+import { resolveCommissionRate } from '../../shared/utils/commission.util';
 import type StripeNamespace from 'stripe';
 
 const MODULE = 'PAYMENTS_WEBHOOKS';
@@ -352,14 +353,13 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
     } catch {}
 
     // Commission over net base (amount without VAT if configured)
-    let commissionRate = 15.0;
+    const commissionRate = await resolveCommissionRate(appt.provider_id);
     let vatPercent = 0.0;
     try {
-      const [setRows] = await pool.query('SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN ("default_commission_rate","vat_rate_percent")');
-      (setRows as any[]).forEach((r: any) => {
-        if (r.setting_key === 'default_commission_rate') commissionRate = Number(r.setting_value) || 15.0;
-        if (r.setting_key === 'vat_rate_percent') vatPercent = Number(r.setting_value) || 0.0;
-      });
+      const [[vatRow]]: any = await pool.query(
+        'SELECT setting_value FROM platform_settings WHERE setting_key = "vat_rate_percent" LIMIT 1'
+      );
+      vatPercent = vatRow ? Number(vatRow.setting_value) || 0.0 : 0.0;
     } catch {}
     // If VAT configured, assume amount is VAT-inclusive: tax = amount * vat/(100+vat)
     const taxAmount = vatPercent > 0 ? Number((amount * (vatPercent / (100 + vatPercent))).toFixed(2)) : 0;

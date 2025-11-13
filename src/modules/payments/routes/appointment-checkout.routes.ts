@@ -1,12 +1,14 @@
 import { Router, Request, Response } from 'express';
+import Stripe from 'stripe';
 import { authenticateToken } from '../../../shared/middleware/auth.middleware';
 import DatabaseConnection from '../../../shared/database/connection';
 import { Logger } from '../../../shared/utils/logger.util';
-import Stripe from 'stripe';
 import { emitToUser } from '../../../shared/realtime/socket';
 import { PushService } from '../../notifications/services/push.service';
 import { generateVerificationCode } from '../../../shared/utils/verification-code.util';
 import { cashClosureGate } from '../../../shared/middleware/cash-closure-gate';
+import { getProviderPlanLimits } from '../../../shared/utils/subscription.util';
+import { resolveCommissionRate } from '../../../shared/utils/commission.util';
 
 const MODULE = 'PAYMENTS_APPOINTMENTS';
 
@@ -31,6 +33,9 @@ export function buildAppointmentCheckoutRoutes(): Router {
       const amount = Number(appt.price || 0);
       if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Precio inválido para la cita' });
 
+      const planLimits = await getProviderPlanLimits(appt.provider_id);
+      const providerCommissionRate = await resolveCommissionRate(appt.provider_id);
+
       const stripeSecret = process.env.STRIPE_SECRET_KEY;
       if (!stripeSecret) return res.status(500).json({ success: false, error: 'Stripe no configurado' });
       const FRONTEND_URL = process.env.FRONTEND_BASE_URL || process.env.FRONTEND_URL || 'http://localhost:4200';
@@ -47,7 +52,6 @@ export function buildAppointmentCheckoutRoutes(): Router {
       // Feature flag Connect + verificación de proveedor
       let useConnect = false;
       let providerAcct: string | null = null;
-      let commissionRate = 15.0;
       try {
         const [[u]]: any = await pool.query('SELECT stripe_account_id, stripe_payouts_enabled FROM users WHERE id = ? LIMIT 1', [appt.provider_id]);
         if (u && u.stripe_account_id && (u.stripe_payouts_enabled === 1 || u.stripe_payouts_enabled === true)) {
@@ -57,13 +61,8 @@ export function buildAppointmentCheckoutRoutes(): Router {
         const globalEnabled = (process.env.STRIPE_CONNECT_ENABLED || '').toLowerCase() === 'true' || (cfg ? String(cfg.setting_value).toLowerCase() === 'true' : false);
         useConnect = !!(globalEnabled && providerAcct);
       } catch {}
-      try {
-        const [[rate]]: any = await pool.query('SELECT setting_value FROM platform_settings WHERE setting_key = "stripe_connect_fee_percent" LIMIT 1');
-        if (rate) commissionRate = Number(rate.setting_value) || commissionRate;
-      } catch {}
-
       // Calcular comisión base (CLP entero)
-      const applicationFeeAmount = useConnect ? Math.max(0, Math.round(checkoutAmount * (commissionRate / 100))) : 0;
+      const applicationFeeAmount = useConnect ? Math.max(0, Math.round(checkoutAmount * (providerCommissionRate / 100))) : 0;
 
       const session = await stripe.checkout.sessions.create({
         mode: 'payment',
@@ -122,6 +121,11 @@ export function buildAppointmentCheckoutRoutes(): Router {
         return res.status(403).json({ success: false, error: 'No autorizado' });
       }
 
+      const planLimits = await getProviderPlanLimits(appt.provider_id);
+      if (!planLimits.cashEnabled) {
+        return res.status(403).json({ success: false, error: 'Tu plan actual no permite pagos en efectivo. Actualiza tu plan para habilitarlos.' });
+      }
+
       const amount = Number(appt.price || 0);
       if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Precio inválido para la cita' });
       // Tope cash
@@ -167,6 +171,7 @@ export function buildAppointmentCheckoutRoutes(): Router {
       if (Number(appt.client_id) !== Number(user.id) && Number(appt.provider_id) !== Number(user.id)) {
         return res.status(403).json({ success: false, error: 'No autorizado' });
       }
+      const commissionRate = await resolveCommissionRate(appt.provider_id);
       // Derivar estado desde payments
       const [payRows] = await pool.query('SELECT * FROM payments WHERE appointment_id = ? ORDER BY id DESC LIMIT 1', [appointmentId]);
       const payment = (payRows as any[])[0] || null;
@@ -216,7 +221,6 @@ export function buildAppointmentCheckoutRoutes(): Router {
         const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : (session.payment_intent as any)?.id;
         Logger.info(MODULE, `🧭 [CONFIRM] Registrando pago amount=${amount} ${currency}, pi=${paymentIntentId}`);
         // Insertar pago con montos de comisión calculados
-        const commissionRate = 15.0; // 15% comisión Adomi
         const commissionAmount = Math.round(amount * commissionRate / 100);
         const providerAmount = amount - commissionAmount;
         
