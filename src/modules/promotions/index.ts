@@ -4,6 +4,7 @@ import { authenticateToken } from '../../shared/middleware/auth.middleware';
 import { Logger } from '../../shared/utils/logger.util';
 
 const MODULE = 'PROMOTIONS';
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function buildRouter(): Router {
   const router = Router();
@@ -17,6 +18,69 @@ function buildRouter(): Router {
     if (end && end < new Date(today.toDateString())) return 'expired';
     return isActive ? 'active' : 'inactive';
   }
+
+  // POST /promo/signup - registro público para prueba gratis
+  router.post('/promo/signup', async (req: Request, res: Response) => {
+    try {
+      const { nombre, correo, profesion, notas } = req.body || {};
+
+      const cleanNombre = typeof nombre === 'string' ? nombre.trim() : '';
+      const cleanCorreo = typeof correo === 'string' ? correo.trim().toLowerCase() : '';
+      const cleanProfesion = typeof profesion === 'string' ? profesion.trim() : '';
+      const cleanNotas = typeof notas === 'string' ? notas.trim() : null;
+
+      if (!cleanNombre || !cleanCorreo || !cleanProfesion) {
+        return res.status(400).json({ success: false, error: 'Los campos nombre, correo y profesión son obligatorios.' });
+      }
+
+      if (!EMAIL_REGEX.test(cleanCorreo)) {
+        return res.status(400).json({ success: false, error: 'El correo electrónico no es válido.' });
+      }
+
+      if (cleanNombre.length > 255 || cleanCorreo.length > 255 || cleanProfesion.length > 100) {
+        return res.status(400).json({ success: false, error: 'Uno de los campos excede el largo permitido.' });
+      }
+
+      const pool = DatabaseConnection.getPool();
+      const [result]: any = await pool.execute(
+        `INSERT INTO promo_signups (nombre, correo, profesion, notas, status)
+         VALUES (?, ?, ?, ?, 'pending')
+         ON DUPLICATE KEY UPDATE
+           nombre = VALUES(nombre),
+           profesion = VALUES(profesion),
+           notas = VALUES(notas),
+           status = 'pending',
+           updated_at = CURRENT_TIMESTAMP`,
+        [cleanNombre, cleanCorreo, cleanProfesion, cleanNotas]
+      );
+
+      const isNew = result?.insertId && Number(result.insertId) > 0;
+      const [[signup]]: any = await pool.query(
+        `SELECT id, nombre, correo, profesion, notas, status, created_at, updated_at
+           FROM promo_signups
+          WHERE correo = ?
+          LIMIT 1`,
+        [cleanCorreo]
+      );
+
+      if (!signup) {
+        return res.status(500).json({ success: false, error: 'No se pudo registrar la promoción.' });
+      }
+
+      return res.status(isNew ? 201 : 200).json({
+        success: true,
+        message: isNew ? 'Registro creado correctamente.' : 'Registro actualizado correctamente.',
+        data: signup
+      });
+    } catch (error: any) {
+      if (error?.code === 'ER_DUP_ENTRY') {
+        Logger.warn(MODULE, '[PROMO_SIGNUP] Conflicto con correo duplicado', error);
+        return res.status(409).json({ success: false, error: 'El correo ingresado ya está registrado.' });
+      }
+      Logger.error(MODULE, '[PROMO_SIGNUP] Error registrando prueba gratis', error);
+      return res.status(500).json({ success: false, error: 'No pudimos registrar tu solicitud. Intenta nuevamente.' });
+    }
+  });
 
   // GET /provider/promotions
   router.get('/provider/promotions', authenticateToken, async (req: Request, res: Response) => {
@@ -183,6 +247,7 @@ export function setupPromotionsModule(app: Express) {
 
   console.log('[PROMOTIONS] ✅ Rutas de promociones montadas correctamente');
   console.log('[PROMOTIONS] 🔗 Endpoints disponibles:');
+  console.log('[PROMOTIONS]   - POST /promo/signup');
   console.log('[PROMOTIONS]   - GET /provider/promotions');
   console.log('[PROMOTIONS]   - POST /provider/promotions');
   console.log('[PROMOTIONS]   - PUT /provider/promotions/:id');

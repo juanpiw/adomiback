@@ -625,15 +625,16 @@ function buildRouter(): Router {
       const appName = process.env.APP_NAME || 'Adomi';
       const brandColor = process.env.BRAND_COLOR_HEX || '#6366f1';
       const brandLogo = process.env.BRAND_LOGO_URL || undefined;
+      const DEFAULT_PUBLIC_APP_URL = 'https://adomiapp.com';
       const publicAppUrlRaw =
         process.env.PUBLIC_APP_URL ||
         process.env.APP_BASE_URL ||
         process.env.CLIENT_APP_URL ||
         process.env.PUBLIC_BASE_URL ||
-        '';
-      const publicAppUrl = publicAppUrlRaw ? publicAppUrlRaw.replace(/\/$/, '') : '';
-      const clientDashboardUrl = publicAppUrl ? `${publicAppUrl}/client/agenda` : null;
-      const providerDashboardUrl = publicAppUrl ? `${publicAppUrl}/dash/agenda` : null;
+        DEFAULT_PUBLIC_APP_URL;
+      const publicAppUrl = publicAppUrlRaw ? publicAppUrlRaw.replace(/\/$/, '') : DEFAULT_PUBLIC_APP_URL;
+      const clientDashboardUrl = `${publicAppUrl}/client/reservas?view=calendar`;
+      const providerDashboardUrl = `${publicAppUrl}/dash/agenda?view=calendar`;
       const currency = process.env.APP_CURRENCY || 'CLP';
       const appointmentNotes = typeof notes === 'string' && notes.trim().length ? notes.trim() : null;
       const emailLocationLabel =
