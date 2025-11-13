@@ -65,17 +65,22 @@ export class PushService {
     }
   }
 
-  static async notifyUser(userId: number, title: string, body: string, data?: Record<string, string>): Promise<void> {
+  static async notifyUser(userId: number, title: string, body: string, data?: Record<string, string | number | boolean | null>): Promise<void> {
     console.log('🟡 [PUSH_SERVICE] ==================== NOTIFY USER ====================');
     console.log('🟡 [PUSH_SERVICE] Timestamp:', new Date().toISOString());
     console.log('🟡 [PUSH_SERVICE] User ID:', userId);
     console.log('🟡 [PUSH_SERVICE] Title:', title);
     console.log('🟡 [PUSH_SERVICE] Body:', body);
-    console.log('🟡 [PUSH_SERVICE] Data:', JSON.stringify(data));
+    console.log('🟡 [PUSH_SERVICE] Data (raw):', JSON.stringify(data));
+
+    const enrichedData = await this.enrichNotificationData(data);
+    const sanitizedData = this.sanitizeNotificationData(enrichedData);
+    console.log('🟡 [PUSH_SERVICE] Data (enriched):', JSON.stringify(enrichedData));
+    console.log('🟡 [PUSH_SERVICE] Data (sanitized):', JSON.stringify(sanitizedData));
     
     // Crear notificación in-app primero
     console.log('🟡 [PUSH_SERVICE] Creando notificación in-app...');
-    await this.createInAppNotification(userId, title, body, data);
+    await this.createInAppNotification(userId, title, body, sanitizedData);
     console.log('🟡 [PUSH_SERVICE] ✅ Notificación in-app creada');
     
     // Intentar enviar push notification
@@ -107,7 +112,7 @@ export class PushService {
       
       const message = {
         notification: { title, body },
-        data: data || {},
+        data: sanitizedData || {},
         tokens
       };
       
@@ -244,6 +249,184 @@ export class PushService {
       Logger.error(MODULE, 'Error getting unread count', err as any);
       return 0;
     }
+  }
+
+  private static async enrichNotificationData(
+    data?: Record<string, string | number | boolean | null>
+  ): Promise<Record<string, string | number | boolean | null> | undefined> {
+    if (!data) {
+      return undefined;
+    }
+
+    const enriched: Record<string, string | number | boolean | null> = { ...data };
+    const rawAppointmentId =
+      enriched.appointment_id ??
+      enriched.appointmentId ??
+      enriched.appointmentID ??
+      enriched.appointment;
+
+    if (rawAppointmentId === undefined || rawAppointmentId === null) {
+      return enriched;
+    }
+
+    const appointmentId = Number(rawAppointmentId);
+    if (!Number.isFinite(appointmentId) || appointmentId <= 0) {
+      enriched.appointment_id = String(rawAppointmentId);
+      enriched.appointmentId = String(rawAppointmentId);
+      return enriched;
+    }
+
+    const pool = DatabaseConnection.getPool();
+    try {
+      const [[appointment]]: any = await pool.query(
+        `SELECT id, date, start_time, end_time
+           FROM appointments
+          WHERE id = ?
+          LIMIT 1`,
+        [appointmentId]
+      );
+
+      if (appointment) {
+        const dateStr = this.normalizeDateString(appointment.date);
+        const startTimeStr = this.normalizeTimeString(appointment.start_time);
+        const endTimeStr = this.normalizeTimeString(appointment.end_time);
+        const localIso = this.buildLocalIsoString(dateStr, startTimeStr);
+        const utcIso = localIso ? `${localIso}:00Z` : null;
+        const formattedLabel = this.formatDisplayDate(dateStr, startTimeStr);
+
+        if (dateStr) {
+          enriched.appointment_date = dateStr;
+          enriched.appointmentDate = dateStr;
+          if (!enriched.date) {
+            enriched.date = dateStr;
+          }
+        }
+        if (startTimeStr) {
+          enriched.appointment_time = startTimeStr;
+          enriched.appointmentTime = startTimeStr;
+          enriched.start_time = startTimeStr;
+          enriched.startTime = startTimeStr;
+        }
+        if (endTimeStr) {
+          enriched.end_time = endTimeStr;
+          enriched.endTime = endTimeStr;
+        }
+        if (localIso) {
+          enriched.appointment_datetime = localIso;
+          enriched.appointmentDateTime = localIso;
+        }
+        if (utcIso) {
+          enriched.appointment_datetime_iso = utcIso;
+          enriched.appointmentDateTimeIso = utcIso;
+        }
+        if (formattedLabel) {
+          enriched.appointment_formatted_date = formattedLabel;
+          enriched.appointmentFormattedDate = formattedLabel;
+          enriched.appointment_display_date = formattedLabel;
+          enriched.appointmentDisplayDate = formattedLabel;
+        }
+      }
+    } catch (err) {
+      Logger.error(MODULE, 'Error enriching notification data with appointment info', err as any);
+    }
+
+    enriched.appointment_id = String(appointmentId);
+    enriched.appointmentId = String(appointmentId);
+
+    return enriched;
+  }
+
+  private static sanitizeNotificationData(
+    data?: Record<string, string | number | boolean | null>
+  ): Record<string, string> | undefined {
+    if (!data) {
+      return undefined;
+    }
+    const sanitized: Record<string, string> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (value === undefined || value === null) {
+        continue;
+      }
+      sanitized[key] = typeof value === 'string' ? value : String(value);
+    }
+    return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+  }
+
+  private static normalizeDateString(value: any): string | null {
+    if (value === undefined || value === null) {
+      return null;
+    }
+    if (value instanceof Date && !isNaN(value.getTime())) {
+      return value.toISOString().slice(0, 10);
+    }
+    const raw = String(value).trim();
+    if (!raw) {
+      return null;
+    }
+    const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) {
+      return `${match[1]}-${match[2]}-${match[3]}`;
+    }
+    const parsed = new Date(raw);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toISOString().slice(0, 10);
+    }
+    return null;
+  }
+
+  private static normalizeTimeString(value: any): string | null {
+    if (value === undefined || value === null) {
+      return null;
+    }
+    const raw = String(value).trim();
+    if (!raw) {
+      return null;
+    }
+    if (/^\d{2}:\d{2}(:\d{2})?$/.test(raw)) {
+      return raw.slice(0, 5);
+    }
+    if (/^\d{4}$/.test(raw)) {
+      return `${raw.slice(0, 2)}:${raw.slice(2)}`;
+    }
+    if (/^\d{1,2}$/.test(raw)) {
+      return raw.padStart(2, '0') + ':00';
+    }
+    return null;
+  }
+
+  private static buildLocalIsoString(dateStr: string | null, timeStr: string | null): string | null {
+    if (!dateStr) {
+      return null;
+    }
+    const time = timeStr || '00:00';
+    return `${dateStr}T${time}`;
+  }
+
+  private static formatDisplayDate(dateStr: string | null, timeStr: string | null): string | null {
+    if (!dateStr) {
+      return null;
+    }
+    const time = timeStr || '00:00';
+    const isoWithSeconds = `${dateStr}T${time}:00`;
+    const parsed = new Date(isoWithSeconds);
+    if (isNaN(parsed.getTime())) {
+      const fallback = new Date(`${dateStr}T00:00:00`);
+      if (isNaN(fallback.getTime())) {
+        return null;
+      }
+      return fallback.toLocaleDateString('es-CL', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
+      });
+    }
+    return parsed.toLocaleDateString('es-CL', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    });
   }
 }
 
