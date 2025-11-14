@@ -161,6 +161,23 @@ export class QuotesRepository {
       [clientId, ...statuses, limit, offset]
     );
 
+    Logger.info(MODULE, '[CLIENT_QUOTES][listClientQuotes] raw rows', {
+      clientId,
+      bucket,
+      limit,
+      offset,
+      count: (rows as any[]).length,
+      sample: rows[0]
+        ? {
+            id: rows[0].id,
+            status: rows[0].status,
+            proposal_amount: rows[0].proposal_amount,
+            proposal_valid_until: rows[0].proposal_valid_until,
+            proposal_details: rows[0].proposal_details
+          }
+        : null
+    });
+
     return (rows as any[]).map((row) => QuotesRepository.mapListRow(row));
   }
 
