@@ -244,11 +244,13 @@ export class QuotesRoutes {
         const status = (String(req.query.status || 'new').toLowerCase() as QuoteBucket) || 'new';
         const limit = req.query.limit ? Number(req.query.limit) : undefined;
         const offset = req.query.offset ? Number(req.query.offset) : undefined;
+        Logger.info(MODULE, '[CLIENT_QUOTES] listing quotes', { clientId: user.id, status, limit, offset });
         const quotes = await this.service.listClientQuotes(user.id, status, limit, offset);
         const counters = await this.service.getClientCounters(user.id);
+        Logger.info(MODULE, '[CLIENT_QUOTES] response summary', { count: quotes.length, counters });
         return res.json({ success: true, quotes, counters });
       } catch (error: any) {
-        Logger.error(MODULE, 'Error listing client quotes', error);
+        Logger.error(MODULE, '[CLIENT_QUOTES] Error listing client quotes', error);
         const status = error?.statusCode || 500;
         return res.status(status).json({ success: false, error: error?.message || 'Error al obtener tus cotizaciones.' });
       }
