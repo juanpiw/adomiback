@@ -38,6 +38,11 @@ export interface QuoteListRecord {
   client_name: string;
   client_avatar_url: string | null;
   client_since: string | null;
+  provider_name?: string | null;
+  provider_avatar_url?: string | null;
+  provider_since?: string | null;
+  provider_city?: string | null;
+  provider_country?: string | null;
   appointment_date: string | null;
   appointment_time: string | null;
 }

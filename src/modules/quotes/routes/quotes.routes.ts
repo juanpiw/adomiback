@@ -5,6 +5,7 @@ import { Router, Request, Response } from 'express';
 import { authenticateToken, AuthUser } from '../../../shared/middleware/auth.middleware';
 import { Logger } from '../../../shared/utils/logger.util';
 import { QuotesService } from '../quotes.service';
+import { QuoteBucket } from '../quotes.types';
 
 const MODULE = 'QuotesRoutes';
 
@@ -233,6 +234,44 @@ export class QuotesRoutes {
         }
       }
     );
+
+    this.router.get('/client/quotes', authenticateToken, async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user as AuthUser;
+        if (!user || user.role !== 'client') {
+          return res.status(403).json({ success: false, error: 'Solo los clientes autenticados pueden ver sus cotizaciones.' });
+        }
+        const status = (String(req.query.status || 'new').toLowerCase() as QuoteBucket) || 'new';
+        const limit = req.query.limit ? Number(req.query.limit) : undefined;
+        const offset = req.query.offset ? Number(req.query.offset) : undefined;
+        const quotes = await this.service.listClientQuotes(user.id, status, limit, offset);
+        const counters = await this.service.getClientCounters(user.id);
+        return res.json({ success: true, quotes, counters });
+      } catch (error: any) {
+        Logger.error(MODULE, 'Error listing client quotes', error);
+        const status = error?.statusCode || 500;
+        return res.status(status).json({ success: false, error: error?.message || 'Error al obtener tus cotizaciones.' });
+      }
+    });
+
+    this.router.get('/client/quotes/:id', authenticateToken, async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user as AuthUser;
+        if (!user || user.role !== 'client') {
+          return res.status(403).json({ success: false, error: 'Solo los clientes autenticados pueden ver sus cotizaciones.' });
+        }
+        const quoteId = Number(req.params.id);
+        const quote = await this.service.getClientQuote(user.id, quoteId);
+        if (!quote) {
+          return res.status(404).json({ success: false, error: 'Cotización no encontrada.' });
+        }
+        return res.json({ success: true, quote });
+      } catch (error: any) {
+        Logger.error(MODULE, 'Error retrieving client quote', error);
+        const status = error?.statusCode || 500;
+        return res.status(status).json({ success: false, error: error?.message || 'Error al obtener la cotización.' });
+      }
+    });
   }
 }
 

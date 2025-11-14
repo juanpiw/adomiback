@@ -29,7 +29,10 @@ export class QuotesRepository {
     const limit = Math.min(Math.max(Number(options.limit) || 25, 1), 100);
     const offset = Math.max(Number(options.offset) || 0, 0);
 
-    const statuses = bucket === 'history' ? HISTORY_STATUSES : [bucket as QuoteStatus];
+    let statuses = bucket === 'history' ? HISTORY_STATUSES : [bucket as QuoteStatus];
+    if (bucket === 'new') {
+      statuses = ['new', 'draft'];
+    }
 
     const [rows] = await pool.query(
       `
@@ -103,6 +106,91 @@ export class QuotesRepository {
     return counters;
   }
 
+  static async listClientQuotes(clientId: number, bucket: QuoteBucket, options: ListOptions = {}): Promise<QuoteListRecord[]> {
+    const pool = DatabaseConnection.getPool();
+    const limit = Math.min(Math.max(Number(options.limit) || 25, 1), 100);
+    const offset = Math.max(Number(options.offset) || 0, 0);
+    const statuses = bucket === 'history' ? HISTORY_STATUSES : [bucket as QuoteStatus];
+
+    const [rows] = await pool.query(
+      `
+        SELECT
+          q.id,
+          q.provider_id,
+          q.client_id,
+          q.appointment_id,
+          q.status,
+          q.client_message,
+          q.service_summary,
+          q.currency,
+          q.proposal_amount,
+          q.proposal_details,
+          q.proposal_valid_until,
+          q.sent_at,
+          q.accepted_at,
+          q.rejected_at,
+          q.expires_at,
+          q.created_at,
+          q.updated_at,
+          cp.full_name AS client_name,
+          cp.profile_photo_url AS client_avatar_url,
+          c.created_at AS client_since,
+          pp.brand_name AS provider_name,
+          pp.logo_url AS provider_avatar_url,
+          pp.city AS provider_city,
+          pp.country AS provider_country,
+          p.created_at AS provider_since,
+          a.date AS appointment_date,
+          a.start_time AS appointment_time
+        FROM quotes q
+        JOIN users c ON c.id = q.client_id
+        LEFT JOIN client_profiles cp ON cp.client_id = q.client_id
+        JOIN users p ON p.id = q.provider_id
+        LEFT JOIN provider_profiles pp ON pp.provider_id = q.provider_id
+        LEFT JOIN appointments a ON a.id = q.appointment_id
+        WHERE q.client_id = ?
+          AND q.deleted_at IS NULL
+          AND q.status IN (${statuses.map(() => '?').join(',') || "'new'"})
+        ORDER BY q.updated_at DESC
+        LIMIT ?
+        OFFSET ?
+      `,
+      [clientId, ...statuses, limit, offset]
+    );
+
+    return (rows as any[]).map((row) => QuotesRepository.mapListRow(row));
+  }
+
+  static async countClientQuotes(clientId: number): Promise<Record<QuoteStatus, number>> {
+    const pool = DatabaseConnection.getPool();
+    const [rows] = await pool.query(
+      `
+        SELECT status, COUNT(*) AS total
+        FROM quotes
+        WHERE client_id = ? AND deleted_at IS NULL
+        GROUP BY status
+      `,
+      [clientId]
+    );
+
+    const counters: Record<QuoteStatus, number> = {
+      new: 0,
+      draft: 0,
+      sent: 0,
+      accepted: 0,
+      rejected: 0,
+      expired: 0
+    };
+
+    for (const row of rows as any[]) {
+      const status = row.status as QuoteStatus;
+      if (status in counters) {
+        counters[status] = Number(row.total) || 0;
+      }
+    }
+    return counters;
+  }
+
   static async findProviderQuote(providerId: number, quoteId: number): Promise<QuoteDetailRecord | null> {
     const pool = DatabaseConnection.getPool();
     const [rows] = await pool.query(
@@ -138,6 +226,100 @@ export class QuotesRepository {
         LIMIT 1
       `,
       [providerId, quoteId]
+    );
+
+    if (!(rows as any[]).length) {
+      return null;
+    }
+
+    const base = QuotesRepository.mapListRow((rows as any[])[0]);
+
+    const [items] = await pool.query(
+      `SELECT id, quote_id, position, title, description, quantity, unit_price, total_price
+         FROM quote_items
+        WHERE quote_id = ?
+        ORDER BY position ASC, id ASC`,
+      [quoteId]
+    );
+
+    const [attachments] = await pool.query(
+      `SELECT id, quote_id, file_name, file_path, mime_type, file_size, category, uploaded_at
+         FROM quote_attachments
+        WHERE quote_id = ?
+        ORDER BY uploaded_at DESC`,
+      [quoteId]
+    );
+
+    const [events] = await pool.query(
+      `SELECT id, quote_id, actor_type, actor_id, event_type, metadata, created_at
+         FROM quote_events
+        WHERE quote_id = ?
+        ORDER BY created_at ASC`,
+      [quoteId]
+    );
+
+    const [messages] = await pool.query(
+      `SELECT id, quote_id, sender_id, sender_role, message, read_at, created_at
+         FROM quote_messages
+        WHERE quote_id = ?
+        ORDER BY created_at ASC`,
+      [quoteId]
+    );
+
+    return {
+      ...base,
+      items: items as QuoteItemRecord[],
+      attachments: attachments as QuoteAttachmentRecord[],
+      events: (events as any[]).map((event) => ({
+        ...event,
+        metadata: QuotesRepository.parseJson(event.metadata)
+      })) as QuoteEventRecord[],
+      messages: messages as QuoteMessageRecord[]
+    };
+  }
+
+  static async findClientQuote(clientId: number, quoteId: number): Promise<QuoteDetailRecord | null> {
+    const pool = DatabaseConnection.getPool();
+    const [rows] = await pool.query(
+      `
+        SELECT
+          q.id,
+          q.provider_id,
+          q.client_id,
+          q.appointment_id,
+          q.status,
+          q.client_message,
+          q.service_summary,
+          q.currency,
+          q.proposal_amount,
+          q.proposal_details,
+          q.proposal_valid_until,
+          q.sent_at,
+          q.accepted_at,
+          q.rejected_at,
+          q.expires_at,
+          q.created_at,
+          q.updated_at,
+          cp.full_name AS client_name,
+          cp.profile_photo_url AS client_avatar_url,
+          c.created_at AS client_since,
+          pp.brand_name AS provider_name,
+          pp.logo_url AS provider_avatar_url,
+          pp.city AS provider_city,
+          pp.country AS provider_country,
+          p.created_at AS provider_since,
+          a.date AS appointment_date,
+          a.start_time AS appointment_time
+        FROM quotes q
+        JOIN users c ON c.id = q.client_id
+        LEFT JOIN client_profiles cp ON cp.client_id = q.client_id
+        JOIN users p ON p.id = q.provider_id
+        LEFT JOIN provider_profiles pp ON pp.provider_id = q.provider_id
+        LEFT JOIN appointments a ON a.id = q.appointment_id
+        WHERE q.client_id = ? AND q.id = ? AND q.deleted_at IS NULL
+        LIMIT 1
+      `,
+      [clientId, quoteId]
     );
 
     if (!(rows as any[]).length) {
@@ -468,6 +650,11 @@ export class QuotesRepository {
       client_name: row.client_name || 'Cliente Adomi',
       client_avatar_url: row.client_avatar_url ?? null,
       client_since: QuotesRepository.normalizeDate(row.client_since),
+      provider_name: row.provider_name ?? null,
+      provider_avatar_url: row.provider_avatar_url ?? null,
+      provider_since: QuotesRepository.normalizeDate(row.provider_since),
+      provider_city: row.provider_city ?? null,
+      provider_country: row.provider_country ?? null,
       appointment_date: QuotesRepository.normalizeDate(row.appointment_date),
       appointment_time: row.appointment_time ? String(row.appointment_time).slice(0, 5) : null
     };

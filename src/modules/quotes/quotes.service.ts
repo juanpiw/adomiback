@@ -46,6 +46,11 @@ export class QuotesService {
     return records.map((record) => this.mapListRecord(record));
   }
 
+  async listClientQuotes(clientId: number, bucket: QuoteBucket, limit?: number, offset?: number) {
+    const records = await QuotesRepository.listClientQuotes(clientId, bucket, { limit, offset });
+    return records.map((record) => this.mapClientListRecord(record));
+  }
+
   async createClientRequest(payload: ClientRequestPayload): Promise<number> {
     const serviceSummary = (payload.serviceSummary || '').trim().slice(0, 255);
     const message = (payload.clientMessage || '').trim();
@@ -113,6 +118,12 @@ export class QuotesService {
     return this.mapDetailRecord(record);
   }
 
+  async getClientQuote(clientId: number, quoteId: number): Promise<any | null> {
+    const record = await QuotesRepository.findClientQuote(clientId, quoteId);
+    if (!record) return null;
+    return this.mapClientDetailRecord(record);
+  }
+
   async getProviderCounters(providerId: number) {
     await ensureQuotesFeature(providerId);
     const counters = await QuotesRepository.countProviderQuotes(providerId);
@@ -121,6 +132,16 @@ export class QuotesService {
       sent: counters.sent,
       accepted: counters.accepted,
       history: counters.rejected + counters.expired
+    };
+  }
+
+  async getClientCounters(clientId: number) {
+    const counters = await QuotesRepository.countClientQuotes(clientId);
+    return {
+      new: (counters.new || 0) + (counters.draft || 0),
+      sent: counters.sent || 0,
+      accepted: counters.accepted || 0,
+      history: (counters.rejected || 0) + (counters.expired || 0)
     };
   }
 
@@ -267,6 +288,58 @@ export class QuotesService {
   private mapDetailRecord(record: QuoteDetailRecord) {
     return {
       ...this.mapListRecord(record),
+      status: record.status,
+      proposal: {
+        amount: record.proposal_amount,
+        currency: record.currency,
+        details: record.proposal_details,
+        validUntil: record.proposal_valid_until
+      },
+      items: record.items,
+      attachments: record.attachments.map((attachment) => ({
+        id: attachment.id,
+        name: attachment.file_name,
+        url: attachment.file_path,
+        size: attachment.file_size,
+        type: attachment.mime_type,
+        category: attachment.category
+      })),
+      events: record.events,
+      messages: record.messages
+    };
+  }
+
+  private mapClientListRecord(record: QuoteListRecord) {
+    return {
+      id: record.id,
+      status: record.status === 'draft' ? 'new' : record.status,
+      serviceName: record.service_summary || 'Solicitud enviada',
+      requestedAt: record.created_at,
+      provider: {
+        id: record.provider_id,
+        name: record.provider_name || 'Profesional Adomi',
+        avatarUrl: record.provider_avatar_url,
+        memberSince: record.provider_since,
+        city: record.provider_city,
+        country: record.provider_country
+      },
+      message: record.client_message,
+      amount: record.proposal_amount,
+      currency: record.currency || 'CLP',
+      validUntil: record.proposal_valid_until,
+      appointment: record.appointment_id
+        ? {
+            appointmentId: record.appointment_id,
+            date: record.appointment_date,
+            time: record.appointment_time
+          }
+        : null
+    };
+  }
+
+  private mapClientDetailRecord(record: QuoteDetailRecord) {
+    return {
+      ...this.mapClientListRecord(record),
       status: record.status,
       proposal: {
         amount: record.proposal_amount,
