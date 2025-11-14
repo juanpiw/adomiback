@@ -334,7 +334,7 @@ export class ClientVerificationRoutes {
 
   private async getVerificationFiles(pool: ReturnType<typeof DatabaseConnection.getPool>, verificationId: number) {
     const [rows]: any = await pool.query(
-      `SELECT file_type AS type, s3_bucket AS bucket, s3_key AS key, mime_type, size_bytes, checksum_sha256,
+      `SELECT file_type AS type, s3_bucket AS bucket, s3_key AS file_key, mime_type, size_bytes, checksum_sha256,
               uploaded_at, updated_at
          FROM client_verification_files
         WHERE verification_id = ?
@@ -342,7 +342,16 @@ export class ClientVerificationRoutes {
       [verificationId]
     );
 
-    return rows || [];
+    return (rows || []).map((row: any) => ({
+      type: row.type,
+      bucket: row.bucket,
+      key: row.file_key,
+      mime_type: row.mime_type,
+      size_bytes: row.size_bytes,
+      checksum_sha256: row.checksum_sha256,
+      uploaded_at: row.uploaded_at,
+      updated_at: row.updated_at
+    }));
   }
 
   private async syncUserVerificationStatus(
