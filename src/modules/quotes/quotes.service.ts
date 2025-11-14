@@ -55,7 +55,16 @@ export class QuotesService {
       limit,
       offset,
       count: records.length,
-      statuses: records.map((r) => r.status)
+      statuses: records.map((r) => r.status),
+      sample: records[0]
+        ? {
+            id: records[0].id,
+            status: records[0].status,
+            proposal_amount: records[0].proposal_amount,
+            proposal_valid_until: records[0].proposal_valid_until,
+            provider_id: records[0].provider_id
+          }
+        : null
     });
     return records.map((record) => this.mapClientListRecord(record));
   }

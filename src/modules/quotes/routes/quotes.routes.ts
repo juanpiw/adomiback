@@ -267,6 +267,14 @@ export class QuotesRoutes {
         if (!quote) {
           return res.status(404).json({ success: false, error: 'Cotización no encontrada.' });
         }
+        Logger.info(MODULE, '[CLIENT_QUOTES] detail delivered', {
+          clientId: user.id,
+          quoteId,
+          status: quote.status,
+          proposalAmount: quote.proposal?.amount ?? quote.amount ?? null,
+          proposalValidUntil: quote.proposal?.validUntil ?? quote.validUntil ?? null,
+          attachments: quote.attachments?.length ?? 0
+        });
         return res.json({ success: true, quote });
       } catch (error: any) {
         Logger.error(MODULE, 'Error retrieving client quote', error);
