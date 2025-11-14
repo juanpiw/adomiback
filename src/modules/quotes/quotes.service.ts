@@ -44,6 +44,23 @@ export class QuotesService {
   async listProviderQuotes(providerId: number, bucket: QuoteBucket, limit?: number, offset?: number) {
     await ensureQuotesFeature(providerId);
     const records = await QuotesRepository.listProviderQuotes(providerId, bucket, { limit, offset });
+    Logger.info(MODULE, '[PROVIDER_QUOTES] listProviderQuotes', {
+      providerId,
+      bucket,
+      limit,
+      offset,
+      count: records.length,
+      statuses: records.map((record) => record.status),
+      sample:
+        records.length > 0
+          ? {
+              id: records[0].id,
+              status: records[0].status,
+              proposalAmount: records[0].proposal_amount,
+              proposalValidUntil: records[0].proposal_valid_until
+            }
+          : null
+    });
     return records.map((record) => this.mapListRecord(record));
   }
 
@@ -132,14 +149,61 @@ export class QuotesService {
   async getProviderQuote(providerId: number, quoteId: number): Promise<any | null> {
     await ensureQuotesFeature(providerId);
     const record = await QuotesRepository.findProviderQuote(providerId, quoteId);
-    if (!record) return null;
-    return this.mapDetailRecord(record);
+    if (!record) {
+      Logger.warn(MODULE, '[PROVIDER_QUOTES] getProviderQuote.miss', { providerId, quoteId });
+      return null;
+    }
+    Logger.info(MODULE, '[PROVIDER_QUOTES] getProviderQuote.raw', {
+      providerId,
+      quoteId,
+      status: record.status,
+      proposalAmount: record.proposal_amount,
+      proposalValidUntil: record.proposal_valid_until,
+      clientId: record.client_id,
+      attachments: record.attachments?.length ?? 0,
+      items: record.items?.length ?? 0
+    });
+    const mapped = this.mapDetailRecord(record);
+    Logger.info(MODULE, '[PROVIDER_QUOTES] getProviderQuote.mapped', {
+      providerId,
+      quoteId,
+      status: mapped.status,
+      amount: mapped.amount,
+      validUntil: mapped.validUntil,
+      proposal: mapped.proposal,
+      hasItems: (mapped.items ?? []).length,
+      hasAttachments: (mapped.attachments ?? []).length
+    });
+    return mapped;
   }
 
   async getClientQuote(clientId: number, quoteId: number): Promise<any | null> {
     const record = await QuotesRepository.findClientQuote(clientId, quoteId);
-    if (!record) return null;
-    return this.mapClientDetailRecord(record);
+    if (!record) {
+      Logger.warn(MODULE, '[CLIENT_QUOTES] getClientQuote.miss', { clientId, quoteId });
+      return null;
+    }
+    Logger.info(MODULE, '[CLIENT_QUOTES] getClientQuote.raw', {
+      clientId,
+      quoteId,
+      status: record.status,
+      proposalAmount: record.proposal_amount,
+      proposalValidUntil: record.proposal_valid_until,
+      providerId: record.provider_id,
+      attachments: record.attachments?.length ?? 0,
+      items: record.items?.length ?? 0
+    });
+    const mapped = this.mapClientDetailRecord(record);
+    Logger.info(MODULE, '[CLIENT_QUOTES] getClientQuote.mapped', {
+      clientId,
+      quoteId,
+      status: mapped.status,
+      proposal: mapped.proposal,
+      provider: mapped.provider,
+      hasItems: (mapped.items ?? []).length,
+      hasAttachments: (mapped.attachments ?? []).length
+    });
+    return mapped;
   }
 
   async getProviderCounters(providerId: number) {

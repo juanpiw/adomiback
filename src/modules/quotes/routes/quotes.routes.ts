@@ -50,8 +50,22 @@ export class QuotesRoutes {
         const limit = req.query.limit ? Number(req.query.limit) : undefined;
         const offset = req.query.offset ? Number(req.query.offset) : undefined;
 
+        Logger.info(MODULE, '[PROVIDER_QUOTES] listing quotes', {
+          providerId: user.id,
+          status,
+          limit,
+          offset
+        });
+
         const quotes = await this.service.listProviderQuotes(user.id, status, limit, offset);
         const counters = await this.service.getProviderCounters(user.id);
+
+        Logger.info(MODULE, '[PROVIDER_QUOTES] response summary', {
+          providerId: user.id,
+          status,
+          count: quotes.length,
+          counters
+        });
 
         return res.json({ success: true, quotes, counters });
       } catch (error: any) {
@@ -72,6 +86,13 @@ export class QuotesRoutes {
         if (!quote) {
           return res.status(404).json({ success: false, error: 'Cotización no encontrada.' });
         }
+        Logger.info(MODULE, '[PROVIDER_QUOTES] detail delivered', {
+          providerId: user.id,
+          quoteId,
+          status: quote.status,
+          amount: quote.amount,
+          validUntil: quote.validUntil
+        });
         return res.json({ success: true, quote });
       } catch (error: any) {
         Logger.error(MODULE, 'Error retrieving provider quote', error);
@@ -87,11 +108,23 @@ export class QuotesRoutes {
           return res.status(403).json({ success: false, error: 'Solo los profesionales pueden enviar cotizaciones.' });
         }
         const quoteId = Number(req.params.id);
+        Logger.info(MODULE, '[PROVIDER_QUOTES] saveProposal.request', {
+          providerId: user.id,
+          quoteId,
+          submit: req.body?.submit ?? req.body?.send ?? false,
+          amount: req.body?.amount,
+          validity: req.body?.validity,
+          detailsLength: typeof req.body?.details === 'string' ? req.body.details.length : null
+        });
         await this.service.saveProposal(user.id, quoteId, {
           amount: req.body?.amount,
           details: req.body?.details,
           validityLabel: req.body?.validity,
           submit: req.body?.submit ?? req.body?.send ?? false
+        });
+        Logger.info(MODULE, '[PROVIDER_QUOTES] saveProposal.success', {
+          providerId: user.id,
+          quoteId
         });
         return res.json({ success: true });
       } catch (error: any) {
