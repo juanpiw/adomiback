@@ -1,6 +1,7 @@
 import DatabaseConnection from '../../shared/database/connection';
 import { Logger } from '../../shared/utils/logger.util';
 import { PushService } from '../notifications/services/push.service';
+import { EmailService } from '../../shared/services/email.service';
 import { ensureQuotesFeature } from './quotes.policy';
 import { QuotesRepository } from './quotes.repository';
 import { QuoteBucket, QuoteDetailRecord, QuoteListRecord, QuoteProposalPayload, QuoteStatus } from './quotes.types';
@@ -98,7 +99,7 @@ export class QuotesService {
 
       await connection.commit();
 
-      void this.notifyProviderNewRequest(payload.providerId, quoteId).catch((err) => {
+      void this.notifyProviderNewRequest(payload.providerId, payload.clientId, quoteId, serviceSummary, message).catch((err) => {
         Logger.error(MODULE, 'Error notifying provider about new request', err);
       });
 
@@ -402,26 +403,105 @@ export class QuotesService {
 
   private async notifyClientNewProposal(quote: QuoteDetailRecord) {
     try {
-      await PushService.notifyUser(quote.client_id, '¡Tu cotización está lista!', 'El profesional envió una propuesta. Revísala y decide si continuar.', {
-        type: 'quote_proposal',
-        quoteId: String(quote.id)
-      });
+      const pool = DatabaseConnection.getPool();
+      const [[client]]: any = await pool.query('SELECT id, email, name FROM users WHERE id = ? LIMIT 1', [quote.client_id]);
+      const [[provider]]: any = await pool.query('SELECT name FROM users WHERE id = ? LIMIT 1', [quote.provider_id]);
+
+      const clientQuotesUrl = `${process.env.CLIENT_APP_URL || 'https://adomiapp.com/client'}/cotizaciones`;
+      const appName = process.env.APP_NAME || 'Adomi';
+      const providerName = provider?.name || 'El profesional';
+
+      if (client?.email) {
+        await EmailService.sendQuoteProposalClient(client.email, {
+          appName,
+          clientName: client?.name,
+          providerName,
+          serviceSummary: quote.service_summary,
+          amount: quote.proposal_amount ?? undefined,
+          currency: quote.currency || 'CLP',
+          validityLabel: quote.proposal_valid_until ? `hasta ${new Date(quote.proposal_valid_until).toLocaleDateString('es-CL')}` : null,
+          dashboardUrl: clientQuotesUrl
+        });
+      }
+
+      if (client?.id) {
+        await PushService.notifyUser(
+          client.id,
+          '¡Tu cotización está lista!',
+          `${providerName} envió una propuesta. Revísala para continuar.`,
+          {
+            type: 'quote_proposal',
+            quoteId: String(quote.id)
+          }
+        );
+      }
     } catch (err) {
       Logger.error(MODULE, 'Error notifying client about proposal', err as any);
     }
   }
 
-  private async notifyProviderNewRequest(providerId: number, quoteId: number) {
+  private async notifyProviderNewRequest(
+    providerId: number,
+    clientId: number,
+    quoteId: number,
+    serviceSummary: string,
+    clientMessage: string
+  ) {
     try {
-      await PushService.notifyUser(
-        providerId,
-        'Tienes una nueva solicitud de cotización',
-        'Un cliente está interesado en tus servicios. Ingresa a Cotizaciones para responder.',
-        {
-          type: 'quote_request',
-          quoteId: String(quoteId)
-        }
-      );
+      const pool = DatabaseConnection.getPool();
+      const [[provider]]: any = await pool.query('SELECT id, email, name FROM users WHERE id = ? LIMIT 1', [providerId]);
+      const [[client]]: any = await pool.query('SELECT id, email, name FROM users WHERE id = ? LIMIT 1', [clientId]);
+
+      const providerName = provider?.name || 'Profesional';
+      const clientName = client?.name || 'Cliente';
+      const appName = process.env.APP_NAME || 'Adomi';
+      const providerQuotesUrl = `${process.env.PROVIDER_APP_URL || 'https://adomiapp.com/dash'}/cotizaciones`;
+      const clientQuotesUrl = `${process.env.CLIENT_APP_URL || 'https://adomiapp.com/client'}/cotizaciones`;
+
+      if (provider?.id) {
+        await PushService.notifyUser(
+          provider.id,
+          'Tienes una nueva solicitud de cotización',
+          `${clientName} necesita ${serviceSummary || 'un servicio'}. Responde para concretar.`,
+          {
+            type: 'quote_request',
+            quoteId: String(quoteId)
+          }
+        );
+      }
+
+      if (provider?.email) {
+        await EmailService.sendQuoteRequestProvider(provider.email, {
+          appName,
+          clientName,
+          providerName,
+          serviceSummary,
+          clientMessage,
+          dashboardUrl: providerQuotesUrl
+        });
+      }
+
+      if (client?.email) {
+        await EmailService.sendQuoteRequestClient(client.email, {
+          appName,
+          clientName,
+          providerName,
+          serviceSummary,
+          dashboardUrl: clientQuotesUrl
+        });
+      }
+
+      if (client?.id) {
+        await PushService.notifyUser(
+          client.id,
+          'Solicitud enviada',
+          `Te avisaremos cuando ${providerName} responda tu cotización.`,
+          {
+            type: 'quote_request_ack',
+            quoteId: String(quoteId)
+          }
+        );
+      }
     } catch (err) {
       Logger.error(MODULE, 'Error notifying provider about new request', err as any);
     }

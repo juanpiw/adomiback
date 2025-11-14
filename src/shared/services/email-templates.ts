@@ -138,6 +138,30 @@ export interface ManualCashDecisionEmailData {
   brandLogoUrl?: string;
 }
 
+export interface QuoteRequestEmailData {
+  appName: string;
+  clientName?: string | null;
+  providerName?: string | null;
+  serviceSummary?: string | null;
+  clientMessage?: string | null;
+  dashboardUrl?: string | null;
+  brandColorHex?: string;
+  brandLogoUrl?: string;
+}
+
+export interface QuoteProposalEmailData {
+  appName: string;
+  clientName?: string | null;
+  providerName?: string | null;
+  serviceSummary?: string | null;
+  amount?: number | null;
+  currency?: string | null;
+  validityLabel?: string | null;
+  dashboardUrl?: string | null;
+  brandColorHex?: string;
+  brandLogoUrl?: string;
+}
+
 export function generateClientReceiptEmailHtml(data: ClientReceiptEmailData): string {
   const date = data.paymentDateISO ? new Date(data.paymentDateISO).toLocaleString() : '';
   const amountFormatted = `${data.currency.toUpperCase()} ${data.amount.toFixed(2)}`;
@@ -409,6 +433,140 @@ export function generatePasswordResetEmailHtml(data: PasswordResetEmailData): st
           </table>
         </td>
       </tr>
+    </table>
+  </div>`;
+}
+
+export function generateQuoteRequestProviderEmailHtml(data: QuoteRequestEmailData): string {
+  const brand = data.brandColorHex || '#4338ca';
+  const logo = data.brandLogoUrl
+    ? `<img src="${data.brandLogoUrl}" alt="${data.appName}" style="height:24px;display:block;margin:0 auto 16px" />`
+    : '';
+  const messageBlock = data.clientMessage
+    ? `<div style="margin-top:16px;padding:12px;border-radius:10px;background:rgba(67,56,202,.08);font-size:13px;color:#312e81;line-height:1.45">"${data.clientMessage}"</div>`
+    : '';
+  const dashboardCta = data.dashboardUrl
+    ? `<a href="${data.dashboardUrl}" style="display:inline-block;margin-top:16px;background:${brand};color:#fff;text-decoration:none;padding:10px 18px;border-radius:999px;font-weight:600;font-size:13px">Ir a Cotizaciones</a>`
+    : '';
+
+  return `
+  <div style="margin:0;padding:0;background:#0b0b0c">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0b0b0c;padding:24px 12px">
+      <tr><td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%">
+          <tr>
+            <td align="center" style="padding:16px 0;color:#fff;font-family:system-ui,Segoe UI,Roboto,sans-serif;font-size:14px">
+              ${logo}
+              <div style="opacity:.9">${data.appName}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:14px;overflow:hidden">
+                <tr>
+                  <td style="padding:24px;font-family:system-ui,Segoe UI,Roboto,sans-serif;color:#111">
+                    <div style="font-size:18px;font-weight:700;margin-bottom:4px">Nueva solicitud de cotización</div>
+                    <div style="color:#6b7280;font-size:13px">${data.clientName || 'Un cliente'} quiere coordinar <strong>${data.serviceSummary || 'un servicio'}</strong>.</div>
+                    ${messageBlock}
+                    ${dashboardCta}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+    </table>
+  </div>`;
+}
+
+export function generateQuoteRequestClientEmailHtml(data: QuoteRequestEmailData): string {
+  const brand = data.brandColorHex || '#4338ca';
+  const logo = data.brandLogoUrl
+    ? `<img src="${data.brandLogoUrl}" alt="${data.appName}" style="height:24px;display:block;margin:0 auto 16px" />`
+    : '';
+  const dashboardCta = data.dashboardUrl
+    ? `<a href="${data.dashboardUrl}" style="display:inline-block;margin-top:16px;background:${brand};color:#fff;text-decoration:none;padding:10px 18px;border-radius:999px;font-weight:600;font-size:13px">Revisar estado</a>`
+    : '';
+
+  return `
+  <div style="margin:0;padding:0;background:#0b0b0c">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0b0b0c;padding:24px 12px">
+      <tr><td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%">
+          <tr>
+            <td align="center" style="padding:16px 0;color:#fff;font-family:system-ui,Segoe UI,Roboto,sans-serif;font-size:14px">
+              ${logo}
+              <div style="opacity:.9">${data.appName}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:14px;overflow:hidden">
+                <tr>
+                  <td style="padding:24px;font-family:system-ui,Segoe UI,Roboto,sans-serif;color:#111">
+                    <div style="font-size:18px;font-weight:700;margin-bottom:4px">¡Solicitud enviada!</div>
+                    <div style="color:#6b7280;font-size:13px">Le avisamos a <strong>${data.providerName || 'tu profesional'}</strong> que necesitas <strong>${data.serviceSummary || 'un servicio'}</strong>. Te notificaremos cuando responda.</div>
+                    ${dashboardCta}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+    </table>
+  </div>`;
+}
+
+export function generateQuoteProposalEmailHtml(data: QuoteProposalEmailData): string {
+  const brand = data.brandColorHex || '#4338ca';
+  const logo = data.brandLogoUrl
+    ? `<img src="${data.brandLogoUrl}" alt="${data.appName}" style="height:24px;display:block;margin:0 auto 16px" />`
+    : '';
+  const amountTxt =
+    typeof data.amount === 'number' && data.currency
+      ? `${data.currency.toUpperCase()} ${data.amount.toLocaleString('es-CL', { minimumFractionDigits: 0 })}`
+      : null;
+  const validity = data.validityLabel ? `Válida ${data.validityLabel}` : '';
+  const dashboardCta = data.dashboardUrl
+    ? `<a href="${data.dashboardUrl}" style="display:inline-block;margin-top:16px;background:${brand};color:#fff;text-decoration:none;padding:10px 18px;border-radius:999px;font-weight:600;font-size:13px">Revisar propuesta</a>`
+    : '';
+
+  return `
+  <div style="margin:0;padding:0;background:#0b0b0c">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0b0b0c;padding:24px 12px">
+      <tr><td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%">
+          <tr>
+            <td align="center" style="padding:16px 0;color:#fff;font-family:system-ui,Segoe UI,Roboto,sans-serif;font-size:14px">
+              ${logo}
+              <div style="opacity:.9">${data.appName}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:14px;overflow:hidden">
+                <tr>
+                  <td style="padding:24px;font-family:system-ui,Segoe UI,Roboto,sans-serif;color:#111">
+                    <div style="font-size:18px;font-weight:700;margin-bottom:4px">Tu cotización está lista</div>
+                    <div style="color:#6b7280;font-size:13px">${data.providerName || 'El profesional'} envió una propuesta para <strong>${data.serviceSummary || 'tu solicitud'}</strong>.</div>
+                    ${
+                      amountTxt
+                        ? `<div style="margin-top:16px;border:1px solid #e5e7eb;border-radius:12px;padding:16px;font-size:14px">
+                            <div style="font-weight:700;font-size:22px">${amountTxt}</div>
+                            ${validity ? `<div style="color:#6b7280;font-size:12px">${validity}</div>` : ''}
+                          </div>`
+                        : ''
+                    }
+                    ${dashboardCta}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td></tr>
     </table>
   </div>`;
 }

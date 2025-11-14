@@ -22,7 +22,12 @@ import {
   generateManualCashReceiptProviderEmailHtml,
   generateManualCashReceiptAdminEmailHtml,
   ManualCashDecisionEmailData,
-  generateManualCashDecisionEmailHtml
+  generateManualCashDecisionEmailHtml,
+  generateQuoteRequestProviderEmailHtml,
+  generateQuoteRequestClientEmailHtml,
+  generateQuoteProposalEmailHtml,
+  QuoteRequestEmailData,
+  QuoteProposalEmailData
 } from './email-templates';
 
 const MODULE = 'EMAIL_SERVICE';
@@ -176,6 +181,27 @@ export class EmailService {
       resubmission_requested: `${data.appName} – Necesitamos un nuevo comprobante`
     };
     const subject = statusSubjectMap[data.status] || `${data.appName} – Actualización comprobante`;
+    return this.sendRaw(to, subject, html);
+  }
+
+  static async sendQuoteRequestProvider(to: string, data: QuoteRequestEmailData) {
+    Logger.info(MODULE, 'sendQuoteRequestProvider called', { to, service: data.serviceSummary });
+    const html = generateQuoteRequestProviderEmailHtml(data);
+    const subject = `${data.appName} – Nueva solicitud de cotización`;
+    return this.sendRaw(to, subject, html);
+  }
+
+  static async sendQuoteRequestClient(to: string, data: QuoteRequestEmailData) {
+    Logger.info(MODULE, 'sendQuoteRequestClient called', { to, provider: data.providerName });
+    const html = generateQuoteRequestClientEmailHtml(data);
+    const subject = `${data.appName} – Recibimos tu solicitud`;
+    return this.sendRaw(to, subject, html);
+  }
+
+  static async sendQuoteProposalClient(to: string, data: QuoteProposalEmailData) {
+    Logger.info(MODULE, 'sendQuoteProposalClient called', { to, provider: data.providerName, amount: data.amount });
+    const html = generateQuoteProposalEmailHtml(data);
+    const subject = `${data.appName} – ${data.providerName || 'El profesional'} respondió tu cotización`;
     return this.sendRaw(to, subject, html);
   }
 }
