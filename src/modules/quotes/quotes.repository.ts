@@ -110,7 +110,10 @@ export class QuotesRepository {
     const pool = DatabaseConnection.getPool();
     const limit = Math.min(Math.max(Number(options.limit) || 25, 1), 100);
     const offset = Math.max(Number(options.offset) || 0, 0);
-    const statuses = bucket === 'history' ? HISTORY_STATUSES : [bucket as QuoteStatus];
+    let statuses = bucket === 'history' ? HISTORY_STATUSES : [bucket as QuoteStatus];
+    if (bucket === 'new') {
+      statuses = ['new', 'draft'];
+    }
 
     const [rows] = await pool.query(
       `
@@ -461,6 +464,7 @@ export class QuotesRepository {
            SET proposal_amount = ?,
                proposal_details = ?,
                proposal_valid_until = ?,
+               currency = COALESCE(?, currency),
                status = ?,
                sent_at = ?,
                expires_at = ?,
@@ -473,10 +477,11 @@ export class QuotesRepository {
       [
         payload.amount,
         payload.details,
-        validityLimit ? validityLimit.toISOString().slice(0, 19).replace('T', ' ') : null,
+        validityLimit ? QuotesRepository.dateToSql(validityLimit) : null,
+        payload.currency || null,
         status,
-        sentAt ? sentAt.toISOString().slice(0, 19).replace('T', ' ') : null,
-        expiresAt ? expiresAt.toISOString().slice(0, 19).replace('T', ' ') : null,
+        sentAt ? QuotesRepository.dateToSql(sentAt) : null,
+        expiresAt ? QuotesRepository.dateToSql(expiresAt) : null,
         quoteId,
         providerId
       ]

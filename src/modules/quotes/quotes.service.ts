@@ -172,6 +172,10 @@ export class QuotesService {
     }
 
     const payload = this.normalizeProposalPayload(input);
+    const normalizedPayload: QuoteProposalPayload = {
+      ...payload,
+      currency: payload.currency || existing.currency || 'CLP'
+    };
     const validityLimit = payload.validityDays > 0 ? this.calculateValidityDate(payload.validityDays) : null;
     const nextStatus: QuoteStatus = payload.submit ? 'sent' : 'draft';
 
@@ -183,7 +187,14 @@ export class QuotesService {
     try {
       await connection.beginTransaction();
 
-      const updated = await QuotesRepository.updateProposal(connection, quoteId, providerId, payload, nextStatus, validityLimit);
+      const updated = await QuotesRepository.updateProposal(
+        connection,
+        quoteId,
+        providerId,
+        normalizedPayload,
+        nextStatus,
+        validityLimit
+      );
       if (!updated) {
         throw this.buildNotFoundError('No encontramos la cotización para actualizar. Verifica el estado.');
       }
@@ -208,8 +219,9 @@ export class QuotesService {
         quoteId,
         providerId,
         status: nextStatus,
-        amount: payload.amount,
-        validityLimit
+        amount: normalizedPayload.amount,
+        validityLimit,
+        currency: normalizedPayload.currency
       });
     } catch (error) {
       await connection.rollback();
@@ -219,7 +231,12 @@ export class QuotesService {
     }
 
     if (shouldNotify) {
-      await this.notifyClientNewProposal(existing);
+      await this.notifyClientNewProposal({
+        ...existing,
+        proposal_amount: normalizedPayload.amount,
+        proposal_valid_until: validityLimit ? validityLimit.toISOString() : existing.proposal_valid_until,
+        currency: normalizedPayload.currency || existing.currency
+      } as QuoteDetailRecord);
     }
   }
 
@@ -404,7 +421,8 @@ export class QuotesService {
       amount: Math.round(amount),
       details,
       validityDays,
-      submit: !!input.submit
+      submit: !!input.submit,
+      currency: (input as any)?.currency?.toString()?.trim().toUpperCase() || null
     };
   }
 

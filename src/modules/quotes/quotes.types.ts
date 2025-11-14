@@ -101,6 +101,7 @@ export interface QuoteProposalPayload {
   details: string;
   validityDays: number;
   submit: boolean;
+  currency?: string | null;
 }
 
 export interface QuoteCounters {
