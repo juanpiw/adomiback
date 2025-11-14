@@ -49,6 +49,14 @@ export class QuotesService {
 
   async listClientQuotes(clientId: number, bucket: QuoteBucket, limit?: number, offset?: number) {
     const records = await QuotesRepository.listClientQuotes(clientId, bucket, { limit, offset });
+    Logger.info(MODULE, '[CLIENT_QUOTES] listClientQuotes', {
+      clientId,
+      bucket,
+      limit,
+      offset,
+      count: records.length,
+      statuses: records.map((r) => r.status)
+    });
     return records.map((record) => this.mapClientListRecord(record));
   }
 
@@ -187,6 +195,13 @@ export class QuotesService {
       shouldNotify = payload.submit;
 
       await connection.commit();
+      Logger.info(MODULE, 'Quote proposal saved', {
+        quoteId,
+        providerId,
+        status: nextStatus,
+        amount: payload.amount,
+        validityLimit
+      });
     } catch (error) {
       await connection.rollback();
       throw error;
