@@ -227,6 +227,56 @@ export class QuotesService {
     };
   }
 
+  async acceptClientQuote(clientId: number, quoteId: number) {
+    const summary = await QuotesRepository.ensureQuoteForClient(quoteId, clientId);
+    if (!summary) {
+      throw this.buildNotFoundError('No encontramos la cotización que intentas aceptar.');
+    }
+    if (summary.status === 'accepted') {
+      Logger.info(MODULE, '[CLIENT_QUOTES] Quote already accepted', { clientId, quoteId });
+      return QuotesRepository.findClientQuote(clientId, quoteId);
+    }
+    if (summary.status !== 'sent') {
+      throw this.buildValidationError('Esta cotización todavía no está lista para ser aceptada.');
+    }
+    if (summary.proposal_amount === null) {
+      throw this.buildValidationError('El profesional debe enviar un monto antes de que puedas aceptar la cotización.');
+    }
+
+    const pool = DatabaseConnection.getPool();
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+      const acceptedAt = new Date();
+      const updated = await QuotesRepository.updateQuoteStatus(connection, quoteId, ['sent'], 'accepted', {
+        accepted_at: acceptedAt
+      });
+
+      if (!updated) {
+        throw this.buildValidationError('No pudimos aceptar la cotización. Intenta nuevamente en unos segundos.');
+      }
+
+      await QuotesRepository.insertEvent(connection, quoteId, 'client', clientId, 'accepted', {
+        amount: summary.proposal_amount,
+        currency: summary.currency || 'CLP'
+      });
+
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+
+    void this.notifyProviderQuoteAccepted(summary.provider_id, clientId, quoteId, summary.service_summary).catch((err) => {
+      Logger.error(MODULE, 'Error notifying provider about accepted quote', err);
+    });
+
+    return QuotesRepository.findClientQuote(clientId, quoteId);
+  }
+
   async saveProposal(providerId: number, quoteId: number, input: ProposalInput) {
     await ensureQuotesFeature(providerId);
 
@@ -613,9 +663,43 @@ export class QuotesService {
     }
   }
 
+  private async notifyProviderQuoteAccepted(providerId: number, clientId: number, quoteId: number, serviceSummary?: string | null) {
+    try {
+      const pool = DatabaseConnection.getPool();
+      const [[provider]]: any = await pool.query('SELECT id, email, name FROM users WHERE id = ? LIMIT 1', [providerId]);
+      const [[client]]: any = await pool.query('SELECT id, name FROM users WHERE id = ? LIMIT 1', [clientId]);
+
+      const providerQuotesUrl = `${process.env.PROVIDER_APP_URL || 'https://adomiapp.com/dash'}/cotizaciones`;
+      const clientName = client?.name || 'Un cliente';
+      const providerName = provider?.name || 'Profesional';
+      const summary = serviceSummary || 'una solicitud';
+
+      if (provider?.id) {
+        await PushService.notifyUser(
+          provider.id,
+          'Una cotización fue aceptada',
+          `${clientName} aceptó la cotización de ${summary}.`,
+          {
+            type: 'quote_accepted',
+            quoteId: String(quoteId),
+            url: providerQuotesUrl
+          }
+        );
+      }
+    } catch (err) {
+      Logger.error(MODULE, 'Error notifying provider about accepted quote', err as any);
+    }
+  }
+
   private buildNotFoundError(message: string) {
     const error: any = new Error(message);
     error.statusCode = 404;
+    return error;
+  }
+
+  private buildValidationError(message: string) {
+    const error: any = new Error(message);
+    error.statusCode = 400;
     return error;
   }
 }

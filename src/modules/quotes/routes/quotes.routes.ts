@@ -315,6 +315,26 @@ export class QuotesRoutes {
         return res.status(status).json({ success: false, error: error?.message || 'Error al obtener la cotización.' });
       }
     });
+
+    this.router.post('/client/quotes/:id/accept', authenticateToken, async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user as AuthUser;
+        if (!user || user.role !== 'client') {
+          return res.status(403).json({ success: false, error: 'Solo los clientes autenticados pueden aceptar cotizaciones.' });
+        }
+        const quoteId = Number(req.params.id);
+        if (!quoteId || Number.isNaN(quoteId)) {
+          return res.status(400).json({ success: false, error: 'Identificador de cotización inválido.' });
+        }
+        Logger.info(MODULE, '[CLIENT_QUOTES] accept request', { clientId: user.id, quoteId });
+        const quote = await this.service.acceptClientQuote(user.id, quoteId);
+        return res.json({ success: true, quote });
+      } catch (error: any) {
+        Logger.error(MODULE, '[CLIENT_QUOTES] Error accepting quote', error);
+        const status = error?.statusCode || 500;
+        return res.status(status).json({ success: false, error: error?.message || 'No pudimos aceptar la cotización.' });
+      }
+    });
   }
 }
 
