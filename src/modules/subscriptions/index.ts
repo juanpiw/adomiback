@@ -991,6 +991,14 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
         return res.status(502).json({ ok: false, error: 'tbk_init_invalid_response' });
       }
 
+      Logger.info(MODULE, 'TBK plan init response', {
+        providerId: userRow.id,
+        planId,
+        token,
+        buyOrder,
+        sessionId
+      });
+
       const metadata = {
         plan_name: planRow.name,
         billing_period: planRow.billing_period,
