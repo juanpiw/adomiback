@@ -290,7 +290,7 @@ export function buildAppointmentCheckoutRoutes(): Router {
     }
   });
 
-  // GET /provider/earnings/summary?month=YYYY-MM
+  // GET /provider/earnings/summary?month=YYYY-MM&day=YYYY-MM-DD
   router.get('/provider/earnings/summary', authenticateToken, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user || {};
@@ -298,18 +298,34 @@ export function buildAppointmentCheckoutRoutes(): Router {
       if (!providerId) return res.status(401).json({ success: false, error: 'No autorizado' });
 
       const monthParam = String(req.query.month || '').trim();
+      const dayParam = String(req.query.day || '').trim();
       const now = new Date();
-      const [y, m] = monthParam && /\d{4}-\d{2}/.test(monthParam)
-        ? monthParam.split('-').map(Number)
-        : [now.getFullYear(), now.getMonth() + 1];
+      let scope: 'month' | 'day' = 'month';
+      let y = now.getFullYear();
+      let m = now.getMonth() + 1;
+      let start: Date;
+      let end: Date;
 
-      const start = new Date(y, m - 1, 1);
-      const end = new Date(y, m, 0); // último día del mes
+      if (dayParam && /^\d{4}-\d{2}-\d{2}$/.test(dayParam)) {
+        const [dayYear, dayMonth, dayDay] = dayParam.split('-').map(Number);
+        y = dayYear;
+        m = dayMonth;
+        scope = 'day';
+        start = new Date(y, m - 1, dayDay);
+        end = new Date(y, m - 1, dayDay);
+      } else if (monthParam && /^\d{4}-\d{2}$/.test(monthParam)) {
+        [y, m] = monthParam.split('-').map(Number);
+        start = new Date(y, m - 1, 1);
+        end = new Date(y, m, 0);
+      } else {
+        start = new Date(y, m - 1, 1);
+        end = new Date(y, m, 0);
+      }
 
       const startStr = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`;
       const endStr = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`;
 
-      Logger.info(MODULE, `🧮 [EARNINGS] Provider=${providerId} month=${y}-${String(m).padStart(2,'0')} range=${startStr}..${endStr}`);
+      Logger.info(MODULE, `🧮 [EARNINGS] Provider=${providerId} scope=${scope} range=${startStr}..${endStr}`);
 
       const pool = DatabaseConnection.getPool();
       const [rows] = await pool.query(
@@ -323,13 +339,43 @@ export function buildAppointmentCheckoutRoutes(): Router {
         [startStr, endStr, startStr, endStr, startStr, endStr, startStr, endStr, providerId]
       );
 
+      const [seriesRows] = await pool.query(
+        scope === 'day'
+          ? `SELECT LPAD(HOUR(paid_at), 2, '0') AS bucket, SUM(provider_amount) AS total
+             FROM payments
+             WHERE provider_id = ? AND status = 'completed' AND DATE(paid_at) BETWEEN ? AND ?
+             GROUP BY HOUR(paid_at)
+             ORDER BY bucket`
+          : `SELECT DATE(paid_at) AS bucket, SUM(provider_amount) AS total
+             FROM payments
+             WHERE provider_id = ? AND status = 'completed' AND DATE(paid_at) BETWEEN ? AND ?
+             GROUP BY DATE(paid_at)
+             ORDER BY bucket`,
+        [providerId, startStr, endStr]
+      );
+
+      const series = (seriesRows as any[]).map((item: any) => {
+        if (scope === 'day') {
+          const hour = String(item.bucket ?? '00').padStart(2, '0');
+          return { bucket: `${hour}:00`, total: Number(item.total || 0) };
+        }
+        const bucketValue = item.bucket instanceof Date
+          ? item.bucket.toISOString().slice(0, 10)
+          : String(item.bucket);
+        return { bucket: bucketValue, total: Number(item.total || 0) };
+      });
+
       const r: any = (rows as any[])[0] || {};
       const summary = {
+        scope,
         month: `${y}-${String(m).padStart(2,'0')}`,
+        day: scope === 'day' ? startStr : null,
+        range: { start: startStr, end: endStr },
         releasable: Number(r.releasable_this_month || 0),
         pending: Number(r.pending_release_this_month || 0),
         released: Number(r.released_this_month || 0),
-        paidCount: Number(r.paid_count || 0)
+        paidCount: Number(r.paid_count || 0),
+        series
       };
 
       Logger.info(MODULE, '🧮 [EARNINGS] Summary', summary);
