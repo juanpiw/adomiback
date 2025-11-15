@@ -45,6 +45,8 @@ export interface QuoteListRecord {
   provider_country?: string | null;
   appointment_date: string | null;
   appointment_time: string | null;
+  preferred_service_date?: string | null;
+  preferred_time_range?: string | null;
 }
 
 export interface QuoteAttachmentRecord {

@@ -58,11 +58,25 @@ export class QuotesRepository {
           cp.profile_photo_url AS client_avatar_url,
           c.created_at AS client_since,
           a.date AS appointment_date,
-          a.start_time AS appointment_time
+          a.start_time AS appointment_time,
+          req.preferred_date AS preferred_service_date,
+          req.preferred_time_range AS preferred_time_range
         FROM quotes q
         JOIN users c ON c.id = q.client_id
         LEFT JOIN client_profiles cp ON cp.client_id = q.client_id
         LEFT JOIN appointments a ON a.id = q.appointment_id
+        LEFT JOIN (
+          SELECT qe.quote_id,
+                 JSON_UNQUOTE(JSON_EXTRACT(qe.metadata, '$.preferred_date')) AS preferred_date,
+                 JSON_UNQUOTE(JSON_EXTRACT(qe.metadata, '$.preferred_time_range')) AS preferred_time_range
+            FROM quote_events qe
+            INNER JOIN (
+              SELECT quote_id, MIN(id) AS first_event_id
+                FROM quote_events
+               WHERE event_type = 'request_created'
+               GROUP BY quote_id
+            ) first_req ON first_req.first_event_id = qe.id
+        ) req ON req.quote_id = q.id
         WHERE q.provider_id = ?
           AND q.deleted_at IS NULL
           AND q.status IN (${statuses.map(() => '?').join(',') || "'new'"})
@@ -162,13 +176,27 @@ export class QuotesRepository {
           pp.main_region AS provider_country,
           p.created_at AS provider_since,
           a.date AS appointment_date,
-          a.start_time AS appointment_time
+          a.start_time AS appointment_time,
+          req.preferred_date AS preferred_service_date,
+          req.preferred_time_range AS preferred_time_range
         FROM quotes q
         JOIN users c ON c.id = q.client_id
         LEFT JOIN client_profiles cp ON cp.client_id = q.client_id
         JOIN users p ON p.id = q.provider_id
         LEFT JOIN provider_profiles pp ON pp.provider_id = q.provider_id
         LEFT JOIN appointments a ON a.id = q.appointment_id
+        LEFT JOIN (
+          SELECT qe.quote_id,
+                 JSON_UNQUOTE(JSON_EXTRACT(qe.metadata, '$.preferred_date')) AS preferred_date,
+                 JSON_UNQUOTE(JSON_EXTRACT(qe.metadata, '$.preferred_time_range')) AS preferred_time_range
+            FROM quote_events qe
+            INNER JOIN (
+              SELECT quote_id, MIN(id) AS first_event_id
+                FROM quote_events
+               WHERE event_type = 'request_created'
+               GROUP BY quote_id
+            ) first_req ON first_req.first_event_id = qe.id
+        ) req ON req.quote_id = q.id
         WHERE q.client_id = ?
           AND q.deleted_at IS NULL
           AND q.status IN (${statuses.map(() => '?').join(',') || "'new'"})
@@ -255,11 +283,25 @@ export class QuotesRepository {
           cp.profile_photo_url AS client_avatar_url,
           c.created_at AS client_since,
           a.date AS appointment_date,
-          a.start_time AS appointment_time
+          a.start_time AS appointment_time,
+          req.preferred_date AS preferred_service_date,
+          req.preferred_time_range AS preferred_time_range
         FROM quotes q
         JOIN users c ON c.id = q.client_id
         LEFT JOIN client_profiles cp ON cp.client_id = q.client_id
         LEFT JOIN appointments a ON a.id = q.appointment_id
+        LEFT JOIN (
+          SELECT qe.quote_id,
+                 JSON_UNQUOTE(JSON_EXTRACT(qe.metadata, '$.preferred_date')) AS preferred_date,
+                 JSON_UNQUOTE(JSON_EXTRACT(qe.metadata, '$.preferred_time_range')) AS preferred_time_range
+            FROM quote_events qe
+            INNER JOIN (
+              SELECT quote_id, MIN(id) AS first_event_id
+                FROM quote_events
+               WHERE event_type = 'request_created'
+               GROUP BY quote_id
+            ) first_req ON first_req.first_event_id = qe.id
+        ) req ON req.quote_id = q.id
         WHERE q.provider_id = ? AND q.id = ? AND q.deleted_at IS NULL
         LIMIT 1
       `,
@@ -347,13 +389,27 @@ export class QuotesRepository {
           pp.main_region AS provider_country,
           p.created_at AS provider_since,
           a.date AS appointment_date,
-          a.start_time AS appointment_time
+          a.start_time AS appointment_time,
+          req.preferred_date AS preferred_service_date,
+          req.preferred_time_range AS preferred_time_range
         FROM quotes q
         JOIN users c ON c.id = q.client_id
         LEFT JOIN client_profiles cp ON cp.client_id = q.client_id
         JOIN users p ON p.id = q.provider_id
         LEFT JOIN provider_profiles pp ON pp.provider_id = q.provider_id
         LEFT JOIN appointments a ON a.id = q.appointment_id
+        LEFT JOIN (
+          SELECT qe.quote_id,
+                 JSON_UNQUOTE(JSON_EXTRACT(qe.metadata, '$.preferred_date')) AS preferred_date,
+                 JSON_UNQUOTE(JSON_EXTRACT(qe.metadata, '$.preferred_time_range')) AS preferred_time_range
+            FROM quote_events qe
+            INNER JOIN (
+              SELECT quote_id, MIN(id) AS first_event_id
+                FROM quote_events
+               WHERE event_type = 'request_created'
+               GROUP BY quote_id
+            ) first_req ON first_req.first_event_id = qe.id
+        ) req ON req.quote_id = q.id
         WHERE q.client_id = ? AND q.id = ? AND q.deleted_at IS NULL
         LIMIT 1
       `,
@@ -696,7 +752,9 @@ export class QuotesRepository {
       provider_city: row.provider_city ?? null,
       provider_country: row.provider_country ?? null,
       appointment_date: QuotesRepository.normalizeDate(row.appointment_date),
-      appointment_time: row.appointment_time ? String(row.appointment_time).slice(0, 5) : null
+      appointment_time: row.appointment_time ? String(row.appointment_time).slice(0, 5) : null,
+      preferred_service_date: row.preferred_service_date ? String(row.preferred_service_date) : null,
+      preferred_time_range: row.preferred_time_range ?? null
     };
   }
 

@@ -431,6 +431,8 @@ export class QuotesService {
       amount: record.proposal_amount,
       currency: record.currency || 'CLP',
       validUntil: record.proposal_valid_until,
+      preferredDate: record.preferred_service_date,
+      preferredTimeRange: record.preferred_time_range,
       appointment: record.appointment_id
         ? {
             appointmentId: record.appointment_id,
@@ -483,6 +485,8 @@ export class QuotesService {
       amount: record.proposal_amount,
       currency: record.currency || 'CLP',
       validUntil: record.proposal_valid_until,
+      preferredDate: record.preferred_service_date,
+      preferredTimeRange: record.preferred_time_range,
       appointment: record.appointment_id
         ? {
             appointmentId: record.appointment_id,
