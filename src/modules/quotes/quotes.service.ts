@@ -13,6 +13,8 @@ interface ProposalInput {
   details: string;
   validityLabel?: string;
   submit?: boolean;
+  suggestedDate?: string | null;
+  suggestedTimeRange?: string | null;
 }
 
 interface AttachmentPayload {
@@ -433,6 +435,8 @@ export class QuotesService {
       validUntil: record.proposal_valid_until,
       preferredDate: record.preferred_service_date,
       preferredTimeRange: record.preferred_time_range,
+      providerSuggestedDate: record.provider_proposed_date,
+      providerSuggestedTimeRange: record.provider_proposed_time_range,
       appointment: record.appointment_id
         ? {
             appointmentId: record.appointment_id,
@@ -451,7 +455,9 @@ export class QuotesService {
         amount: record.proposal_amount,
         currency: record.currency,
         details: record.proposal_details,
-        validUntil: record.proposal_valid_until
+        validUntil: record.proposal_valid_until,
+        suggestedDate: record.provider_proposed_date,
+        suggestedTimeRange: record.provider_proposed_time_range
       },
       items: record.items,
       attachments: record.attachments.map((attachment) => ({
@@ -487,6 +493,8 @@ export class QuotesService {
       validUntil: record.proposal_valid_until,
       preferredDate: record.preferred_service_date,
       preferredTimeRange: record.preferred_time_range,
+      providerSuggestedDate: record.provider_proposed_date,
+      providerSuggestedTimeRange: record.provider_proposed_time_range,
       appointment: record.appointment_id
         ? {
             appointmentId: record.appointment_id,
@@ -505,7 +513,9 @@ export class QuotesService {
         amount: record.proposal_amount,
         currency: record.currency,
         details: record.proposal_details,
-        validUntil: record.proposal_valid_until
+        validUntil: record.proposal_valid_until,
+        suggestedDate: record.provider_proposed_date,
+        suggestedTimeRange: record.provider_proposed_time_range
       },
       items: record.items,
       attachments: record.attachments.map((attachment) => ({
@@ -535,12 +545,26 @@ export class QuotesService {
       throw error;
     }
     const validityDays = this.resolveValidityDays(input.validityLabel);
+    let suggestedDate: string | null = null;
+    if (input.suggestedDate) {
+      const parsed = new Date(input.suggestedDate);
+      if (Number.isNaN(parsed.getTime())) {
+        const error: any = new Error('La fecha sugerida no es válida.');
+        error.statusCode = 400;
+        throw error;
+      }
+      suggestedDate = parsed.toISOString().slice(0, 10);
+    }
+    const suggestedTimeRangeRaw = (input.suggestedTimeRange || '').trim();
+    const suggestedTimeRange = suggestedTimeRangeRaw ? suggestedTimeRangeRaw.slice(0, 120) : null;
     return {
       amount: Math.round(amount),
       details,
       validityDays,
       submit: !!input.submit,
-      currency: (input as any)?.currency?.toString()?.trim().toUpperCase() || null
+      currency: (input as any)?.currency?.toString()?.trim().toUpperCase() || null,
+      suggestedDate,
+      suggestedTimeRange
     };
   }
 

@@ -114,13 +114,17 @@ export class QuotesRoutes {
           submit: req.body?.submit ?? req.body?.send ?? false,
           amount: req.body?.amount,
           validity: req.body?.validity,
-          detailsLength: typeof req.body?.details === 'string' ? req.body.details.length : null
+          detailsLength: typeof req.body?.details === 'string' ? req.body.details.length : null,
+          suggestedDate: req.body?.suggestedDate,
+          suggestedTimeRange: req.body?.suggestedTimeRange
         });
         await this.service.saveProposal(user.id, quoteId, {
           amount: req.body?.amount,
           details: req.body?.details,
           validityLabel: req.body?.validity,
-          submit: req.body?.submit ?? req.body?.send ?? false
+          submit: req.body?.submit ?? req.body?.send ?? false,
+          suggestedDate: req.body?.suggestedDate,
+          suggestedTimeRange: req.body?.suggestedTimeRange
         });
         Logger.info(MODULE, '[PROVIDER_QUOTES] saveProposal.success', {
           providerId: user.id,

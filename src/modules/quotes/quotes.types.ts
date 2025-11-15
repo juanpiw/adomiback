@@ -47,6 +47,8 @@ export interface QuoteListRecord {
   appointment_time: string | null;
   preferred_service_date?: string | null;
   preferred_time_range?: string | null;
+  provider_proposed_date?: string | null;
+  provider_proposed_time_range?: string | null;
 }
 
 export interface QuoteAttachmentRecord {
@@ -104,6 +106,8 @@ export interface QuoteProposalPayload {
   validityDays: number;
   submit: boolean;
   currency?: string | null;
+  suggestedDate?: string | null;
+  suggestedTimeRange?: string | null;
 }
 
 export interface QuoteCounters {

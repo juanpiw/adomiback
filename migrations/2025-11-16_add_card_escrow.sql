@@ -29,7 +29,7 @@ ALTER TABLE payments
 
 CREATE TABLE IF NOT EXISTS appointment_disputes (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  appointment_id BIGINT UNSIGNED NOT NULL,
+  appointment_id INT NOT NULL,
   client_id INT UNSIGNED NOT NULL,
   provider_id INT UNSIGNED NOT NULL,
   status ENUM('open','reviewing','resolved','rejected') NOT NULL DEFAULT 'open',
