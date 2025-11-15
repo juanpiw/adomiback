@@ -308,6 +308,9 @@ function buildRouter(): Router {
     try {
       const user = (req as any).user || {};
       const { provider_id, client_id, service_id, date, start_time, end_time, notes } = req.body || {};
+      const rawQuoteId = req.body?.quote_id;
+      const parsedQuoteId = rawQuoteId !== undefined && rawQuoteId !== null ? Number(rawQuoteId) : null;
+      const quote_id = Number.isFinite(parsedQuoteId) ? parsedQuoteId : null;
       if (!provider_id || !client_id || !service_id || !date || !start_time || !end_time) {
         return res.status(400).json({ success: false, error: 'provider_id, client_id, service_id, date, start_time, end_time son requeridos' });
       }
@@ -453,8 +456,51 @@ function buildRouter(): Router {
 
       const connection = await pool.getConnection();
       let id: number | null = null;
+      let linkedQuote: { id: number; provider_id: number; client_id: number; status: string; appointment_id: number | null } | null = null;
       try {
         await connection.beginTransaction();
+
+        if (quote_id) {
+          const [quoteRows]: any = await connection.query(
+            `SELECT id, provider_id, client_id, status, appointment_id
+               FROM quotes
+              WHERE id = ?
+                FOR UPDATE`,
+            [quote_id]
+          );
+          if (!Array.isArray(quoteRows) || quoteRows.length === 0) {
+            throw {
+              statusCode: 404,
+              message: 'No encontramos la cotización que intentas vincular con la cita.'
+            };
+          }
+          const quote = quoteRows[0];
+          if (Number(quote.provider_id) !== Number(provider_id)) {
+            throw {
+              statusCode: 403,
+              message: 'La cotización no pertenece a este profesional.'
+            };
+          }
+          if (Number(quote.client_id) !== Number(client_id)) {
+            throw {
+              statusCode: 400,
+              message: 'El cliente seleccionado no coincide con la cotización aceptada.'
+            };
+          }
+          if (quote.appointment_id) {
+            throw {
+              statusCode: 409,
+              message: 'Esta cotización ya tiene una cita asociada.'
+            };
+          }
+          if (quote.status !== 'accepted') {
+            throw {
+              statusCode: 409,
+              message: 'La cotización debe estar aceptada por el cliente antes de agendar la cita.'
+            };
+          }
+          linkedQuote = quote;
+        }
 
         const [locked] = await connection.query(
           `SELECT id FROM appointments
@@ -498,6 +544,20 @@ function buildRouter(): Router {
           ]
         );
         id = (ins as any).insertId;
+
+        if (linkedQuote && id) {
+          await connection.execute(
+            `UPDATE quotes
+                SET appointment_id = ?, updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?`,
+            [id, linkedQuote.id]
+          );
+          Logger.info(MODULE, '[APPOINTMENTS] Quote linked to appointment', {
+            quoteId: linkedQuote.id,
+            appointmentId: id,
+            providerId: provider_id
+          });
+        }
 
         await connection.commit();
       } catch (dbError: any) {
