@@ -19,6 +19,10 @@ import { hasPendingCashDebt } from '../../shared/services/provider-cash.service'
 import { resolveCommissionRate } from '../../shared/utils/commission.util';
 
 const MODULE = 'APPOINTMENTS';
+const AUTO_RELEASE_HOURS = Number(process.env.APPOINTMENT_AUTO_RELEASE_HOURS || 48);
+const AUTO_RELEASE_CHECK_INTERVAL_MS = Number(process.env.APPOINTMENT_AUTO_RELEASE_INTERVAL_MS || 15 * 60 * 1000);
+const PROVIDER_CANCELLATION_THRESHOLD = Number(process.env.PROVIDER_CANCELLATION_THRESHOLD || 40); // porcentaje
+const PROVIDER_RISK_MONITOR_INTERVAL_MS = Number(process.env.PROVIDER_RISK_MONITOR_INTERVAL_MS || 6 * 60 * 60 * 1000);
 
 let ensureCashSchemaPromise: Promise<void> | null = null;
 let ensureRescheduleSchemaPromise: Promise<void> | null = null;
@@ -1934,6 +1938,148 @@ function buildRouter(): Router {
     }
   });
 
+  // PATCH /appointments/:id/complete-service - confirmación del cliente tras servicio pagado con tarjeta
+  router.patch('/appointments/:id/complete-service', authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || {};
+      const appointmentId = Number(req.params.id);
+      if (!Number.isFinite(appointmentId)) {
+        return res.status(400).json({ success: false, error: 'id inválido' });
+      }
+
+      const pool = DatabaseConnection.getPool();
+      const [[appt]]: any = await pool.query('SELECT * FROM appointments WHERE id = ? LIMIT 1', [appointmentId]);
+      if (!appt) {
+        return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      }
+      if (Number(appt.client_id) !== Number(user.id)) {
+        return res.status(403).json({ success: false, error: 'Solo el cliente puede confirmar el servicio' });
+      }
+      if (String(appt.payment_method || '').toLowerCase() !== 'card') {
+        return res.status(400).json({ success: false, error: 'Solo aplica para pagos con tarjeta' });
+      }
+      if (String(appt.status) === 'dispute_pending') {
+        return res.status(400).json({ success: false, error: 'La cita está en disputa' });
+      }
+
+      const [[payment]]: any = await pool.query(
+        'SELECT id, can_release, release_status FROM payments WHERE appointment_id = ? ORDER BY id DESC LIMIT 1',
+        [appointmentId]
+      );
+      if (!payment) {
+        return res.status(409).json({ success: false, error: 'No existe un pago registrado para esta cita' });
+      }
+      if (payment.can_release) {
+        return res.status(409).json({ success: false, error: 'El pago ya estaba liberado o en proceso' });
+      }
+
+      await pool.execute(
+        `UPDATE appointments
+            SET status = 'completed',
+                service_completion_state = 'client_confirmed',
+                completion_requested_at = NOW(),
+                auto_release_at = NOW(),
+                updated_at = NOW()
+          WHERE id = ?`,
+        [appointmentId]
+      );
+
+      await markPaymentReadyForRelease(pool, appointmentId, payment.id, 'client_confirmed');
+
+      try {
+        await PushService.notifyUser(
+          Number(appt.provider_id),
+          'Cliente confirmó el servicio',
+          'El cliente confirmó que el servicio fue completado. El pago será liberado.',
+          { type: 'service_completed', appointment_id: String(appointmentId) }
+        );
+      } catch {}
+
+      return res.json({ success: true });
+    } catch (err) {
+      Logger.error(MODULE, 'Error en complete-service', err as any);
+      return res.status(500).json({ success: false, error: 'Error al confirmar el servicio' });
+    }
+  });
+
+  // POST /appointments/:id/report-no-show - cliente reporta problema o no-show
+  router.post('/appointments/:id/report-no-show', authenticateToken, async (req: Request, res: Response) => {
+    const connection = await DatabaseConnection.getPool().getConnection();
+    try {
+      const user = (req as any).user || {};
+      const appointmentId = Number(req.params.id);
+      if (!Number.isFinite(appointmentId)) {
+        connection.release();
+        return res.status(400).json({ success: false, error: 'id inválido' });
+      }
+      const reasonRaw = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+      if (reasonRaw.length < 10) {
+        connection.release();
+        return res.status(400).json({ success: false, error: 'Describe el problema con al menos 10 caracteres.' });
+      }
+      const evidenceUrls = Array.isArray(req.body?.evidenceUrls)
+        ? req.body.evidenceUrls.filter((url: any) => typeof url === 'string' && url.trim().length > 0)
+        : [];
+
+      await connection.beginTransaction();
+      const [[appt]]: any = await connection.query('SELECT * FROM appointments WHERE id = ? LIMIT 1 FOR UPDATE', [appointmentId]);
+      if (!appt) {
+        await connection.rollback();
+        connection.release();
+        return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      }
+      if (Number(appt.client_id) !== Number(user.id)) {
+        await connection.rollback();
+        connection.release();
+        return res.status(403).json({ success: false, error: 'Solo el cliente puede reportar un problema' });
+      }
+
+      await connection.execute(
+        `UPDATE appointments
+            SET status = 'dispute_pending',
+                service_completion_state = 'dispute_pending',
+                auto_release_at = NULL,
+                completion_requested_at = NOW(),
+                updated_at = NOW()
+          WHERE id = ?`,
+        [appointmentId]
+      );
+
+      await connection.execute(
+        `INSERT INTO appointment_disputes (appointment_id, client_id, provider_id, reason, evidence_urls, reported_at)
+         VALUES (?, ?, ?, ?, ?, NOW())`,
+        [appointmentId, appt.client_id, appt.provider_id, reasonRaw, evidenceUrls.length ? JSON.stringify(evidenceUrls) : null]
+      );
+
+      await connection.execute(
+        `UPDATE payments
+            SET can_release = FALSE,
+                release_status = 'pending'
+          WHERE appointment_id = ?`,
+        [appointmentId]
+      );
+
+      await connection.commit();
+      connection.release();
+
+      try {
+        await PushService.notifyUser(
+          Number(appt.provider_id),
+          'Cliente reportó un problema',
+          'El cliente reportó que el servicio no se prestó. Debes responder con evidencia.',
+          { type: 'dispute', appointment_id: String(appointmentId) }
+        );
+      } catch {}
+
+      return res.json({ success: true });
+    } catch (err) {
+      try { await connection.rollback(); } catch {}
+      connection.release();
+      Logger.error(MODULE, 'Error reportando no-show', err as any);
+      return res.status(500).json({ success: false, error: 'Error al reportar el problema' });
+    }
+  });
+
   // POST /appointments/:id/cash/verify-code - validar código para cierre/pago cash
   router.post('/appointments/:id/cash/verify-code', authenticateToken, cashClosureGate, async (req: Request, res: Response) => {
     try {
@@ -2510,6 +2656,153 @@ function buildRouter(): Router {
         after
       ]
     );
+  }
+
+  type SqlExecutor = PoolConnection | ReturnType<typeof DatabaseConnection.getPool>;
+
+  async function markPaymentReadyForRelease(
+    executor: SqlExecutor,
+    appointmentId: number,
+    paymentId?: number,
+    context: 'client_confirmed' | 'auto_completed' | 'dispute_resolved' = 'client_confirmed'
+  ): Promise<void> {
+    const runner: any = executor;
+    let targetPaymentId = paymentId;
+    if (!targetPaymentId) {
+      const [rows] = await runner.query(
+        'SELECT id FROM payments WHERE appointment_id = ? ORDER BY id DESC LIMIT 1',
+        [appointmentId]
+      );
+      if (!Array.isArray(rows) || rows.length === 0) {
+        Logger.warn(MODULE, '[ESCROW] No se encontró pago para liberar', { appointmentId });
+        return;
+      }
+      targetPaymentId = rows[0].id;
+    }
+
+    await runner.execute(
+      `UPDATE payments
+          SET captured = 1,
+              can_release = TRUE,
+              release_status = 'eligible',
+              hold_expires_at = NULL,
+              release_notes = CASE
+                WHEN release_notes IS NULL THEN ?
+                ELSE release_notes
+              END
+        WHERE id = ?`,
+      [`release:${context}`, targetPaymentId]
+    );
+  }
+
+  async function autoCompleteOverdueAppointments(): Promise<void> {
+    const pool = DatabaseConnection.getPool();
+    const [rows] = await pool.query(
+      `SELECT id, provider_id, client_id
+         FROM appointments
+        WHERE payment_method = 'card'
+          AND status <> 'dispute_pending'
+          AND service_completion_state = 'none'
+          AND TIMESTAMP(\`date\`, \`end_time\`) < DATE_SUB(NOW(), INTERVAL ? HOUR)
+        LIMIT 50`,
+      [AUTO_RELEASE_HOURS]
+    );
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return;
+    }
+
+    for (const row of rows as any[]) {
+      try {
+        await pool.execute(
+          `UPDATE appointments
+              SET status = 'completed',
+                  service_completion_state = 'auto_completed',
+                  auto_release_at = NOW(),
+                  completion_requested_at = NOW(),
+                  updated_at = NOW()
+            WHERE id = ?`,
+          [row.id]
+        );
+        await markPaymentReadyForRelease(pool, row.id, undefined, 'auto_completed');
+        try {
+          await PushService.notifyUser(
+            Number(row.provider_id),
+            'Pago en proceso de liberación',
+            'Liberamos automáticamente un pago de tarjeta tras 48 horas sin incidentes.',
+            { type: 'auto_release', appointment_id: String(row.id) }
+          );
+        } catch {}
+      } catch (err) {
+        Logger.error(MODULE, 'Error auto liberando cita', { appointmentId: row.id, err });
+      }
+    }
+  }
+
+  let autoReleaseJobStarted = false;
+  function scheduleAutoReleaseJob(): void {
+    if (autoReleaseJobStarted) return;
+    autoReleaseJobStarted = true;
+    const runner = async () => {
+      try {
+        await autoCompleteOverdueAppointments();
+      } catch (err) {
+        Logger.error(MODULE, 'Auto release job error', err as any);
+      }
+    };
+    setInterval(runner, AUTO_RELEASE_CHECK_INTERVAL_MS);
+    void runner();
+  }
+
+  async function monitorProviderCancellationRisk(): Promise<void> {
+    const pool = DatabaseConnection.getPool();
+    const [rows] = await pool.query(
+      `SELECT pp.provider_id, pp.cancellation_rate, u.verification_status
+         FROM provider_profiles pp
+         JOIN users u ON u.id = pp.provider_id
+        WHERE pp.cancellation_rate >= ?`,
+      [PROVIDER_CANCELLATION_THRESHOLD]
+    );
+
+    for (const row of rows as any[]) {
+      const currentStatus = String(row.verification_status || '').toLowerCase();
+      if (currentStatus === 'pending_review') {
+        continue;
+      }
+      try {
+        await pool.execute(
+          `UPDATE users
+              SET verification_status = 'pending_review'
+            WHERE id = ?`,
+          [row.provider_id]
+        );
+        try {
+          await PushService.notifyUser(
+            Number(row.provider_id),
+            'Cuenta en revisión',
+            'Detectamos una tasa elevada de cancelaciones. Tu cuenta entró en revisión preventiva.',
+            { type: 'quality_alert' }
+          );
+        } catch {}
+      } catch (err) {
+        Logger.error(MODULE, 'Error marcando proveedor en revisión', { providerId: row.provider_id, err });
+      }
+    }
+  }
+
+  let riskMonitorStarted = false;
+  function scheduleProviderRiskMonitor(): void {
+    if (riskMonitorStarted) return;
+    riskMonitorStarted = true;
+    const runner = async () => {
+      try {
+        await monitorProviderCancellationRisk();
+      } catch (err) {
+        Logger.error(MODULE, 'Risk monitor job error', err as any);
+      }
+    };
+    setInterval(runner, PROVIDER_RISK_MONITOR_INTERVAL_MS);
+    void runner();
   }
 
   function addMinutes(hhmm: string, minutes: number): string {
@@ -3188,6 +3481,9 @@ function buildRouter(): Router {
       });
     }
   });
+
+  scheduleAutoReleaseJob();
+  scheduleProviderRiskMonitor();
 
   return router;
 }

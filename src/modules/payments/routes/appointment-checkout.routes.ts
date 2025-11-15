@@ -225,10 +225,41 @@ export function buildAppointmentCheckoutRoutes(): Router {
         const commissionAmount = Math.round(amount * commissionRate / 100);
         const providerAmount = amount - commissionAmount;
         
+        const holdHours = Number(process.env.APPOINTMENT_AUTO_RELEASE_HOURS || 48);
         await pool.execute(
-          `INSERT INTO payments (appointment_id, client_id, provider_id, amount, commission_amount, provider_amount, currency, payment_method, status, stripe_checkout_session_id, stripe_payment_intent_id, paid_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'card', 'completed', ?, ?, CURRENT_TIMESTAMP)`,
-          [appointmentId, appt.client_id, appt.provider_id, amount, commissionAmount, providerAmount, currency, sessionId, paymentIntentId || null]
+          `INSERT INTO payments (
+             appointment_id,
+             client_id,
+             provider_id,
+             amount,
+             commission_amount,
+             provider_amount,
+             currency,
+             payment_method,
+             status,
+             captured,
+             escrow_reference,
+             stripe_checkout_session_id,
+             stripe_payment_intent_id,
+             paid_at,
+             can_release,
+             release_status,
+             hold_expires_at
+           )
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'card', 'completed', 0, ?, ?, ?, CURRENT_TIMESTAMP, FALSE, 'pending', DATE_ADD(NOW(), INTERVAL ? HOUR))`,
+          [
+            appointmentId,
+            appt.client_id,
+            appt.provider_id,
+            amount,
+            commissionAmount,
+            providerAmount,
+            currency,
+            paymentIntentId || sessionId,
+            sessionId,
+            paymentIntentId || null,
+            holdHours
+          ]
         );
         Logger.info(MODULE, `🧭 [CONFIRM] Payment recorded: appointment_id=${appointmentId}, amount=${amount}, commission=${commissionAmount}, provider=${providerAmount}, status=completed`);
         
