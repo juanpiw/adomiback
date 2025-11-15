@@ -237,6 +237,142 @@ function generatePlanSessionId(providerId: number): string {
   return `PLAN-${providerId}-${random}-${Date.now()}`.slice(0, 40);
 }
 
+function renderPlanReturnLanding(token: string, redirectUrl: string): string {
+  const escapedToken = escapeHtml(token);
+  const escapedRedirect = escapeHtml(redirectUrl);
+
+  return `<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Procesando pago</title>
+    <style>
+      body {
+        font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background: #f8fafc;
+        margin: 0;
+        padding: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .card {
+        background: #fff;
+        border-radius: 20px;
+        padding: 32px 28px;
+        width: min(500px, 92%);
+        text-align: center;
+        box-shadow: 0 18px 40px rgba(15, 23, 42, 0.15);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: 1.75rem;
+        color: #0f172a;
+      }
+      p {
+        margin: 0;
+        color: #475569;
+        line-height: 1.6;
+      }
+      .status--success h1 {
+        color: #047857;
+      }
+      .status--error h1 {
+        color: #dc2626;
+      }
+      .spinner {
+        margin: 24px auto;
+        width: 40px;
+        height: 40px;
+        border-radius: 999px;
+        border: 4px solid rgba(7, 89, 133, 0.2);
+        border-top-color: #0ea5e9;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      a.button {
+        display: inline-block;
+        margin-top: 24px;
+        padding: 12px 24px;
+        background: #0ea5e9;
+        color: #fff;
+        text-decoration: none;
+        border-radius: 999px;
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card status--loading" id="tbk-plan-card">
+      <div class="spinner" id="tbk-plan-spinner"></div>
+      <h1 id="tbk-plan-title">Procesando pago...</h1>
+      <p id="tbk-plan-message">Estamos confirmando tu suscripción. Por favor, no cierres esta ventana.</p>
+      <a href="${escapedRedirect}" id="tbk-plan-link" class="button" style="display:none">Volver a Adomi</a>
+    </div>
+    <script>
+      (function() {
+        const token = "${escapedToken}";
+        const card = document.getElementById('tbk-plan-card');
+        const title = document.getElementById('tbk-plan-title');
+        const message = document.getElementById('tbk-plan-message');
+        const spinner = document.getElementById('tbk-plan-spinner');
+        const link = document.getElementById('tbk-plan-link');
+        const redirectUrl = "${escapedRedirect}";
+
+        function setStatus(type, newTitle, newMessage) {
+          card.className = 'card status--' + type;
+          title.textContent = newTitle;
+          message.textContent = newMessage;
+          spinner.style.display = 'none';
+          link.style.display = 'inline-block';
+        }
+
+        if (!token) {
+          setStatus('error', 'No pudimos confirmar tu pago', 'Faltó el token de confirmación. Intenta nuevamente.');
+          return;
+        }
+
+        fetch('/plans/tbk/commit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token_ws: token })
+        })
+        .then(async response => {
+          const data = await response.json().catch(() => ({}));
+          if (response.ok && data && data.ok) {
+            setStatus('success', 'Pago confirmado', 'Tu suscripción está activa. Te redirigiremos enseguida.');
+            setTimeout(() => { window.location.href = redirectUrl + '?token_ws=' + encodeURIComponent(token); }, 1500);
+          } else {
+            setStatus('error', 'No pudimos confirmar tu pago', 'Revisa tu correo o intenta nuevamente.');
+          }
+        })
+        .catch(() => {
+          setStatus('error', 'No pudimos confirmar tu pago', 'Se produjo un error de conexión. Intenta nuevamente.');
+        });
+      })();
+    </script>
+  </body>
+</html>`;
+}
+
+function escapeHtml(value: string): string {
+  const safe = value || '';
+  return safe
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function computePlanPeriodMonths(plan: any): number {
   if (Number(plan?.duration_months) > 0) {
     return Math.max(1, Number(plan.duration_months));
@@ -1156,6 +1292,28 @@ export function setupSubscriptionsModule(app: any, webhookOnly: boolean = false)
         details
       });
     }
+  });
+
+  router.get('/tbk/plan-return', async (req: Request, res: Response) => {
+    const token = String(
+      (req.query as any)?.token_ws ||
+      (req.query as any)?.TBK_TOKEN ||
+      (req.query as any)?.token ||
+      ''
+    ).trim();
+
+    const fallbackBase = normalizeBaseUrl(
+      process.env.FRONTEND_BASE_URL ||
+      process.env.PUBLIC_BASE_URL ||
+      'https://adomiapp.com'
+    );
+    const redirectUrl = `${fallbackBase}/tbk/plan-return`;
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res
+      .status(200)
+      .send(renderPlanReturnLanding(token, redirectUrl));
   });
 
   router.post('/subscriptions/promo/apply', async (req: Request, res: Response) => {
