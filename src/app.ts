@@ -23,6 +23,7 @@ import { setupAdminModule } from './modules/admin';
 import { setupWalletModule } from './modules/wallet';
 import { setupQuotesModule } from './modules/quotes';
 import { setupFounderModule } from './modules/founders';
+import { setupQrModule } from './modules/qr';
 
 export function createApp(): Express {
   const app = express();
@@ -106,6 +107,7 @@ export function createApp(): Express {
   setupWalletModule(app);
   setupQuotesModule(app);
   setupFounderModule(app);
+  setupQrModule(app);
   // 🔗 NUEVO: montar módulos de Reviews y Favorites
   Logger.info('APP', 'Mounting Reviews and Favorites modules...');
   setupReviewsModule(app);

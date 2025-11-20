@@ -9,3 +9,4 @@ CREATE INDEX IF NOT EXISTS idx_quotes_provider_proposed_date ON quotes (provider
 
 
 
+

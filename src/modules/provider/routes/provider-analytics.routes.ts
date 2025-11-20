@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { authenticateToken, AuthUser } from '../../../shared/middleware/auth.middleware';
 import DatabaseConnection from '../../../shared/database/connection';
 import { Logger } from '../../../shared/utils/logger.util';
-import { getProviderPlanLimits } from '../../../shared/utils/subscription.util';
+import { getProviderPlanLimits, ProviderPlanLimits } from '../../../shared/utils/subscription.util';
 
 const MODULE = 'PROVIDER_ANALYTICS_ROUTES';
 const router = Router();
@@ -44,13 +44,30 @@ function toISO(date: Date): string {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
-async function ensureAdvancedAnalytics(providerId: number) {
-  const limits = await getProviderPlanLimits(providerId);
-  if (limits.analyticsTier !== 'advanced') {
-    const err: any = new Error('Tu plan actual no incluye el dashboard avanzado. Actualiza tu suscripción para acceder a estas métricas.');
-    err.statusCode = 403;
-    throw err;
+function clampRangeForTier(range: DateRange, limited: boolean): DateRange {
+  if (!limited) {
+    return range;
   }
+  const to = new Date(range.to);
+  const limitedFrom = new Date(to);
+  limitedFrom.setMonth(limitedFrom.getMonth() - 3);
+  const from = range.from < limitedFrom ? limitedFrom : new Date(range.from);
+  from.setHours(0, 0, 0, 0);
+  return { from, to };
+}
+
+function buildAnalyticsMeta(limits: ProviderPlanLimits, overrides?: Record<string, any>) {
+  return {
+    analyticsTier: limits.analyticsTier,
+    limited: limits.analyticsTier !== 'advanced',
+    ...overrides
+  };
+}
+
+async function resolveAnalyticsAccess(providerId: number) {
+  const limits = await getProviderPlanLimits(providerId);
+  const limited = limits.analyticsTier !== 'advanced';
+  return { limits, limited };
 }
 
 router.get('/providers/:id/analytics/summary', authenticateToken, async (req: Request, res: Response) => {
@@ -61,9 +78,10 @@ router.get('/providers/:id/analytics/summary', authenticateToken, async (req: Re
       return res.status(403).json({ success: false, error: 'forbidden' });
     }
 
-    const { from, to } = parseRange(req);
-    const planLimits = await getProviderPlanLimits(providerId);
-    const canViewRatings = !!planLimits.clientRatingVisible;
+    const { limits, limited } = await resolveAnalyticsAccess(providerId);
+    const parsed = parseRange(req);
+    const { from, to } = clampRangeForTier(parsed, limited);
+    const canViewRatings = !!limits.clientRatingVisible;
     const pool = DatabaseConnection.getPool();
 
     const [[incomeRow]]: any = await pool.query(
@@ -111,6 +129,15 @@ router.get('/providers/:id/analytics/summary', authenticateToken, async (req: Re
     const recurringClients = clientsRows.filter((row: any) => Number(row.visits || 0) >= 2).length;
     const recurringRate = totalClients > 0 ? Number(((recurringClients / totalClients) * 100).toFixed(1)) : 0;
 
+    const summaryMeta: Record<string, any> = {};
+    if (limited) {
+      summaryMeta.reason = 'ANALYTICS_TIER_BASIC';
+      summaryMeta.cap = 'summary_3m';
+    }
+    if (!canViewRatings) {
+      summaryMeta.ratings = 'PLAN_LIMIT_RATINGS';
+    }
+
     return res.json({
       success: true,
       period: { from: toISO(from), to: toISO(to) },
@@ -127,10 +154,11 @@ router.get('/providers/:id/analytics/summary', authenticateToken, async (req: Re
         recurringRate
       },
       planFeatures: {
-        analyticsTier: planLimits.analyticsTier,
-        csvExportEnabled: !!planLimits.csvExportEnabled,
+        analyticsTier: limits.analyticsTier,
+        csvExportEnabled: !!limits.csvExportEnabled,
         clientRatingVisible: canViewRatings
-      }
+      },
+      meta: buildAnalyticsMeta(limits, Object.keys(summaryMeta).length ? summaryMeta : undefined)
     });
   } catch (error: any) {
     Logger.error(MODULE, 'Error fetching summary', error);
@@ -147,14 +175,14 @@ router.get('/providers/:id/analytics/revenue-timeseries', authenticateToken, asy
       return res.status(403).json({ success: false, error: 'forbidden' });
     }
 
-    try {
-      await ensureAdvancedAnalytics(providerId);
-    } catch (planErr: any) {
-      return res.status(planErr.statusCode || 403).json({ success: false, error: planErr.message });
-    }
+    const { limits, limited } = await resolveAnalyticsAccess(providerId);
 
-    const { from, to } = parseRange(req);
-    const group = String(req.query.group || 'month').toLowerCase();
+    const parsed = parseRange(req);
+    const { from, to } = clampRangeForTier(parsed, limited);
+    let group = String(req.query.group || 'month').toLowerCase();
+    if (limited) {
+      group = 'month';
+    }
     const groupKey = group === 'week' ? '%x-%v' : '%Y-%m';
 
     const pool = DatabaseConnection.getPool();
@@ -211,7 +239,8 @@ router.get('/providers/:id/analytics/revenue-timeseries', authenticateToken, asy
       success: true,
       period: { from: toISO(from), to: toISO(to) },
       group,
-      series
+      series,
+      meta: buildAnalyticsMeta(limits, limited ? { reason: 'ANALYTICS_TIER_BASIC', cap: '3m_max' } : undefined)
     });
   } catch (error: any) {
     Logger.error(MODULE, 'Error fetching revenue timeseries', error);
@@ -228,17 +257,15 @@ router.get('/providers/:id/analytics/services-top', authenticateToken, async (re
       return res.status(403).json({ success: false, error: 'forbidden' });
     }
 
-    try {
-      await ensureAdvancedAnalytics(providerId);
-    } catch (planErr: any) {
-      return res.status(planErr.statusCode || 403).json({ success: false, error: planErr.message });
-    }
-
-    const { from, to } = parseRange(req);
-    const limit = Math.min(Number(req.query.limit || 5), 10);
+    const { limits, limited } = await resolveAnalyticsAccess(providerId);
+    const parsed = parseRange(req);
+    const { from, to } = clampRangeForTier(parsed, limited);
+    const requestedLimit = Math.min(Number(req.query.limit || 5), 10);
+    const limit = limited ? Math.min(requestedLimit, 3) : requestedLimit;
     const pool = DatabaseConnection.getPool();
 
     let rows: any[] = [];
+    let queryUsed: 'primary' | 'fallback' = 'primary';
     try {
       const [primary]: any = await pool.query(
         `SELECT ps.id, ps.name,
@@ -262,6 +289,7 @@ router.get('/providers/:id/analytics/services-top', authenticateToken, async (re
         error: primaryError?.message || primaryError
       });
 
+      queryUsed = 'fallback';
       const [fallback]: any = await pool.query(
         `SELECT 
             COALESCE(a.service_id, 0) AS service_id,
@@ -284,8 +312,6 @@ router.get('/providers/:id/analytics/services-top', authenticateToken, async (re
         bookings: Number(row.bookings || 0),
         income: Number(row.income || 0)
       }));
-
-      return res.json({ success: true, period: { from: toISO(from), to: toISO(to) }, services: rows });
     }
 
     const services = rows.map((row: any) => ({
@@ -295,7 +321,26 @@ router.get('/providers/:id/analytics/services-top', authenticateToken, async (re
       income: Number(row.income || 0)
     }));
 
-    return res.json({ success: true, period: { from: toISO(from), to: toISO(to) }, services });
+    const metaOverrides: Record<string, any> | undefined = limited
+      ? { reason: 'ANALYTICS_TIER_BASIC', cap: `top_${limit}` }
+      : undefined;
+    if (queryUsed === 'fallback') {
+      const fallbackMeta = metaOverrides || {};
+      fallbackMeta.query = 'fallback';
+      return res.json({
+        success: true,
+        period: { from: toISO(from), to: toISO(to) },
+        services,
+        meta: buildAnalyticsMeta(limits, fallbackMeta)
+      });
+    }
+
+    return res.json({
+      success: true,
+      period: { from: toISO(from), to: toISO(to) },
+      services,
+      meta: buildAnalyticsMeta(limits, metaOverrides)
+    });
   } catch (error: any) {
     Logger.error(MODULE, 'Error fetching top services', error);
     const message = error?.message?.includes('Fecha') ? error.message : 'Error obteniendo ranking de servicios';
@@ -311,13 +356,8 @@ router.get('/providers/:id/analytics/reviews', authenticateToken, async (req: Re
       return res.status(403).json({ success: false, error: 'forbidden' });
     }
 
-    try {
-      await ensureAdvancedAnalytics(providerId);
-    } catch (planErr: any) {
-      return res.status(planErr.statusCode || 403).json({ success: false, error: planErr.message });
-    }
-
-    const limit = Math.min(Number(req.query.limit || 5), 20);
+    const { limits, limited } = await resolveAnalyticsAccess(providerId);
+    const limit = Math.min(Number(req.query.limit || 5), limited ? 3 : 20);
     const pool = DatabaseConnection.getPool();
 
     const [rows]: any = await pool.query(
@@ -344,7 +384,11 @@ router.get('/providers/:id/analytics/reviews', authenticateToken, async (req: Re
       serviceName: row.service_name || null
     }));
 
-    return res.json({ success: true, reviews });
+    return res.json({
+      success: true,
+      reviews,
+      meta: buildAnalyticsMeta(limits, limited ? { reason: 'ANALYTICS_TIER_BASIC', cap: `reviews_${limit}` } : undefined)
+    });
   } catch (error: any) {
     Logger.error(MODULE, 'Error fetching reviews', error);
     return res.status(500).json({ success: false, error: 'Error obteniendo reseñas' });
