@@ -224,15 +224,15 @@ async function ensureRescheduleSchema(): Promise<void> {
       ];
 
       for (const column of columnDefinitions) {
-        const [[{ exists }]]: any = await pool.query(
-          `SELECT COUNT(*) AS exists
+        const [[{ column_exists }]]: any = await pool.query(
+          `SELECT COUNT(*) AS column_exists
              FROM information_schema.COLUMNS
             WHERE TABLE_SCHEMA = DATABASE()
               AND TABLE_NAME = 'appointments'
               AND COLUMN_NAME = ?`,
           [column.name]
         );
-        if (!exists) {
+        if (!column_exists) {
           await pool.query(column.sql);
           Logger.info(MODULE, '[RESCHEDULE_SCHEMA] Columna añadida', { column: column.name });
         }
@@ -279,21 +279,25 @@ async function ensureProviderMetricsSchema(): Promise<void> {
       ];
 
       for (const column of columnDefinitions) {
-        const [[{ exists }]]: any = await pool.query(
-          `SELECT COUNT(*) AS exists
+        const [[{ column_exists }]]: any = await pool.query(
+          `SELECT COUNT(*) AS column_exists
              FROM information_schema.COLUMNS
             WHERE TABLE_SCHEMA = DATABASE()
               AND TABLE_NAME = 'provider_profiles'
               AND COLUMN_NAME = ?`,
           [column.name]
         );
-        if (!exists) {
+
+        if (!column_exists) {
           await pool.query(column.sql);
           Logger.info(MODULE, '[PROVIDER_METRICS] Columna añadida', { column: column.name });
         }
       }
     } catch (error) {
-      Logger.error(MODULE, '[PROVIDER_METRICS] Error garantizando columnas', error);
+      Logger.error(MODULE, '[PROVIDER_METRICS] Error garantizando columnas', {
+        error,
+        hint: 'Revisa que el usuario DB tenga permisos ALTER y que la tabla provider_profiles exista.'
+      });
     }
   })();
 
