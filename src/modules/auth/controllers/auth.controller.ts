@@ -11,42 +11,80 @@ import { Logger } from '../../../shared/utils/logger.util';
 
 const MODULE = 'AuthController';
 
+function sanitizePayload(payload: any): any {
+  if (!payload || typeof payload !== 'object') return payload;
+  const { password, confirmPassword, ...rest } = payload;
+  return { ...rest, ...(password ? { password: '***' } : {}), ...(confirmPassword ? { confirmPassword: '***' } : {}) };
+}
+
 export class AuthController {
   private authService = new AuthService();
 
   register = async (req: Request, res: Response, next: NextFunction) => {
     try {
+      Logger.info(MODULE, 'Register request received', { body: sanitizePayload(req.body) });
       const result = await this.authService.register(req.body);
-      Logger.info(MODULE, 'Registration successful', { userId: result.user.id });
-      res.status(201).json(ResponseUtil.success(result));
+      Logger.info(MODULE, 'Registration successful', {
+        userId: result.user.id,
+        email: result.user.email,
+        role: result.user.role,
+        hasAccessToken: !!result.accessToken,
+        hasRefreshToken: !!result.refreshToken
+      });
+      const response = ResponseUtil.success(result);
+      Logger.info(MODULE, 'Registration response payload', response);
+      res.status(201).json(response);
     } catch (error: any) {
-      Logger.error(MODULE, 'Registration failed', error);
+      const status =
+        error?.message && (error.message.includes('Ya tienes una cuenta como') || error.message.includes('ya está registrado'))
+          ? 409
+          : error?.message && (error.message.includes('requeridos') || error.message.includes('menos 6'))
+            ? 400
+            : 500;
+
+      const response = status === 500
+        ? ResponseUtil.error('Error interno del servidor')
+        : ResponseUtil.error(error.message);
+
+      Logger.error(MODULE, 'Registration failed', {
+        status,
+        message: error?.message,
+        stack: error?.stack,
+        response
+      });
       
-      if (error.message.includes('Ya tienes una cuenta como') || error.message.includes('ya está registrado')) {
-        return res.status(409).json(ResponseUtil.error(error.message));
-      }
-      
-      if (error.message.includes('requeridos') || error.message.includes('menos 6')) {
-        return res.status(400).json(ResponseUtil.error(error.message));
-      }
-      
-      res.status(500).json(ResponseUtil.error('Error interno del servidor'));
+      res.status(status).json(response);
     }
   };
 
   login = async (req: Request, res: Response, next: NextFunction) => {
     try {
+      Logger.info(MODULE, 'Login request received', { body: sanitizePayload(req.body) });
       const result = await this.authService.login(req.body);
-      Logger.info(MODULE, 'Login successful', { userId: result.user.id });
-      res.json(ResponseUtil.success(result));
+      Logger.info(MODULE, 'Login successful', {
+        userId: result.user.id,
+        email: result.user.email,
+        role: result.user.role,
+        hasAccessToken: !!result.accessToken,
+        hasRefreshToken: !!result.refreshToken
+      });
+      const response = ResponseUtil.success(result);
+      Logger.info(MODULE, 'Login response payload', response);
+      res.json(response);
     } catch (error: any) {
-      Logger.error(MODULE, 'Login failed', error);
-      
-      if (error.message.includes('Credenciales inválidas')) {
-        return res.status(401).json(ResponseUtil.error(error.message));
-      }
-      
-      res.status(500).json(ResponseUtil.error('Error interno del servidor'));
+      const status = error?.message && error.message.includes('Credenciales inválidas') ? 401 : 500;
+      const response = status === 500
+        ? ResponseUtil.error('Error interno del servidor')
+        : ResponseUtil.error(error.message);
+
+      Logger.error(MODULE, 'Login failed', {
+        status,
+        message: error?.message,
+        stack: error?.stack,
+        response
+      });
+
+      res.status(status).json(response);
     }
   };
 

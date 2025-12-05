@@ -94,6 +94,7 @@ export class AuthService {
 
     // Generar tokens JWT
     const tokens = JWTUtil.generateTokenPair(userId, data.email, role);
+    Logger.info(MODULE, 'Tokens generated (register)', { hasAccessToken: !!tokens.accessToken, hasRefreshToken: !!tokens.refreshToken });
 
     // Crear refresh token en la base de datos (usar jti del payload, no la firma JWT)
     const refreshTokenExpiry = new Date();
@@ -106,7 +107,7 @@ export class AuthService {
       ? await this.getProviderVerificationState(userId)
       : { is_verified: false, verification_status: 'none' };
 
-    return {
+    const response: AuthResponse = {
       user: {
         id: userId,
         email: data.email,
@@ -119,6 +120,16 @@ export class AuthService {
       refreshToken: tokens.refreshToken,
       expiresIn: tokens.expiresIn
     };
+
+    Logger.info(MODULE, 'Registration response built', {
+      userId: response.user.id,
+      email: response.user.email,
+      role: response.user.role,
+      hasAccessToken: !!response.accessToken,
+      hasRefreshToken: !!response.refreshToken
+    });
+
+    return response;
   }
 
   /**
@@ -145,6 +156,7 @@ export class AuthService {
 
     // Generar tokens JWT
     const tokens = JWTUtil.generateTokenPair(user.id, user.email, user.role);
+    Logger.info(MODULE, 'Tokens generated (login)', { hasAccessToken: !!tokens.accessToken, hasRefreshToken: !!tokens.refreshToken });
 
     const verification = user.role === 'provider'
       ? await this.getProviderVerificationState(user.id)
@@ -159,7 +171,7 @@ export class AuthService {
 
     Logger.info(MODULE, 'Login successful', { userId: user.id });
 
-    return {
+    const response: AuthResponse = {
       user: {
         id: user.id,
         email: user.email,
@@ -172,6 +184,16 @@ export class AuthService {
       refreshToken: tokens.refreshToken,
       expiresIn: tokens.expiresIn
     };
+
+    Logger.info(MODULE, 'Login response built', {
+      userId: response.user.id,
+      email: response.user.email,
+      role: response.user.role,
+      hasAccessToken: !!response.accessToken,
+      hasRefreshToken: !!response.refreshToken
+    });
+
+    return response;
   }
 
   /**
