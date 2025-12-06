@@ -1,6 +1,21 @@
 import DatabaseConnection from '../../../shared/database/connection';
 import { Logger } from '../../../shared/utils/logger.util';
 
+type RoleTarget = 'client' | 'provider' | 'both';
+
+interface NotificationDataPayload {
+  type?: string;
+  title?: string;
+  body?: string;
+  action?: string;
+  entity_type?: string;
+  entity_id?: string | number | null;
+  role_target?: RoleTarget;
+  route_hint?: string;
+  params?: Record<string, any> | null;
+  [key: string]: any;
+}
+
 let admin: any = null;
 const MODULE = 'PUSH_SERVICE';
 
@@ -150,12 +165,13 @@ export class PushService {
     userId: number, 
     title: string, 
     body: string, 
-    data?: Record<string, string>
+    data?: Record<string, string | number | boolean | null>
   ): Promise<void> {
     const pool = DatabaseConnection.getPool();
     try {
-      const type = data?.type || 'system';
-      const dataJson = data ? JSON.stringify(data) : null;
+      const enriched = await this.enrichNotificationData(data);
+      const type = enriched?.type || 'system';
+      const dataJson = enriched ? JSON.stringify(enriched) : null;
       
       await pool.execute(
         `INSERT INTO notifications (user_id, type, title, body, message, data, is_read)
@@ -193,7 +209,25 @@ export class PushService {
       query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
       
       const [rows] = await pool.query(query, [userId, limit, offset]);
-      return rows as any[];
+      return (rows as any[]).map(row => {
+        let parsed: NotificationDataPayload | undefined;
+        try {
+          parsed = row?.data ? JSON.parse(row.data) : undefined;
+        } catch {
+          parsed = undefined;
+        }
+        const normalized = parsed ? parsed : undefined;
+        return {
+          ...row,
+          data: normalized,
+          action: normalized?.action,
+          entity_type: normalized?.entity_type,
+          entity_id: normalized?.entity_id,
+          role_target: normalized?.role_target,
+          route_hint: normalized?.route_hint,
+          params: normalized?.params
+        };
+      });
     } catch (err) {
       Logger.error(MODULE, 'Error getting user notifications', err as any);
       return [];
@@ -253,12 +287,12 @@ export class PushService {
 
   private static async enrichNotificationData(
     data?: Record<string, string | number | boolean | null>
-  ): Promise<Record<string, string | number | boolean | null> | undefined> {
+  ): Promise<NotificationDataPayload | undefined> {
     if (!data) {
       return undefined;
     }
 
-    const enriched: Record<string, string | number | boolean | null> = { ...data };
+    const enriched: NotificationDataPayload = { ...data };
     const rawAppointmentId =
       enriched.appointment_id ??
       enriched.appointmentId ??
@@ -333,6 +367,40 @@ export class PushService {
     enriched.appointment_id = String(appointmentId);
     enriched.appointmentId = String(appointmentId);
 
+    // Derivar metadata estándar para navegación
+    const entityId =
+      enriched.entity_id ??
+      enriched.appointment_id ??
+      enriched.quote_id ??
+      enriched.thread_id ??
+      enriched.payment_id ??
+      null;
+
+    const entityType =
+      enriched.entity_type ??
+      (enriched.appointment_id ? 'appointment' : undefined) ??
+      (enriched.quote_id ? 'quote' : undefined) ??
+      (enriched.thread_id ? 'message' : undefined) ??
+      (enriched.payment_id ? 'payment' : undefined) ??
+      undefined;
+
+    const action = enriched.action || (entityType === 'appointment' ? 'view_booking' : 'view');
+    const roleTarget: RoleTarget = (enriched.role_target as RoleTarget) || 'both';
+    const routeHint = enriched.route_hint || undefined;
+    const params =
+      enriched.params ||
+      (entityType === 'appointment' && entityId ? { appointmentId: String(entityId) } : undefined) ||
+      (entityType === 'quote' && entityId ? { quoteId: String(entityId) } : undefined) ||
+      (entityType === 'message' && entityId ? { threadId: String(entityId) } : undefined) ||
+      undefined;
+
+    enriched.entity_id = entityId;
+    enriched.entity_type = entityType;
+    enriched.action = action;
+    enriched.role_target = roleTarget;
+    if (routeHint) enriched.route_hint = routeHint;
+    if (params) enriched.params = params;
+
     return enriched;
   }
 
@@ -347,7 +415,15 @@ export class PushService {
       if (value === undefined || value === null) {
         continue;
       }
-      sanitized[key] = typeof value === 'string' ? value : String(value);
+      if (typeof value === 'object') {
+        try {
+          sanitized[key] = JSON.stringify(value);
+        } catch {
+          continue;
+        }
+      } else {
+        sanitized[key] = typeof value === 'string' ? value : String(value);
+      }
     }
     return Object.keys(sanitized).length > 0 ? sanitized : undefined;
   }
