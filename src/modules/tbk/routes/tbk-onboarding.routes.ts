@@ -10,6 +10,11 @@ const router = Router();
 
 type TbkStatus = 'none' | 'pending' | 'active' | 'restricted';
 
+function getTbkBase(): string {
+  const base = normalizeBase(process.env.TBK_BASE_URL);
+  return base || 'https://webpay3gint.transbank.cl';
+}
+
 function requireEnv(key: string): string {
   const v = process.env[key];
   if (!v) throw new Error(`Missing env ${key}`);
@@ -52,6 +57,27 @@ function getSecHeaders() {
     'Content-Type': 'application/json',
     'Accept': 'application/json'
   } as Record<string, string>;
+}
+
+function getOneclickHeaders() {
+  // Prefer variables específicas para Oneclick para no chocar con Webpay Plus Mall
+  const apiKeyId =
+    (process.env.TBK_ONECLICK_API_KEY_ID ||
+      process.env.TBK_ONECLICK_MALL_COMMERCE_CODE ||
+      process.env.TBK_API_KEY_ID ||
+      process.env.TBK_MALL_COMMERCE_CODE ||
+      '').trim();
+  const apiKeySecret =
+    (process.env.TBK_ONECLICK_API_KEY_SECRET || process.env.TBK_API_KEY_SECRET || '').trim();
+  if (!apiKeyId || !apiKeySecret) {
+    throw new Error('Missing env TBK_ONECLICK_API_KEY_ID/TBK_ONECLICK_API_KEY_SECRET');
+  }
+  return {
+    'Tbk-Api-Key-Id': apiKeyId,
+    'Tbk-Api-Key-Secret': apiKeySecret,
+    'Content-Type': 'application/json',
+    'Accept': 'application/json'
+  };
 }
 
 const BANK_CODE_MAP: Record<string, string> = {
@@ -320,6 +346,255 @@ router.post('/providers/:id/tbk/secondary/create', authenticateToken, async (req
     });
     const msg = err?.response?.data || err?.message || 'error';
     return res.status(500).json({ success: false, error: 'Error creando comercio secundario', details: msg });
+  }
+});
+
+// POST /providers/:id/tbk/secondary/manual
+// Permite registrar manualmente un código de comercio secundario entregado por Transbank.
+router.post('/providers/:id/tbk/secondary/manual', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as AuthUser;
+    const providerId = Number(req.params.id);
+    if (!providerId || user.id !== providerId || user.role !== 'provider') {
+      return res.status(403).json({ success: false, error: 'forbidden' });
+    }
+
+    const code = String(req.body?.code || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+
+    if (!code || code.length < 5) {
+      return res.status(400).json({ success: false, error: 'Código de comercio secundario inválido' });
+    }
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Correo requerido para validar' });
+    }
+
+    const pool = DatabaseConnection.getPool();
+    const [[prov]]: any = await pool.query('SELECT id, email, tbk_secondary_code FROM users WHERE id = ? AND role = "provider" LIMIT 1', [providerId]);
+    if (!prov) {
+      return res.status(404).json({ success: false, error: 'Proveedor no encontrado' });
+    }
+
+    const normalizedDbEmail = String(prov.email || '').trim().toLowerCase();
+    if (normalizedDbEmail && normalizedDbEmail !== email) {
+      return res.status(400).json({ success: false, error: 'El correo no coincide con el registrado en la cuenta' });
+    }
+
+    // Evitar sobre-escritura inadvertida si ya existe
+    if (prov.tbk_secondary_code && prov.tbk_secondary_code === code) {
+      return res.json({ success: true, tbk: { status: 'active', code } });
+    }
+
+    await pool.execute('UPDATE users SET tbk_secondary_code = ?, tbk_status = ? WHERE id = ?', [code, 'active', providerId]);
+    await pool.execute(
+      `INSERT INTO tbk_secondary_shops (provider_id, codigo_comercio_secundario, status, raw)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE status = VALUES(status), raw = VALUES(raw), updated_at = CURRENT_TIMESTAMP(6)`,
+      [providerId, code, 'active', JSON.stringify({ source: 'manual', savedAt: new Date().toISOString() })]
+    );
+
+    return res.status(201).json({ success: true, tbk: { status: 'active', code } });
+  } catch (err: any) {
+    Logger.error(MODULE, 'Manual secondary error', err);
+    const msg = err?.response?.data || err?.message || 'error';
+    return res.status(500).json({ success: false, error: 'Error guardando comercio secundario', details: msg });
+  }
+});
+
+// POST /providers/:id/tbk/oneclick/inscriptions
+// Inicia inscripción Oneclick Mall y devuelve token + url_webpay
+router.post('/providers/:id/tbk/oneclick/inscriptions', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as AuthUser;
+    const providerId = Number(req.params.id);
+    if (!providerId || user.id !== providerId || user.role !== 'provider') {
+      return res.status(403).json({ success: false, error: 'forbidden' });
+    }
+
+    const email = String(req.body?.email || user.email || '').trim();
+    const responseUrl = String(req.body?.responseUrl || process.env.TBK_ONECLICK_RETURN_URL || '').trim();
+    const base = getTbkBase();
+
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Correo requerido para iniciar la inscripción' });
+    }
+    if (!responseUrl) {
+      return res.status(400).json({ success: false, error: 'Configura TBK_ONECLICK_RETURN_URL o envía responseUrl' });
+    }
+
+    const userName = `prov-${providerId}-${Date.now()}`;
+    const url = `${base}/rswebpaytransaction/api/oneclick/v1.2/inscriptions`;
+
+    const headers = getOneclickHeaders();
+    Logger.info(MODULE, 'Iniciando inscripción Oneclick', { providerId, email, responseUrl, url });
+
+    const { data } = await axios.post(url, { userName, email, responseUrl }, { headers });
+
+    return res.status(201).json({
+      success: true,
+      token: data?.token || null,
+      url_webpay: data?.url_webpay || null,
+      userName
+    });
+  } catch (err: any) {
+    Logger.error(MODULE, 'Oneclick start inscription error', err);
+    const msg = err?.response?.data || err?.message || 'error';
+    return res.status(500).json({ success: false, error: 'Error iniciando inscripción Oneclick', details: msg });
+  }
+});
+
+// PUT /providers/:id/tbk/oneclick/inscriptions/:token
+// Confirma inscripción (finish) con TBK_TOKEN
+router.put('/providers/:id/tbk/oneclick/inscriptions/:token', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as AuthUser;
+    const providerId = Number(req.params.id);
+    const token = String(req.params.token || '').trim();
+    if (!providerId || user.id !== providerId || user.role !== 'provider') {
+      return res.status(403).json({ success: false, error: 'forbidden' });
+    }
+    if (!token) {
+      return res.status(400).json({ success: false, error: 'TBK_TOKEN requerido' });
+    }
+    const base = getTbkBase();
+    const url = `${base}/rswebpaytransaction/api/oneclick/v1.2/inscriptions/${token}`;
+    const headers = getOneclickHeaders();
+    Logger.info(MODULE, 'Finalizando inscripción Oneclick', { providerId, token, url });
+    const { data } = await axios.put(url, {}, { headers });
+    return res.json({ success: true, inscription: data });
+  } catch (err: any) {
+    Logger.error(MODULE, 'Oneclick finish inscription error', err);
+    const msg = err?.response?.data || err?.message || 'error';
+    return res.status(500).json({ success: false, error: 'Error finalizando inscripción Oneclick', details: msg });
+  }
+});
+
+// DELETE /providers/:id/tbk/oneclick/inscriptions
+// Elimina inscripción (requiere tbk_user y username)
+router.delete('/providers/:id/tbk/oneclick/inscriptions', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as AuthUser;
+    const providerId = Number(req.params.id);
+    if (!providerId || user.id !== providerId || user.role !== 'provider') {
+      return res.status(403).json({ success: false, error: 'forbidden' });
+    }
+    const tbkUser = String(req.body?.tbk_user || '').trim();
+    const username = String(req.body?.username || '').trim();
+    if (!tbkUser || !username) {
+      return res.status(400).json({ success: false, error: 'tbk_user y username son requeridos' });
+    }
+    const base = getTbkBase();
+    const url = `${base}/rswebpaytransaction/api/oneclick/v1.2/inscriptions`;
+    const headers = getOneclickHeaders();
+    Logger.info(MODULE, 'Eliminando inscripción Oneclick', { providerId, tbkUser, username, url });
+    const { status } = await axios.delete(url, { headers, data: { tbk_user: tbkUser, username } });
+    return res.status(status === 204 ? 200 : status).json({ success: true });
+  } catch (err: any) {
+    Logger.error(MODULE, 'Oneclick delete inscription error', err);
+    const msg = err?.response?.data || err?.message || 'error';
+    return res.status(500).json({ success: false, error: 'Error eliminando inscripción Oneclick', details: msg });
+  }
+});
+
+// POST /providers/:id/tbk/oneclick/transactions
+// Autoriza pago Oneclick Mall
+router.post('/providers/:id/tbk/oneclick/transactions', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as AuthUser;
+    const providerId = Number(req.params.id);
+    if (!providerId || user.id !== providerId || user.role !== 'provider') {
+      return res.status(403).json({ success: false, error: 'forbidden' });
+    }
+    const { username, tbk_user, buy_order, details } = req.body || {};
+    if (!username || !tbk_user || !buy_order || !Array.isArray(details) || details.length === 0) {
+      return res.status(400).json({ success: false, error: 'username, tbk_user, buy_order y details son requeridos' });
+    }
+    const base = getTbkBase();
+    const url = `${base}/rswebpaytransaction/api/oneclick/v1.2/transactions`;
+    const headers = getOneclickHeaders();
+    Logger.info(MODULE, 'Autorizando transacción Oneclick', { providerId, buy_order, detailsCount: details.length, url });
+    const { data } = await axios.post(url, { username, tbk_user, buy_order, details }, { headers });
+    return res.json({ success: true, transaction: data });
+  } catch (err: any) {
+    Logger.error(MODULE, 'Oneclick authorize error', err);
+    const msg = err?.response?.data || err?.message || 'error';
+    return res.status(500).json({ success: false, error: 'Error autorizando transacción Oneclick', details: msg });
+  }
+});
+
+// GET /providers/:id/tbk/oneclick/transactions/:buyOrder
+// Consulta estado de transacción Oneclick Mall
+router.get('/providers/:id/tbk/oneclick/transactions/:buyOrder', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as AuthUser;
+    const providerId = Number(req.params.id);
+    const buyOrder = String(req.params.buyOrder || '').trim();
+    if (!providerId || user.id !== providerId || user.role !== 'provider') {
+      return res.status(403).json({ success: false, error: 'forbidden' });
+    }
+    if (!buyOrder) {
+      return res.status(400).json({ success: false, error: 'buyOrder requerido' });
+    }
+    const base = getTbkBase();
+    const url = `${base}/rswebpaytransaction/api/oneclick/v1.2/transactions/${buyOrder}`;
+    const headers = getOneclickHeaders();
+    const { data } = await axios.get(url, { headers });
+    return res.json({ success: true, transaction: data });
+  } catch (err: any) {
+    Logger.error(MODULE, 'Oneclick status error', err);
+    const msg = err?.response?.data || err?.message || 'error';
+    return res.status(500).json({ success: false, error: 'Error consultando transacción Oneclick', details: msg });
+  }
+});
+
+// POST /providers/:id/tbk/oneclick/transactions/:buyOrder/refunds
+// Anula/reversa una transacción Oneclick Mall
+router.post('/providers/:id/tbk/oneclick/transactions/:buyOrder/refunds', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as AuthUser;
+    const providerId = Number(req.params.id);
+    const buyOrder = String(req.params.buyOrder || '').trim();
+    const { commerce_code, detail_buy_order, amount } = req.body || {};
+    if (!providerId || user.id !== providerId || user.role !== 'provider') {
+      return res.status(403).json({ success: false, error: 'forbidden' });
+    }
+    if (!buyOrder || !commerce_code || !detail_buy_order || typeof amount === 'undefined') {
+      return res.status(400).json({ success: false, error: 'buyOrder, commerce_code, detail_buy_order y amount son requeridos' });
+    }
+    const base = getTbkBase();
+    const url = `${base}/rswebpaytransaction/api/oneclick/v1.2/transactions/${buyOrder}/refunds`;
+    const headers = getOneclickHeaders();
+    const { data } = await axios.post(url, { commerce_code, detail_buy_order, amount }, { headers });
+    return res.json({ success: true, refund: data });
+  } catch (err: any) {
+    Logger.error(MODULE, 'Oneclick refund error', err);
+    const msg = err?.response?.data || err?.message || 'error';
+    return res.status(500).json({ success: false, error: 'Error anulando/reversando transacción Oneclick', details: msg });
+  }
+});
+
+// POST /providers/:id/tbk/oneclick/transactions/capture
+// Captura diferida (si aplica)
+router.post('/providers/:id/tbk/oneclick/transactions/capture', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as AuthUser;
+    const providerId = Number(req.params.id);
+    if (!providerId || user.id !== providerId || user.role !== 'provider') {
+      return res.status(403).json({ success: false, error: 'forbidden' });
+    }
+    const { commerce_code, buy_order, authorization_code, capture_amount } = req.body || {};
+    if (!commerce_code || !buy_order || !authorization_code || typeof capture_amount === 'undefined') {
+      return res.status(400).json({ success: false, error: 'commerce_code, buy_order, authorization_code y capture_amount son requeridos' });
+    }
+    const base = getTbkBase();
+    const url = `${base}/rswebpaytransaction/api/oneclick/v1.2/transactions/capture`;
+    const headers = getOneclickHeaders();
+    const { data } = await axios.post(url, { commerce_code, buy_order, authorization_code, capture_amount }, { headers });
+    return res.json({ success: true, capture: data });
+  } catch (err: any) {
+    Logger.error(MODULE, 'Oneclick capture error', err);
+    const msg = err?.response?.data || err?.message || 'error';
+    return res.status(500).json({ success: false, error: 'Error capturando transacción Oneclick', details: msg });
   }
 });
 
