@@ -643,17 +643,57 @@ router.get('/providers/:id/tbk/secondary/status', authenticateToken, async (req:
 });
 
 // GET /providers/:id/tbk/secondary/info
-// Devuelve código de comercio secundario y correo del proveedor (para flows que necesiten confirmar datos)
+// Devuelve código de comercio secundario y correo del proveedor.
+// - Providers: sólo su propio id.
+// - Clients: si envían appointmentId y son dueños de esa cita con ese provider.
 router.get('/providers/:id/tbk/secondary/info', authenticateToken, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user as AuthUser;
     const providerId = Number(req.params.id);
-    if (!providerId || user.id !== providerId || user.role !== 'provider') {
+    const appointmentId = req.query.appointmentId ? Number(req.query.appointmentId) : null;
+    Logger.info(MODULE, 'Secondary info requested', {
+      requester: { id: user.id, role: user.role },
+      providerId,
+      appointmentId
+    });
+    if (!providerId) {
+      return res.status(400).json({ success: false, error: 'providerId invalid' });
+    }
+
+    const pool = DatabaseConnection.getPool();
+
+    // Regla de acceso
+    if (user.role === 'provider') {
+      if (user.id !== providerId) {
+        return res.status(403).json({ success: false, error: 'forbidden' });
+      }
+    } else if (user.role === 'client') {
+      if (!appointmentId) {
+        return res.status(403).json({ success: false, error: 'forbidden' });
+      }
+      const [[appt]]: any = await pool.query(
+        'SELECT id FROM appointments WHERE id = ? AND provider_id = ? AND client_id = ? LIMIT 1',
+        [appointmentId, providerId, user.id]
+      );
+      if (!appt) {
+        Logger.warn(MODULE, 'Secondary info forbidden for client; appointment mismatch', {
+          requester: user.id,
+          providerId,
+          appointmentId
+        });
+        return res.status(403).json({ success: false, error: 'forbidden' });
+      }
+    } else {
       return res.status(403).json({ success: false, error: 'forbidden' });
     }
-    const pool = DatabaseConnection.getPool();
+
     const [[u]]: any = await pool.query('SELECT email, tbk_secondary_code, tbk_status FROM users WHERE id = ? LIMIT 1', [providerId]);
     if (!u) return res.status(404).json({ success: false, error: 'Proveedor no encontrado' });
+    Logger.info(MODULE, 'Secondary info resolved', {
+      providerId,
+      code: u.tbk_secondary_code || null,
+      status: u.tbk_status
+    });
     return res.json({
       success: true,
       tbk: {
