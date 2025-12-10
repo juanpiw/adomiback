@@ -11,13 +11,9 @@ const router = Router();
 
 type TbkStatus = 'none' | 'pending' | 'active' | 'restricted';
 
-// Aux: ensure client tbk columns
-async function ensureClientTbkColumns(pool: any) {
-  await pool.query(`
-    ALTER TABLE users
-    ADD COLUMN IF NOT EXISTS tbk_oneclick_user VARCHAR(64) NULL AFTER tbk_secondary_code,
-    ADD COLUMN IF NOT EXISTS tbk_oneclick_username VARCHAR(64) NULL AFTER tbk_oneclick_user;
-  `);
+// Aux: ensure client tbk columns (noop; columnas deben existir por migración manual)
+async function ensureClientTbkColumns(_pool: any) {
+  return;
 }
 
 function firstEnv(keys: string[]): string {
