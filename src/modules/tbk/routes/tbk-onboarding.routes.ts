@@ -642,6 +642,32 @@ router.get('/providers/:id/tbk/secondary/status', authenticateToken, async (req:
   }
 });
 
+// GET /providers/:id/tbk/secondary/info
+// Devuelve código de comercio secundario y correo del proveedor (para flows que necesiten confirmar datos)
+router.get('/providers/:id/tbk/secondary/info', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as AuthUser;
+    const providerId = Number(req.params.id);
+    if (!providerId || user.id !== providerId || user.role !== 'provider') {
+      return res.status(403).json({ success: false, error: 'forbidden' });
+    }
+    const pool = DatabaseConnection.getPool();
+    const [[u]]: any = await pool.query('SELECT email, tbk_secondary_code, tbk_status FROM users WHERE id = ? LIMIT 1', [providerId]);
+    if (!u) return res.status(404).json({ success: false, error: 'Proveedor no encontrado' });
+    return res.json({
+      success: true,
+      tbk: {
+        code: u.tbk_secondary_code || null,
+        status: (u.tbk_status as TbkStatus) || 'none',
+        email: u.email || null
+      }
+    });
+  } catch (err: any) {
+    Logger.error(MODULE, 'Info secondary error', err);
+    return res.status(500).json({ success: false, error: 'Error consultando info TBK secundario' });
+  }
+});
+
 // DELETE /providers/:id/tbk/secondary/:code
 router.delete('/providers/:id/tbk/secondary/:code', authenticateToken, async (req: Request, res: Response) => {
   try {
