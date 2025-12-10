@@ -2084,6 +2084,88 @@ function buildRouter(): Router {
     }
   });
 
+  // POST /appointments/:id/claims/payment - cliente reporta problema de pago (reclamo de cobro)
+  router.post('/appointments/:id/claims/payment', authenticateToken, async (req: Request, res: Response) => {
+    const connection = await DatabaseConnection.getPool().getConnection();
+    try {
+      const user = (req as any).user || {};
+      const appointmentId = Number(req.params.id);
+      if (!Number.isFinite(appointmentId)) {
+        connection.release();
+        return res.status(400).json({ success: false, error: 'id inválido' });
+      }
+      const reasonRaw = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+      const descriptionRaw = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
+      const evidenceUrls = Array.isArray(req.body?.evidenceUrls)
+        ? req.body.evidenceUrls.filter((url: any) => typeof url === 'string' && url.trim().length > 0)
+        : [];
+
+      if (reasonRaw.length < 5) {
+        connection.release();
+        return res.status(400).json({ success: false, error: 'Selecciona o describe un motivo válido.' });
+      }
+
+      await connection.beginTransaction();
+      const [[appt]]: any = await connection.query('SELECT * FROM appointments WHERE id = ? LIMIT 1 FOR UPDATE', [appointmentId]);
+      if (!appt) {
+        await connection.rollback();
+        connection.release();
+        return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+      }
+      if (Number(appt.client_id) !== Number(user.id)) {
+        await connection.rollback();
+        connection.release();
+        return res.status(403).json({ success: false, error: 'Solo el cliente puede reportar un problema' });
+      }
+
+      // Marcar disputa y congelar liberación de pago
+      await connection.execute(
+        `UPDATE appointments
+            SET status = 'dispute_pending',
+                service_completion_state = 'dispute_pending',
+                auto_release_at = NULL,
+                completion_requested_at = NOW(),
+                updated_at = NOW()
+          WHERE id = ?`,
+        [appointmentId]
+      );
+
+      const fullReason = descriptionRaw ? `${reasonRaw} — ${descriptionRaw}` : reasonRaw;
+      await connection.execute(
+        `INSERT INTO appointment_disputes (appointment_id, client_id, provider_id, reason, evidence_urls, reported_at)
+         VALUES (?, ?, ?, ?, ?, NOW())`,
+        [appointmentId, appt.client_id, appt.provider_id, fullReason, evidenceUrls.length ? JSON.stringify(evidenceUrls) : null]
+      );
+
+      await connection.execute(
+        `UPDATE payments
+            SET can_release = FALSE,
+                release_status = 'pending'
+          WHERE appointment_id = ?`,
+        [appointmentId]
+      );
+
+      await connection.commit();
+      connection.release();
+
+      try {
+        await PushService.notifyUser(
+          Number(appt.provider_id),
+          'Cliente reportó un problema de pago',
+          'El cliente reportó un problema con el cobro. Debes responder con evidencia.',
+          { type: 'dispute', appointment_id: String(appointmentId) }
+        );
+      } catch {}
+
+      return res.json({ success: true, ticketId: `APT-${appointmentId}` });
+    } catch (err) {
+      try { await connection.rollback(); } catch {}
+      connection.release();
+      Logger.error(MODULE, 'Error en reclamo de pago', err as any);
+      return res.status(500).json({ success: false, error: 'Error al registrar el reclamo' });
+    }
+  });
+
   // POST /appointments/:id/cash/verify-code - validar código para cierre/pago cash
   router.post('/appointments/:id/cash/verify-code', authenticateToken, cashClosureGate, async (req: Request, res: Response) => {
     try {

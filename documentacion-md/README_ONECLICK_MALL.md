@@ -59,4 +59,10 @@ Permitir inscribir tarjeta (Oneclick Mall) y autorizar cobros Mall a comercios h
 - Rutas: `backend/src/modules/tbk/routes/tbk-onboarding.routes.ts`
 - Helpers: `getOneclickHeaders`, `getTbkBase`.
 
+## Reclamos de pago (cliente)
+- Endpoint nuevo: `POST /appointments/:id/claims/payment`
+  - Body: `{ reason: string; description?: string; evidenceUrls?: string[] }`
+  - Marca la cita como `dispute_pending`, congela liberación de pago y crea registro en `appointment_disputes`.
+  - Respuesta: `{ success, ticketId }`.
+
 
