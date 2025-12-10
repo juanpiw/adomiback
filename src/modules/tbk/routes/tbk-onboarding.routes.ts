@@ -949,7 +949,10 @@ router.post('/client/tbk/oneclick/transactions', authenticateToken, async (req: 
       providerId: appt.provider_id,
       appointmentId,
       buyOrderParent: buyOrderParent,
-      detailsCount: details.length
+      detailsCount: details.length,
+      tbk_user: tbkUser ? `${tbkUser.slice(0, 6)}***` : null,
+      username,
+      url
     });
 
     const { data } = await axios.post(url, {
@@ -959,11 +962,39 @@ router.post('/client/tbk/oneclick/transactions', authenticateToken, async (req: 
       details
     }, { headers });
 
+    Logger.info(MODULE, 'Oneclick authorize OK (cliente)', {
+      appointmentId,
+      buyOrderParent,
+      status: (data as any)?.status,
+      response_code: (data as any)?.response_code,
+      commerce: (data as any)?.commerce_code,
+      details: Array.isArray((data as any)?.detail)
+        ? (data as any).detail.map((d: any) => ({
+            cc: d?.commerce_code,
+            bo: d?.buy_order,
+            rc: d?.response_code,
+            st: d?.status,
+            amt: d?.amount
+          }))
+        : null
+    });
+
     return res.status(201).json({ success: true, transaction: data });
   } catch (err: any) {
+    const tbkStatus = err?.response?.status || 500;
+    const tbkData = err?.response?.data || null;
     Logger.error(MODULE, 'Oneclick authorize (cliente) error', err);
-    const msg = err?.response?.data || err?.message || 'error';
-    return res.status(500).json({ success: false, error: 'Error autorizando pago Oneclick', details: msg });
+    console.log('[TBK_ONECLICK][CLIENT_AUTH][ERROR]', {
+      status: tbkStatus,
+      data: tbkData,
+      headers: err?.response?.headers,
+      config: {
+        url: err?.config?.url,
+        method: err?.config?.method
+      }
+    });
+    const msg = tbkData || err?.message || 'error';
+    return res.status(tbkStatus).json({ success: false, error: 'Error autorizando pago Oneclick', details: msg, tbkStatus, tbkData });
   }
 });
 
