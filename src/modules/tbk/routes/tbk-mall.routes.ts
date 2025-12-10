@@ -9,6 +9,14 @@ import { resolveCommissionRate } from '../../../shared/utils/commission.util';
 const MODULE = 'TBK_MALL_ROUTES';
 const router = Router();
 
+function firstEnv(keys: string[]): string {
+  for (const k of keys) {
+    const v = (process.env[k] || '').trim();
+    if (v) return v;
+  }
+  return '';
+}
+
 function requireEnv(key: string): string {
   const v = process.env[key];
   if (!v) throw new Error(`Missing env ${key}`);
@@ -20,9 +28,21 @@ function getTbkBase(): string {
 }
 
 function getTbkHeaders() {
+  const apiKeyId = firstEnv([
+    'TBK_ONECLICK_MALL_API_KEY_ID',
+    'TBK_API_KEY_ID',
+    'TBK_MALL_COMMERCE_CODE'
+  ]);
+  const apiKeySecret = firstEnv([
+    'TBK_ONECLICK_MALL_API_KEY_SECRET',
+    'TBK_API_KEY_SECRET'
+  ]);
+  if (!apiKeyId || !apiKeySecret) {
+    throw new Error('Missing env TBK_ONECLICK_MALL_API_KEY_ID/TBK_ONECLICK_MALL_API_KEY_SECRET (or TBK_API_KEY_ID/TBK_API_KEY_SECRET)');
+  }
   return {
-    'Tbk-Api-Key-Id': requireEnv('TBK_API_KEY_ID'),
-    'Tbk-Api-Key-Secret': requireEnv('TBK_API_KEY_SECRET'),
+    'Tbk-Api-Key-Id': apiKeyId,
+    'Tbk-Api-Key-Secret': apiKeySecret,
     'Content-Type': 'application/json'
   } as Record<string, string>;
 }
@@ -34,7 +54,8 @@ router.post('/tbk/mall/transactions', authenticateToken, async (req: Request, re
     if (!user?.id) return res.status(401).json({ success: false, error: 'auth_required' });
 
     const { appointment_id, provider_id, amount_provider, commission_amount, client_reference } = req.body || {} as any;
-    const mallCode = requireEnv('TBK_MALL_COMMERCE_CODE');
+    const mallCode = firstEnv(['TBK_ONECLICK_MALL_COMMERCE_CODE', 'TBK_MALL_COMMERCE_CODE']);
+    if (!mallCode) return res.status(500).json({ success: false, error: 'Missing mall commerce code' });
     const pool = DatabaseConnection.getPool();
 
     let pid: number;
@@ -96,7 +117,7 @@ router.post('/tbk/mall/transactions', authenticateToken, async (req: Request, re
     const detailProvOrder = `ord-prov-${Date.now()}-${pid}`;
     const detailMallOrder = `ord-mall-${Date.now()}-${user.id}`;
 
-    const platformChildCode = (process.env.TBK_PLATFORM_CHILD_CODE || '').trim();
+    const platformChildCode = firstEnv(['TBK_ONECLICK_PLATFORM_CHILD_CODE', 'TBK_PLATFORM_CHILD_CODE']);
 
     // Armar details: si tenemos comercio hijo de plataforma y hay comisión > 0, dividimos en 2 detalles.
     // Si no, enviamos un solo detail al hijo del proveedor por el monto total (gross).
