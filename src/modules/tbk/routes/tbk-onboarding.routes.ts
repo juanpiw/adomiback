@@ -372,6 +372,29 @@ router.post('/providers/:id/tbk/secondary/create', authenticateToken, async (req
   }
 });
 
+// GET /client/tbk/oneclick/profile
+router.get('/client/tbk/oneclick/profile', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as AuthUser;
+    if (!user || user.role !== 'client') return res.status(403).json({ success: false, error: 'forbidden' });
+    const pool = DatabaseConnection.getPool();
+    await ensureClientTbkColumns(pool);
+    const [[cli]]: any = await pool.query(
+      'SELECT tbk_oneclick_user, tbk_oneclick_username FROM users WHERE id = ? LIMIT 1',
+      [user.id]
+    );
+    return res.json({
+      success: true,
+      tbk_user: cli?.tbk_oneclick_user || null,
+      username: cli?.tbk_oneclick_username || null
+    });
+  } catch (err: any) {
+    Logger.error(MODULE, 'Oneclick profile (cliente) error', err);
+    const msg = err?.response?.data || err?.message || 'error';
+    return res.status(500).json({ success: false, error: 'Error consultando perfil Oneclick', details: msg });
+  }
+});
+
 // POST /providers/:id/tbk/secondary/manual
 // Permite registrar manualmente un código de comercio secundario entregado por Transbank.
 router.post('/providers/:id/tbk/secondary/manual', authenticateToken, async (req: Request, res: Response) => {
