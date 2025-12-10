@@ -762,11 +762,30 @@ router.post('/client/tbk/oneclick/inscriptions', authenticateToken, async (req: 
     if (!user || user.role !== 'client') return res.status(403).json({ success: false, error: 'forbidden' });
 
     const appointmentId = Number(req.body?.appointmentId);
-    const responseUrl = String(req.body?.responseUrl || process.env.TBK_ONECLICK_RETURN_URL || '').trim();
+    const bodyResponseUrl = String(req.body?.responseUrl || '').trim();
+    const envResponseUrl = String(process.env.TBK_ONECLICK_RETURN_URL || '').trim();
+    const originResponseUrl = String(req.headers?.origin || '').trim();
+    const responseUrl = bodyResponseUrl || envResponseUrl || (originResponseUrl ? `${originResponseUrl}/tbk/oneclick/finish` : '');
     const email = String(req.body?.email || user.email || '').trim();
+
+    Logger.info(MODULE, 'OC client start input', {
+      clientId: user.id,
+      appointmentId,
+      responseUrl: responseUrl || '(empty)',
+      hasEmail: !!email,
+      origin: originResponseUrl || '(none)'
+    });
     if (!appointmentId) return res.status(400).json({ success: false, error: 'appointmentId requerido' });
-    if (!responseUrl) return res.status(400).json({ success: false, error: 'Configura TBK_ONECLICK_RETURN_URL o envía responseUrl' });
-    if (!email) return res.status(400).json({ success: false, error: 'Correo requerido' });
+    if (!responseUrl) return res.status(400).json({
+      success: false,
+      error: 'Configura TBK_ONECLICK_RETURN_URL o envía responseUrl',
+      debug: { appointmentId, responseUrl, origin: originResponseUrl || null }
+    });
+    if (!email) return res.status(400).json({
+      success: false,
+      error: 'Correo requerido',
+      debug: { appointmentId, responseUrl, hasEmail: !!email }
+    });
 
     const pool = DatabaseConnection.getPool();
     await ensureClientTbkColumns(pool);
@@ -781,7 +800,7 @@ router.post('/client/tbk/oneclick/inscriptions', authenticateToken, async (req: 
     const userName = `cli-${user.id}-${Date.now()}`;
     const url = `${getTbkBase()}/rswebpaytransaction/api/oneclick/v1.2/inscriptions`;
     const headers = getOneclickHeaders();
-    Logger.info(MODULE, 'Iniciando inscripción Oneclick (cliente)', { clientId: user.id, providerId: appt.provider_id, appointmentId, responseUrl, url });
+    Logger.info(MODULE, 'Iniciando inscripción Oneclick (cliente)', { clientId: user.id, providerId: appt.provider_id, appointmentId, responseUrl, url, emailMask: email ? `${email.slice(0, 2)}***${email.slice(-2)}` : null });
 
     const { data } = await axios.post(url, { userName, email, responseUrl }, { headers });
 
