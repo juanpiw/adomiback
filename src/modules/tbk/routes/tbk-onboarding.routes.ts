@@ -3,12 +3,30 @@ import { authenticateToken, AuthUser } from '../../../shared/middleware/auth.mid
 import DatabaseConnection from '../../../shared/database/connection';
 import axios from 'axios';
 import { Logger } from '../../../shared/utils/logger.util';
+import { resolveCommissionRate } from '../../../shared/utils/commission.util';
 
 const MODULE = 'TBK_ONBOARDING_ROUTES';
 
 const router = Router();
 
 type TbkStatus = 'none' | 'pending' | 'active' | 'restricted';
+
+// Aux: ensure client tbk columns
+async function ensureClientTbkColumns(pool: any) {
+  await pool.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS tbk_oneclick_user VARCHAR(64) NULL AFTER tbk_secondary_code,
+    ADD COLUMN IF NOT EXISTS tbk_oneclick_username VARCHAR(64) NULL AFTER tbk_oneclick_user;
+  `);
+}
+
+function firstEnv(keys: string[]): string {
+  for (const k of keys) {
+    const v = (process.env[k] || '').trim();
+    if (v) return v;
+  }
+  return '';
+}
 
 function getTbkBase(): string {
   const base = normalizeBase(process.env.TBK_BASE_URL);
@@ -61,14 +79,19 @@ function getSecHeaders() {
 
 function getOneclickHeaders() {
   // Prefer variables específicas para Oneclick para no chocar con Webpay Plus Mall
-  const apiKeyId =
-    (process.env.TBK_ONECLICK_API_KEY_ID ||
-      process.env.TBK_ONECLICK_MALL_COMMERCE_CODE ||
-      process.env.TBK_API_KEY_ID ||
-      process.env.TBK_MALL_COMMERCE_CODE ||
-      '').trim();
-  const apiKeySecret =
-    (process.env.TBK_ONECLICK_API_KEY_SECRET || process.env.TBK_API_KEY_SECRET || '').trim();
+  const apiKeyId = firstEnv([
+    'TBK_ONECLICK_API_KEY_ID',
+    'TBK_ONECLICK_MALL_API_KEY_ID',
+    'TBK_ONECLICK_MALL_COMMERCE_CODE',
+    'TBK_ONECLICK_MALL_COMMERCE_CODE',
+    'TBK_API_KEY_ID',
+    'TBK_MALL_COMMERCE_CODE'
+  ]);
+  const apiKeySecret = firstEnv([
+    'TBK_ONECLICK_API_KEY_SECRET',
+    'TBK_ONECLICK_MALL_API_KEY_SECRET',
+    'TBK_API_KEY_SECRET'
+  ]);
   if (!apiKeyId || !apiKeySecret) {
     throw new Error('Missing env TBK_ONECLICK_API_KEY_ID/TBK_ONECLICK_API_KEY_SECRET');
   }
@@ -705,6 +728,184 @@ router.get('/providers/:id/tbk/secondary/info', authenticateToken, async (req: R
   } catch (err: any) {
     Logger.error(MODULE, 'Info secondary error', err);
     return res.status(500).json({ success: false, error: 'Error consultando info TBK secundario' });
+  }
+});
+
+// ============================
+// CLIENTE: Oneclick Mall
+// ============================
+
+// POST /client/tbk/oneclick/inscriptions
+// Inicia inscripción Oneclick para un cliente; requiere appointmentId para validar provider
+router.post('/client/tbk/oneclick/inscriptions', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as AuthUser;
+    if (!user || user.role !== 'client') return res.status(403).json({ success: false, error: 'forbidden' });
+
+    const appointmentId = Number(req.body?.appointmentId);
+    const responseUrl = String(req.body?.responseUrl || process.env.TBK_ONECLICK_RETURN_URL || '').trim();
+    const email = String(req.body?.email || user.email || '').trim();
+    if (!appointmentId) return res.status(400).json({ success: false, error: 'appointmentId requerido' });
+    if (!responseUrl) return res.status(400).json({ success: false, error: 'Configura TBK_ONECLICK_RETURN_URL o envía responseUrl' });
+    if (!email) return res.status(400).json({ success: false, error: 'Correo requerido' });
+
+    const pool = DatabaseConnection.getPool();
+    await ensureClientTbkColumns(pool);
+
+    const [[appt]]: any = await pool.query(
+      'SELECT id, client_id, provider_id FROM appointments WHERE id = ? LIMIT 1',
+      [appointmentId]
+    );
+    if (!appt) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+    if (Number(appt.client_id) !== Number(user.id)) return res.status(403).json({ success: false, error: 'No autorizado para esta cita' });
+
+    const userName = `cli-${user.id}-${Date.now()}`;
+    const url = `${getTbkBase()}/rswebpaytransaction/api/oneclick/v1.2/inscriptions`;
+    const headers = getOneclickHeaders();
+    Logger.info(MODULE, 'Iniciando inscripción Oneclick (cliente)', { clientId: user.id, providerId: appt.provider_id, appointmentId, responseUrl, url });
+
+    const { data } = await axios.post(url, { userName, email, responseUrl }, { headers });
+
+    return res.status(201).json({
+      success: true,
+      token: data?.token || null,
+      url_webpay: data?.url_webpay || null,
+      userName
+    });
+  } catch (err: any) {
+    Logger.error(MODULE, 'Oneclick start inscription (cliente) error', err);
+    const msg = err?.response?.data || err?.message || 'error';
+    return res.status(500).json({ success: false, error: 'Error iniciando inscripción Oneclick', details: msg });
+  }
+});
+
+// PUT /client/tbk/oneclick/inscriptions/:token
+// Finaliza inscripción y guarda tbk_user/username en users
+router.put('/client/tbk/oneclick/inscriptions/:token', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as AuthUser;
+    if (!user || user.role !== 'client') return res.status(403).json({ success: false, error: 'forbidden' });
+
+    const token = String(req.params.token || '').trim();
+    const appointmentId = Number(req.body?.appointmentId);
+    if (!token) return res.status(400).json({ success: false, error: 'TBK_TOKEN requerido' });
+    const pool = DatabaseConnection.getPool();
+    await ensureClientTbkColumns(pool);
+    if (appointmentId) {
+      const [[appt]]: any = await pool.query(
+        'SELECT id, client_id FROM appointments WHERE id = ? LIMIT 1',
+        [appointmentId]
+      );
+      if (!appt || Number(appt.client_id) !== Number(user.id)) {
+        return res.status(403).json({ success: false, error: 'No autorizado para esta cita' });
+      }
+    }
+
+    const url = `${getTbkBase()}/rswebpaytransaction/api/oneclick/v1.2/inscriptions/${token}`;
+    const headers = getOneclickHeaders();
+    Logger.info(MODULE, 'Finalizando inscripción Oneclick (cliente)', { clientId: user.id, token, url });
+    const { data } = await axios.put(url, {}, { headers });
+
+    const tbkUser = (data as any)?.tbk_user || (data as any)?.tbkUser || null;
+    const username = (data as any)?.username || null;
+    if (tbkUser && username) {
+      await pool.execute(
+        'UPDATE users SET tbk_oneclick_user = ?, tbk_oneclick_username = ? WHERE id = ? LIMIT 1',
+        [String(tbkUser), String(username), user.id]
+      );
+    }
+
+    return res.json({ success: true, inscription: data });
+  } catch (err: any) {
+    Logger.error(MODULE, 'Oneclick finish inscription (cliente) error', err);
+    const msg = err?.response?.data || err?.message || 'error';
+    return res.status(500).json({ success: false, error: 'Error finalizando inscripción Oneclick', details: msg });
+  }
+});
+
+// POST /client/tbk/oneclick/transactions
+// Autoriza pago Oneclick Mall para una cita del cliente
+router.post('/client/tbk/oneclick/transactions', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as AuthUser;
+    if (!user || user.role !== 'client') return res.status(403).json({ success: false, error: 'forbidden' });
+    const appointmentId = Number(req.body?.appointment_id);
+    if (!appointmentId) return res.status(400).json({ success: false, error: 'appointment_id requerido' });
+
+    const pool = DatabaseConnection.getPool();
+    await ensureClientTbkColumns(pool);
+
+    const [[appt]]: any = await pool.query(
+      'SELECT id, client_id, provider_id, price FROM appointments WHERE id = ? LIMIT 1',
+      [appointmentId]
+    );
+    if (!appt) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
+    if (Number(appt.client_id) !== Number(user.id)) return res.status(403).json({ success: false, error: 'No autorizado para pagar esta cita' });
+
+    const [[prov]]: any = await pool.query(
+      'SELECT id, tbk_secondary_code FROM users WHERE id = ? AND role = "provider" LIMIT 1',
+      [appt.provider_id]
+    );
+    if (!prov?.tbk_secondary_code) return res.status(400).json({ success: false, error: 'Proveedor sin TBK secundario' });
+
+    const [[cli]]: any = await pool.query(
+      'SELECT tbk_oneclick_user, tbk_oneclick_username FROM users WHERE id = ? LIMIT 1',
+      [user.id]
+    );
+    const tbkUser = (cli?.tbk_oneclick_user || '').trim();
+    const username = (cli?.tbk_oneclick_username || '').trim();
+    if (!tbkUser || !username) {
+      return res.status(400).json({ success: false, error: 'Cliente sin inscripción Oneclick (tbk_user ausente)' });
+    }
+
+    const amount = Math.round(Number(appt.price || 0));
+    if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Monto de la cita inválido' });
+
+    // Comisión (plataforma) opcional
+    let commissionAmount = 0;
+    let providerAmount = amount;
+    try {
+      const commissionRate = await resolveCommissionRate(Number(appt.provider_id));
+      commissionAmount = Math.max(0, Math.round(amount * (commissionRate / 100)));
+      providerAmount = Math.max(0, amount - commissionAmount);
+    } catch {}
+
+    const platformChildCode = firstEnv(['TBK_ONECLICK_PLATFORM_CHILD_CODE', 'TBK_PLATFORM_CHILD_CODE']);
+
+    const buyOrderParent = `oc-${appointmentId}-${Date.now()}`;
+    const detailProvOrder = `oc-prov-${appointmentId}-${Date.now()}`;
+    const detailPlatOrder = `oc-plat-${appointmentId}-${Date.now()}`;
+
+    const details: any[] = [];
+    if (commissionAmount > 0 && platformChildCode) {
+      details.push({ commerce_code: String(prov.tbk_secondary_code), buy_order: detailProvOrder, amount: providerAmount });
+      details.push({ commerce_code: String(platformChildCode), buy_order: detailPlatOrder, amount: commissionAmount });
+    } else {
+      details.push({ commerce_code: String(prov.tbk_secondary_code), buy_order: detailProvOrder, amount });
+    }
+
+    const url = `${getTbkBase()}/rswebpaytransaction/api/oneclick/v1.2/transactions`;
+    const headers = getOneclickHeaders();
+    Logger.info(MODULE, 'Autorizando Oneclick (cliente)', {
+      clientId: user.id,
+      providerId: appt.provider_id,
+      appointmentId,
+      buyOrderParent: buyOrderParent,
+      detailsCount: details.length
+    });
+
+    const { data } = await axios.post(url, {
+      username,
+      tbk_user: tbkUser,
+      buy_order: buyOrderParent,
+      details
+    }, { headers });
+
+    return res.status(201).json({ success: true, transaction: data });
+  } catch (err: any) {
+    Logger.error(MODULE, 'Oneclick authorize (cliente) error', err);
+    const msg = err?.response?.data || err?.message || 'error';
+    return res.status(500).json({ success: false, error: 'Error autorizando pago Oneclick', details: msg });
   }
 });
 
