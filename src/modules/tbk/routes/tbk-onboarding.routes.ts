@@ -811,9 +811,27 @@ router.post('/client/tbk/oneclick/inscriptions', authenticateToken, async (req: 
       userName
     });
   } catch (err: any) {
+    const tbkStatus = err?.response?.status || 500;
+    const tbkData = err?.response?.data || null;
     Logger.error(MODULE, 'Oneclick start inscription (cliente) error', err);
-    const msg = err?.response?.data || err?.message || 'error';
-    return res.status(500).json({ success: false, error: 'Error iniciando inscripción Oneclick', details: msg });
+    console.log('[TBK_ONECLICK][CLIENT_START][ERROR]', {
+      status: tbkStatus,
+      data: tbkData,
+      headers: err?.response?.headers,
+      config: {
+        url: err?.config?.url,
+        method: err?.config?.method,
+        baseURL: err?.config?.baseURL
+      }
+    });
+    const msg = tbkData || err?.message || 'error';
+    return res.status(tbkStatus).json({
+      success: false,
+      error: 'Error iniciando inscripción Oneclick',
+      details: msg,
+      tbkStatus,
+      tbkData
+    });
   }
 });
 
