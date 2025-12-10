@@ -464,19 +464,20 @@ router.post('/providers/:id/tbk/oneclick/inscriptions', authenticateToken, async
       return res.status(400).json({ success: false, error: 'Configura TBK_ONECLICK_RETURN_URL o envía responseUrl' });
     }
 
-    const userName = `prov-${providerId}-${Date.now()}`;
+    const username = `prov-${providerId}-${Date.now()}`;
     const url = `${base}/rswebpaytransaction/api/oneclick/v1.2/inscriptions`;
 
     const headers = getOneclickHeaders();
     Logger.info(MODULE, 'Iniciando inscripción Oneclick', { providerId, email, responseUrl, url });
 
-    const { data } = await axios.post(url, { userName, email, responseUrl }, { headers });
+    const { data } = await axios.post(url, { username, email, response_url: responseUrl }, { headers });
 
     return res.status(201).json({
       success: true,
       token: data?.token || null,
       url_webpay: data?.url_webpay || null,
-      userName
+      username,
+      userName: username // compat
     });
   } catch (err: any) {
     Logger.error(MODULE, 'Oneclick start inscription error', err);
@@ -797,18 +798,19 @@ router.post('/client/tbk/oneclick/inscriptions', authenticateToken, async (req: 
     if (!appt) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
     if (Number(appt.client_id) !== Number(user.id)) return res.status(403).json({ success: false, error: 'No autorizado para esta cita' });
 
-    const userName = `cli-${user.id}-${Date.now()}`;
+    const username = `cli-${user.id}-${Date.now()}`;
     const url = `${getTbkBase()}/rswebpaytransaction/api/oneclick/v1.2/inscriptions`;
     const headers = getOneclickHeaders();
     Logger.info(MODULE, 'Iniciando inscripción Oneclick (cliente)', { clientId: user.id, providerId: appt.provider_id, appointmentId, responseUrl, url, emailMask: email ? `${email.slice(0, 2)}***${email.slice(-2)}` : null });
 
-    const { data } = await axios.post(url, { userName, email, responseUrl }, { headers });
+    const { data } = await axios.post(url, { username, email, response_url: responseUrl }, { headers });
 
     return res.status(201).json({
       success: true,
       token: data?.token || null,
       url_webpay: data?.url_webpay || null,
-      userName
+      username,
+      userName: username // compat
     });
   } catch (err: any) {
     const tbkStatus = err?.response?.status || 500;
