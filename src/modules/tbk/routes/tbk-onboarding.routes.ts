@@ -866,11 +866,16 @@ router.put('/client/tbk/oneclick/inscriptions/:token', authenticateToken, async 
 
     const tbkUser = (data as any)?.tbk_user || (data as any)?.tbkUser || null;
     const username = (data as any)?.username || null;
+    Logger.info(MODULE, 'Finish inscription response (cliente)', { clientId: user.id, tbkUser, username, raw: data });
     if (tbkUser && username) {
       await pool.execute(
         'UPDATE users SET tbk_oneclick_user = ?, tbk_oneclick_username = ? WHERE id = ? LIMIT 1',
         [String(tbkUser), String(username), user.id]
       );
+      Logger.info(MODULE, 'Finish inscription saved tbk_user', { clientId: user.id, tbkUser: String(tbkUser), username });
+    } else {
+      Logger.warn(MODULE, 'Finish inscription missing tbk_user/username', { clientId: user.id, data });
+      return res.status(502).json({ success: false, error: 'TBK no devolvió tbk_user/username', details: data });
     }
 
     return res.json({ success: true, inscription: data });
@@ -910,9 +915,44 @@ router.post('/client/tbk/oneclick/transactions', authenticateToken, async (req: 
       'SELECT tbk_oneclick_user, tbk_oneclick_username FROM users WHERE id = ? LIMIT 1',
       [user.id]
     );
-    const tbkUser = (cli?.tbk_oneclick_user || '').trim();
-    const username = (cli?.tbk_oneclick_username || '').trim();
+    let tbkUser = (cli?.tbk_oneclick_user || '').trim();
+    let username = (cli?.tbk_oneclick_username || '').trim();
+
+    // Si el front trae tbk_user/username recién devueltos por finish, úsalos y persiste para evitar lag
+    const bodyTbkUser = String(req.body?.tbk_user || '').trim();
+    const bodyUsername = String(req.body?.username || '').trim();
+
+    Logger.info(MODULE, 'Oneclick authorize tbk_user lookup', {
+      clientId: user.id,
+      dbTbkUser: tbkUser ? `${tbkUser.slice(0, 6)}***` : null,
+      dbUsername: username || null,
+      bodyTbkUser: bodyTbkUser ? `${bodyTbkUser.slice(0, 6)}***` : null,
+      bodyUsername
+    });
+
+    if ((!tbkUser || !username) && bodyTbkUser && bodyUsername) {
+      Logger.warn(MODULE, 'Cliente sin tbk_user en DB, usando valores del body', { clientId: user.id });
+      tbkUser = bodyTbkUser;
+      username = bodyUsername;
+      try {
+        await pool.execute(
+          'UPDATE users SET tbk_oneclick_user = ?, tbk_oneclick_username = ? WHERE id = ? LIMIT 1',
+          [tbkUser, username, user.id]
+        );
+        Logger.info(MODULE, 'tbk_user actualizado desde body', { clientId: user.id });
+      } catch (e) {
+        Logger.error(MODULE, 'No se pudo persistir tbk_user desde body', e);
+      }
+    }
+
     if (!tbkUser || !username) {
+      Logger.error(MODULE, 'Cliente sin tbk_user tras lookup', {
+        clientId: user.id,
+        dbTbkUser: cli?.tbk_oneclick_user || null,
+        dbUsername: cli?.tbk_oneclick_username || null,
+        bodyTbkUser,
+        bodyUsername
+      });
       return res.status(400).json({ success: false, error: 'Cliente sin inscripción Oneclick (tbk_user ausente)' });
     }
 
