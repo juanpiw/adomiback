@@ -997,11 +997,6 @@ router.post('/client/tbk/oneclick/transactions', authenticateToken, async (req: 
     } catch {}
 
     const platformChildCode = firstEnv(['TBK_ONECLICK_PLATFORM_CHILD_CODE', 'TBK_PLATFORM_CHILD_CODE']);
-    const parentCommerceCode = firstEnv(['TBK_ONECLICK_MALL_COMMERCE_CODE', 'TBK_ONECLICK_COMMERCE_CODE', 'TBK_MALL_COMMERCE_CODE']);
-    if (!parentCommerceCode) {
-      Logger.error(MODULE, 'Falta TBK_ONECLICK_MALL_COMMERCE_CODE/TBK_ONECLICK_COMMERCE_CODE');
-      return res.status(500).json({ success: false, error: 'TBK_ONECLICK_MALL_COMMERCE_CODE no configurado' });
-    }
 
     const buyOrderParent = `oc-${appointmentId}-${Date.now()}`;
     const detailProvOrder = `oc-prov-${appointmentId}-${Date.now()}`;
@@ -1026,11 +1021,10 @@ router.post('/client/tbk/oneclick/transactions', authenticateToken, async (req: 
       tbk_user: tbkUser ? `${tbkUser.slice(0, 6)}***` : null,
       username,
       url,
-      details,
-      commerceCodeParent: parentCommerceCode
+      details
     });
 
-    const payload = { username, tbk_user: tbkUser, buy_order: buyOrderParent, commerce_code: String(parentCommerceCode), details };
+    const payload = { username, tbk_user: tbkUser, buy_order: buyOrderParent, details };
     logPayload = payload;
     Logger.info(MODULE, 'Oneclick authorize payload (cliente)', {
       clientId: user.id,
