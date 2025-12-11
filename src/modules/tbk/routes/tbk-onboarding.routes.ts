@@ -865,7 +865,11 @@ router.put('/client/tbk/oneclick/inscriptions/:token', authenticateToken, async 
     const { data } = await axios.put(url, {}, { headers });
 
     const tbkUser = (data as any)?.tbk_user || (data as any)?.tbkUser || null;
-    const username = (data as any)?.username || null;
+    const username =
+      (data as any)?.username ||
+      (req.body as any)?.username ||
+      (req.body as any)?.userName ||
+      null;
     Logger.info(MODULE, 'Finish inscription response (cliente)', { clientId: user.id, tbkUser, username, raw: data });
     if (tbkUser && username) {
       await pool.execute(
@@ -880,9 +884,17 @@ router.put('/client/tbk/oneclick/inscriptions/:token', authenticateToken, async 
 
     return res.json({ success: true, inscription: data });
   } catch (err: any) {
+    const tbkStatus = err?.response?.status || 500;
+    const tbkData = err?.response?.data || null;
     Logger.error(MODULE, 'Oneclick finish inscription (cliente) error', err);
-    const msg = err?.response?.data || err?.message || 'error';
-    return res.status(500).json({ success: false, error: 'Error finalizando inscripción Oneclick', details: msg });
+    console.log('[TBK_ONECLICK][CLIENT_FINISH][ERROR]', {
+      status: tbkStatus,
+      data: tbkData,
+      headers: err?.response?.headers,
+      config: { url: err?.config?.url, method: err?.config?.method }
+    });
+    const msg = tbkData || err?.message || 'error';
+    return res.status(tbkStatus).json({ success: false, error: 'Error finalizando inscripción Oneclick', details: msg, tbkStatus, tbkData });
   }
 });
 
