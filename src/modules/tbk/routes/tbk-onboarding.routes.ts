@@ -860,16 +860,28 @@ router.put('/client/tbk/oneclick/inscriptions/:token', authenticateToken, async 
     }
 
     const url = `${getTbkBase()}/rswebpaytransaction/api/oneclick/v1.2/inscriptions/${token}`;
+    Logger.info(MODULE, 'Finish inscription input (cliente)', {
+      clientId: user.id,
+      appointmentId: appointmentId || null,
+      tokenSuffix: token ? token.slice(-8) : null
+    });
     const headers = getOneclickHeaders();
     Logger.info(MODULE, 'Finalizando inscripción Oneclick (cliente)', { clientId: user.id, token, url });
     const { data } = await axios.put(url, {}, { headers });
 
     const tbkUser = (data as any)?.tbk_user || (data as any)?.tbkUser || null;
-    const username =
+    let username =
       (data as any)?.username ||
       (req.body as any)?.username ||
       (req.body as any)?.userName ||
       null;
+    // Fallback username if TBK no lo envía
+    if (tbkUser && !username) {
+      const suffix = token ? token.slice(-6) : `${Date.now()}`.slice(-6);
+      username = `cli-${user.id}-${suffix}`;
+      Logger.warn(MODULE, 'Finish inscription sin username, usando fallback', { clientId: user.id, username });
+    }
+
     Logger.info(MODULE, 'Finish inscription response (cliente)', { clientId: user.id, tbkUser, username, raw: data });
     if (tbkUser && username) {
       await pool.execute(
@@ -877,6 +889,8 @@ router.put('/client/tbk/oneclick/inscriptions/:token', authenticateToken, async 
         [String(tbkUser), String(username), user.id]
       );
       Logger.info(MODULE, 'Finish inscription saved tbk_user', { clientId: user.id, tbkUser: String(tbkUser), username });
+      // Incluir username de fallback en respuesta para el front
+      (data as any).username = username;
     } else {
       Logger.warn(MODULE, 'Finish inscription missing tbk_user/username', { clientId: user.id, data });
       return res.status(502).json({ success: false, error: 'TBK no devolvió tbk_user/username', details: data });
@@ -936,6 +950,7 @@ router.post('/client/tbk/oneclick/transactions', authenticateToken, async (req: 
 
     Logger.info(MODULE, 'Oneclick authorize tbk_user lookup', {
       clientId: user.id,
+      appointmentId,
       dbTbkUser: tbkUser ? `${tbkUser.slice(0, 6)}***` : null,
       dbUsername: username || null,
       bodyTbkUser: bodyTbkUser ? `${bodyTbkUser.slice(0, 6)}***` : null,
