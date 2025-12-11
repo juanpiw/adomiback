@@ -915,6 +915,7 @@ router.put('/client/tbk/oneclick/inscriptions/:token', authenticateToken, async 
 // POST /client/tbk/oneclick/transactions
 // Autoriza pago Oneclick Mall para una cita del cliente
 router.post('/client/tbk/oneclick/transactions', authenticateToken, async (req: Request, res: Response) => {
+  let logPayload: any = {};
   try {
     const user = (req as any).user as AuthUser;
     if (!user || user.role !== 'client') return res.status(403).json({ success: false, error: 'forbidden' });
@@ -1019,15 +1020,20 @@ router.post('/client/tbk/oneclick/transactions', authenticateToken, async (req: 
       detailsCount: details.length,
       tbk_user: tbkUser ? `${tbkUser.slice(0, 6)}***` : null,
       username,
-      url
+      url,
+      details
     });
 
-    const { data } = await axios.post(url, {
-      username,
-      tbk_user: tbkUser,
-      buy_order: buyOrderParent,
-      details
-    }, { headers });
+    const payload = { username, tbk_user: tbkUser, buy_order: buyOrderParent, details };
+    logPayload = payload;
+    Logger.info(MODULE, 'Oneclick authorize payload (cliente)', {
+      clientId: user.id,
+      appointmentId,
+      providerId: appt.provider_id,
+      payload
+    });
+
+    const { data } = await axios.post(url, payload, { headers });
 
     Logger.info(MODULE, 'Oneclick authorize OK (cliente)', {
       appointmentId,
@@ -1058,7 +1064,8 @@ router.post('/client/tbk/oneclick/transactions', authenticateToken, async (req: 
       config: {
         url: err?.config?.url,
         method: err?.config?.method
-      }
+      },
+      payload: logPayload
     });
     const msg = tbkData || err?.message || 'error';
     return res.status(tbkStatus).json({ success: false, error: 'Error autorizando pago Oneclick', details: msg, tbkStatus, tbkData });
