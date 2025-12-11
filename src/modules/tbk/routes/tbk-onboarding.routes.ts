@@ -1077,9 +1077,22 @@ router.post('/client/tbk/oneclick/transactions', authenticateToken, async (req: 
       headers: err?.response?.headers,
       config: {
         url: err?.config?.url,
-        method: err?.config?.method
+        method: err?.config?.method,
+        baseURL: err?.config?.baseURL
       },
-      payload: logPayload
+      context: {
+        tbkBase: getTbkBase(),
+        apiKeyIdSuffix: (() => {
+          try {
+            const h = getOneclickHeaders();
+            return h['Tbk-Api-Key-Id'] ? String(h['Tbk-Api-Key-Id']).slice(-6) : null;
+          } catch {
+            return null;
+          }
+        })(),
+        payload: logPayload
+      },
+      responseHeaders: err?.response?.headers
     });
     const msg = tbkData || err?.message || 'error';
     return res.status(tbkStatus).json({ success: false, error: 'Error autorizando pago Oneclick', details: msg, tbkStatus, tbkData });
