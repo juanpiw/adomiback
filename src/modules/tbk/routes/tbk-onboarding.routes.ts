@@ -1012,6 +1012,19 @@ router.post('/client/tbk/oneclick/transactions', authenticateToken, async (req: 
 
     const url = `${getTbkBase()}/rswebpaytransaction/api/oneclick/v1.2/transactions`;
     const headers = getOneclickHeaders();
+    const maskedApiKeyId = headers['Tbk-Api-Key-Id'] ? String(headers['Tbk-Api-Key-Id']).slice(-6) : null;
+    Logger.info(MODULE, 'Oneclick authorize context', {
+      clientId: user.id,
+      appointmentId,
+      providerId: appt.provider_id,
+      tbkBase: getTbkBase(),
+      apiKeyIdSuffix: maskedApiKeyId,
+      providerChildCode: prov.tbk_secondary_code,
+      platformChildCode: platformChildCode || null,
+      amountTotal: amount,
+      providerAmount,
+      commissionAmount
+    });
     Logger.info(MODULE, 'Autorizando Oneclick (cliente)', {
       clientId: user.id,
       providerId: appt.provider_id,
