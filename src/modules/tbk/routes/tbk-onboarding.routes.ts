@@ -1003,11 +1003,12 @@ router.post('/client/tbk/oneclick/transactions', authenticateToken, async (req: 
     const detailPlatOrder = `oc-plat-${appointmentId}-${Date.now()}`;
 
     const details: any[] = [];
+    const installments_number = 0; // una cuota (requerido por Oneclick)
     if (commissionAmount > 0 && platformChildCode) {
-      details.push({ commerce_code: String(prov.tbk_secondary_code), buy_order: detailProvOrder, amount: providerAmount });
-      details.push({ commerce_code: String(platformChildCode), buy_order: detailPlatOrder, amount: commissionAmount });
+      details.push({ commerce_code: String(prov.tbk_secondary_code), buy_order: detailProvOrder, amount: providerAmount, installments_number });
+      details.push({ commerce_code: String(platformChildCode), buy_order: detailPlatOrder, amount: commissionAmount, installments_number });
     } else {
-      details.push({ commerce_code: String(prov.tbk_secondary_code), buy_order: detailProvOrder, amount });
+      details.push({ commerce_code: String(prov.tbk_secondary_code), buy_order: detailProvOrder, amount, installments_number });
     }
 
     const url = `${getTbkBase()}/rswebpaytransaction/api/oneclick/v1.2/transactions`;
