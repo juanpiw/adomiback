@@ -464,7 +464,8 @@ router.post('/providers/:id/tbk/oneclick/inscriptions', authenticateToken, async
       return res.status(400).json({ success: false, error: 'Configura TBK_ONECLICK_RETURN_URL o envía responseUrl' });
     }
 
-    const username = `prov-${providerId}-${Date.now()}`;
+    // Transbank reportó "username incompleto": usar un username estable y corto (email truncado)
+    const username = (email || `prov-${providerId}-oc`).slice(0, 45);
     const url = `${base}/rswebpaytransaction/api/oneclick/v1.2/inscriptions`;
 
     const headers = getOneclickHeaders();
@@ -798,7 +799,8 @@ router.post('/client/tbk/oneclick/inscriptions', authenticateToken, async (req: 
     if (!appt) return res.status(404).json({ success: false, error: 'Cita no encontrada' });
     if (Number(appt.client_id) !== Number(user.id)) return res.status(403).json({ success: false, error: 'No autorizado para esta cita' });
 
-    const username = `cli-${user.id}-${Date.now()}`;
+    // Transbank reportó "username incompleto": usar un username estable y corto (email truncado)
+    const username = (email || `cli-${user.id}-oc`).slice(0, 45);
     const url = `${getTbkBase()}/rswebpaytransaction/api/oneclick/v1.2/inscriptions`;
     const headers = getOneclickHeaders();
     Logger.info(MODULE, 'Iniciando inscripción Oneclick (cliente)', { clientId: user.id, providerId: appt.provider_id, appointmentId, responseUrl, url, emailMask: email ? `${email.slice(0, 2)}***${email.slice(-2)}` : null });
