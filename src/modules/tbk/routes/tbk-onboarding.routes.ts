@@ -877,10 +877,15 @@ router.put('/client/tbk/oneclick/inscriptions/:token', authenticateToken, async 
       (req.body as any)?.username ||
       (req.body as any)?.userName ||
       null;
-    // Fallback username if TBK no lo envía
+    // Fallback username si TBK no lo envía: usar email truncado o sufijo de token
     if (tbkUser && !username) {
-      const suffix = token ? token.slice(-6) : `${Date.now()}`.slice(-6);
-      username = `cli-${user.id}-${suffix}`;
+      const emailUsername = (user.email || '').trim().slice(0, 45);
+      if (emailUsername.length >= 3) {
+        username = emailUsername;
+      } else {
+        const suffix = token ? token.slice(-6) : `${Date.now()}`.slice(-6);
+        username = `cli-${user.id}-${suffix}`;
+      }
       Logger.warn(MODULE, 'Finish inscription sin username, usando fallback', { clientId: user.id, username });
     }
 
